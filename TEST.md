@@ -4,12 +4,15 @@
 1. Run `supabase_schema.sql` in your Supabase SQL Editor. It will create `users`, `projects`, `tasks`, `updates`, `tickets`, and `ticket_messages` tables. It will also populate seed data with **Top Terrace** and **9TH FLOOR (CENTRIC)** projects assigned to Asif.
 
 ## Testing Employee Update Flow
+- **Test NLP Parser**: Try the extraction parser manually by typing:
+  `/test_parse Top Terrace wateringproofing 40% done, material delay`
+  Bot will return a JSON block confirming exactly what was parsed and its confidence level.
 - **Test Reminder**: Open chat and run `/test_reminder`. It simulates the 5 PM reminder to Asif.
 - **Test Format Info**: Open chat and run `/test_update` to get the string you should send back as an employee.
 - **Submit Update**: As the Employee chat ID, type simply:
   `Top Terrace waterproofing 40% done, material delay`
   (Optionally attach a photo when sending).
-  The bot will extract: `Project=Top Terrace`, `Task=Waterproofing`, `Progress=40`, `Blocker=material delay` and log it.
+  The bot will extract the exact intent and save it to the DB. Low confidence messages will prompt the user to re-format.
 
 ## Testing 6PM Report & RAG
 - **Trigger Report**: Open chat to Kanav (Director) and type `/test_6pm` or `/test_report`.

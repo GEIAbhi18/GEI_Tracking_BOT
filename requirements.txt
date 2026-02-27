@@ -1,5 +1,6 @@
 python-telegram-bot==20.8
-supabase==2.3.4
+supabase
 python-dotenv==1.0.1
 apscheduler==3.10.4
 pytz==2024.1
+rapidfuzz==3.6.1
