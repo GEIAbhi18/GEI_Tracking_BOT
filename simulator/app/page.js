@@ -5,11 +5,10 @@ import {
   Send, Menu, Search, Paperclip, Smile, ArrowLeft,
   Check, CheckCheck, MoreVertical, Phone, Bot, X, Mic
 } from 'lucide-react';
+import { format } from "date-fns";
 import { parseUpdateMessage } from '@/lib/messageParser';
 import { supabase } from '@/lib/supabase';
 import clsx from 'clsx';
-import { detectIntent } from '@/lib/nlp';
-import { routeToTool } from '@/lib/mcp-router';
 
 const formatTime = (date) => {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -344,35 +343,29 @@ export default function SimulatorApp() {
       startGetReport();
     } else {
       if (!text.startsWith('/')) {
-        // Send to intelligent assistant natively in client
+        // Send to intelligent assistant API
         try {
           addBotMessage('Processing intent...');
 
-          // Small delay for UI simulation realism
-          await new Promise(r => setTimeout(r, 600));
+          const res = await fetch('/api/process-message', {
+            method: 'POST',
+            cache: 'no-store',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ message: text, userName: currentUser })
+          });
 
-          const nlpData = detectIntent(text);
-
-          if (nlpData.intent === 'unknown' || nlpData.confidence < 0.6) {
-            nlpData.intent = 'unknown'; // normalize just in case
-            try {
-              await supabase.from('unknown_commands').insert([{
-                message_text: text,
-                detected_intent: 'unknown',
-                confidence: nlpData.confidence,
-                user_name: currentUser,
-              }]);
-            } catch (err) { }
-          }
-
-          const reply = await routeToTool(nlpData);
-
+          // Remove the "Processing intent..." message
           setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
-          addBotMessage(reply);
 
+          if (res.ok) {
+            const data = await res.json();
+            addBotMessage(data.reply);
+          } else {
+            addBotMessage("System error. Please try again.");
+          }
         } catch (err) {
           setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
-          addBotMessage("System error processing request.");
+          addBotMessage("Connection to intelligence server failed.");
         }
       } else {
         addBotMessage('I did not understand that command. Type /start for options.');

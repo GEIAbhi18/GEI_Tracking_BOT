@@ -1,4 +1,4 @@
-export function detectIntent(text) {
+export function ruleBasedNLP(text) {
     const lowerText = text.toLowerCase();
 
     const intents = {
