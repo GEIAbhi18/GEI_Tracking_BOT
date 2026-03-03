@@ -202,26 +202,56 @@ export default function SimulatorApp() {
   // Update Task flow (Asif)
   const startUpdateTask = () => {
     setMode('update_task');
-    addBotMessage('Asif, aaj ke tasks ka update bhejo.\nExample:\nTop Terrace waterproofing 40% material delay');
+    setTicketState({ step: 1, project: '', task: '', message: '' });
+    addBotMessage('Here are the Project details. Please select a project to update:', ['Top Terrace', '9TH FLOOR (CENTRIC)']);
   };
 
   const processUpdateTask = async (text) => {
-    const parsed = parseUpdateMessage(text);
-    if (parsed.confidence === 'Low') {
-      addBotMessage(`Sorry, I didn't completely understand. Found project: ${parsed.project || 'None'}, Task: ${parsed.task || 'None'}, Progress: ${parsed.progress || 'None'}.\nPlease rephrase or be more specific.`);
-    } else {
+    const { step } = activeState.ticketState;
+
+    if (step === 1) {
+      setTicketState(prev => ({ ...prev, step: 2, project: text }));
+      addBotMessage(`Fetching tasks for ${text}...\nPlease choose the task you want to post an update for:`, ['tile', 'membrane', 'malba', 'slope', 'solar', 'waterproof', 'ponding']);
+    } else if (step === 2) {
+      setTicketState(prev => ({ ...prev, step: 3, task: text }));
+      addBotMessage(`Selected Task: ${text}\nNow, please figure your input (e.g., progress percentage and blockers):`);
+    } else if (step === 3) {
+      const finalProject = activeState.ticketState.project;
+      const finalTask = activeState.ticketState.task;
+
+      const parsed = parseUpdateMessage(text);
+      const progress = parsed?.progress !== null ? parsed.progress : 'Unknown';
+      const blocker = parsed?.blocker || (text.toLowerCase().includes('blocker') ? text : 'None');
+
+      setTicketState({ step: 0, project: '', task: '', message: '' });
       setMode('normal');
+
       try {
         await supabase.from('updates').insert([{
-          project: parsed.project,
-          task: parsed.task,
-          progress: parsed.progress,
-          blocker: parsed.blocker,
+          project: finalProject,
+          task: finalTask,
+          progress,
+          blocker,
           raw_message: text,
           created_by: currentUser
         }]);
       } catch (err) { }
-      addBotMessage(`Update logged ✅\nProject: ${parsed.project}\nTask: ${parsed.task}\nProgress: ${parsed.progress}%\nBlocker: ${parsed.blocker || 'None'}`);
+
+      addBotMessage(`Update logged ✅\nProject: ${finalProject}\nTask: ${finalTask}\nProgress: ${progress}%\nBlocker: ${blocker}`);
+
+      // Forward to Kanav seamlessly
+      setUserStates(prev => ({
+        ...prev,
+        Kanav: {
+          ...prev.Kanav,
+          messages: [...prev.Kanav.messages, {
+            id: Date.now(),
+            sender: 'bot',
+            text: `📊 NEW DAILY UPDATE from Asif:\n\n📁 Project: ${finalProject}\n📋 Task: ${finalTask}\n📈 Progress: ${progress}%\n🛑 Blocker: ${blocker}\n📝 Raw Input: "${text}"`,
+            time: formatTime(new Date())
+          }]
+        }
+      }));
     }
   };
 
