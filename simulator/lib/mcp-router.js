@@ -1,11 +1,13 @@
 import { checkBlockerTool } from './tools/blocker';
 import { greetingTool } from './tools/greeting';
 import { helpTool } from './tools/help';
+import { reportUpdateTool } from './tools/update';
 
 export const mcpTools = {
     check_blocker_status: checkBlockerTool,
     greeting: greetingTool,
-    help: helpTool
+    help: helpTool,
+    report_update: reportUpdateTool
 };
 
 export async function routeToTool(intentObj) {
