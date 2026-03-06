@@ -69,12 +69,12 @@ export default function SimulatorApp() {
   useEffect(() => {
     if (messages.length === 0) {
       const startText = currentUser === 'Asif'
-        ? '🤖 Welcome! Available Commands:\n\n• /update_task\n• /raise_ticket\n• /view_tickets\n• /get_tasks_report\n• /help'
-        : '🤖 Welcome! Available Commands:\n\n• /get_report\n• /view_tickets\n• /help';
+        ? '🤖 Welcome! Available Commands:\n\n• /update_task\n• /raise_ticket\n• /view_tickets\n• /create_task\n• /create_project\n• /help'
+        : '🤖 Welcome! Available Commands:\n\n• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /view_tickets\n• /help';
 
       const buttons = currentUser === 'Asif'
-        ? ['/update_task', '/raise_ticket', '/view_tickets', '/get_tasks_report', '/help']
-        : ['/get_report', '/view_tickets', '/help'];
+        ? ['/update_task', '/raise_ticket', '/view_tickets', '/create_task', '/create_project', '/help']
+        : ['/get_report', '/get_task', '/create_task', '/create_project', '/view_tickets', '/help'];
 
       setMessages([{ id: Date.now(), sender: 'bot', text: startText, buttons, time: formatTime(new Date()) }]);
     }
@@ -94,12 +94,12 @@ export default function SimulatorApp() {
 
   const handleStart = () => {
     const text = currentUser === 'Asif'
-      ? 'Available Commands:\n• /update_task\n• /raise_ticket\n• /view_tickets\n• /get_tasks_report\n• /help'
-      : 'Available Commands:\n• /get_report\n• /view_tickets\n• /help';
+      ? 'Available Commands:\n• /update_task\n• /raise_ticket\n• /view_tickets\n• /create_task\n• /create_project\n• /help'
+      : 'Available Commands:\n• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /view_tickets\n• /help';
 
     const buttons = currentUser === 'Asif'
-      ? ['/update_task', '/raise_ticket', '/view_tickets', '/get_tasks_report', '/help']
-      : ['/get_report', '/view_tickets', '/help'];
+      ? ['/update_task', '/raise_ticket', '/view_tickets', '/create_task', '/create_project', '/help']
+      : ['/get_report', '/get_task', '/create_task', '/create_project', '/view_tickets', '/help'];
 
     setMode('normal');
     addBotMessage(text, buttons);
@@ -127,11 +127,26 @@ export default function SimulatorApp() {
       setTicketState({ step: 0, project: '', task: '', message: '' });
       setMode('normal');
 
-      const newTicket = { id: Date.now(), project: finalProject, task: finalTask, message: text, created_by: currentUser, status: 'open' };
+      const newTicket = { id: Date.now(), project_name: finalProject, task_name: finalTask, message: text, created_by: currentUser, status: 'open' };
       setGlobalTickets(prev => [...prev, newTicket]);
 
       try {
-        await supabase.from('tickets').insert([newTicket]);
+        // Query IDs
+        let pId = null, tId = null, uId = null;
+        let pData = await supabase.from('projects').select('id').ilike('name', `%${finalProject}%`).limit(1);
+        if (pData.data && pData.data.length) pId = pData.data[0].id;
+        let tData = await supabase.from('tasks').select('id').ilike('name', `%${finalTask}%`).limit(1);
+        if (tData.data && tData.data.length) tId = tData.data[0].id;
+        let uData = await supabase.from('users').select('id').ilike('name', currentUser).limit(1);
+        if (uData.data && uData.data.length) uId = uData.data[0].id;
+
+        await supabase.from('tickets').insert([{
+          project_id: pId,
+          task_id: tId,
+          created_by: uId,
+          status: 'open'
+          // note: Supabase may not have a Message column for MVP in tickets, simulated in local state.
+        }]);
       } catch (err) { }
 
       addBotMessage(`Ticket raised successfully for project ${finalProject}! ✅`);
@@ -226,15 +241,20 @@ export default function SimulatorApp() {
       setMode('normal');
 
       try {
+        let tId = null, eId = null;
+        let tData = await supabase.from('tasks').select('id').ilike('name', `%${finalTask}%`).limit(1);
+        if (tData.data && tData.data.length) tId = tData.data[0].id;
+        let uData = await supabase.from('users').select('id').ilike('name', currentUser).limit(1);
+        if (uData.data && uData.data.length) eId = uData.data[0].id;
+
         await supabase.from('updates').insert([{
-          project: finalProject,
-          task: finalTask,
-          progress,
-          blocker,
-          raw_message: text,
-          created_by: currentUser
+          task_id: tId,
+          employee_id: eId,
+          progress: typeof progress === 'number' ? progress : 0,
+          blockers: blocker.toString(),
+          rag: 'AMBER'
         }]);
-      } catch (err) { }
+      } catch (err) { console.error(err) }
 
       addBotMessage(`Update logged ✅\nProject: ${finalProject}\nTask: ${finalTask}\nProgress: ${progress}%\nBlocker: ${blocker}`);
 
@@ -274,8 +294,14 @@ export default function SimulatorApp() {
   };
 
   const sendMessage = async (textOverride = null) => {
-    const text = textOverride || input;
+    let text = textOverride || input;
     if (!text.trim()) return;
+
+    if (text === "Download Report") {
+      window.location.href = `/api/download-report?userName=${currentUser}`;
+      setInput('');
+      return;
+    }
 
     setInput('');
     addUserMessage(text);
@@ -332,44 +358,67 @@ export default function SimulatorApp() {
       return;
     }
 
-    // Command triggers
-    if (text === '/raise_ticket') {
-      startRaiseTicket();
-    } else if (text === '/update_task' && currentUser === 'Asif') {
-      startUpdateTask();
-    } else if (text === '/view_tickets') {
-      handleViewTickets();
-    } else if (text === '/get_report' || text === '/get_tasks_report') {
-      startGetReport();
-    } else {
-      if (!text.startsWith('/')) {
-        // Send to intelligent assistant API
-        try {
-          addBotMessage('Processing intent...');
+    if (text === '/raise_ticket') return startRaiseTicket();
+    if (text === '/update_task' && currentUser === 'Asif') return startUpdateTask();
+    if (text === '/view_tickets') return handleViewTickets();
+    if (text === '/create_task') {
+      addBotMessage("To create a task, please use this format:\n\nTask: <Name>\nEnd date: <DD MMM/YYYY>\nProject: <Name>");
+      return;
+    }
+    if (text === '/create_project') {
+      addBotMessage("To create a project, please use this format:\n\nProject: <Name>\nEnd date: <DD MMM/YYYY>");
+      return;
+    }
+    if (text === '/get_task') {
+      text = "task list";
+    }
 
-          const res = await fetch('/api/process-message', {
-            method: 'POST',
-            cache: 'no-store',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: text, userName: currentUser })
-          });
+    // Natural Language OR arbitrary slash command handling:
+    try {
+      addBotMessage('Processing intent...');
+      // Strip slash if present so it acts as natural language for NLP matching
+      const cleanMessage = text.replace(/^\//, '');
 
-          // Remove the "Processing intent..." message
-          setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
+      const res = await fetch('/api/process-message', {
+        method: 'POST',
+        cache: 'no-store',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: cleanMessage, userName: currentUser })
+      });
 
-          if (res.ok) {
-            const data = await res.json();
-            addBotMessage(data.reply);
-          } else {
-            addBotMessage("System error. Please try again.");
-          }
-        } catch (err) {
-          setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
-          addBotMessage("Connection to intelligence server failed.");
+      setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
+
+      if (res.ok) {
+        const data = await res.json();
+        const intent = data.nlpData?.intent;
+
+        // UI triggers driven by NLP output
+        if (intent === 'raise_ticket') {
+          return startRaiseTicket();
         }
+
+        if (intent === 'view_tickets') {
+          return handleViewTickets();
+        }
+
+        if (data.reply && data.reply.startsWith('REPORT_READY_TRIGGER|')) {
+          const actualMsg = data.reply.split('|')[1];
+          // Generate report async and tell user to download it
+          fetch('/api/generate-report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userName: currentUser }) })
+            .then(r => r.json())
+            .then(d => {
+              addBotMessage(`${actualMsg}\nFile: ${d.fileName}`, ["Download Report"]);
+            });
+          return;
+        }
+
+        addBotMessage(data.reply);
       } else {
-        addBotMessage('I did not understand that command. Type /start for options.');
+        addBotMessage("System error. Please try again.");
       }
+    } catch (err) {
+      setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
+      addBotMessage("Connection to intelligence server failed.");
     }
   };
 

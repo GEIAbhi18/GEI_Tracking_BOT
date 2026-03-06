@@ -10,7 +10,6 @@ async function logUnknown(message, llmResult = {}, userName = 'Kanav') {
             message_text: message,
             detected_intent: 'unknown',
             confidence: llmResult?.confidence || 0,
-            provider_used: llmResult?.provider_used || 'ruleBased',
             user_name: userName,
         }]);
     } catch (err) {
