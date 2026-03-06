@@ -192,17 +192,48 @@ export default function SimulatorApp() {
     addBotMessage('Fetching tickets...');
     let dbTickets = [];
     try {
-      const { data, error } = await supabase.from('tickets').select('*').eq('status', 'open').order('created_at', { ascending: false }).limit(10);
+      // Query tickets and join related string names to decode UUIDs
+      const { data, error } = await supabase.from('tickets')
+        .select(`
+          id,
+          status,
+          created_at,
+          projects:project_id(name),
+          tasks:task_id(name),
+          users:created_by(name)
+        `)
+        .eq('status', 'open').order('created_at', { ascending: false }).limit(10);
       if (!error && data && data.length > 0) dbTickets = data;
     } catch (err) { }
 
     const allOpen = globalTickets.filter(t => t.status === 'open');
-    const ticketsToShow = dbTickets.length > 0 ? dbTickets : allOpen;
+
+    // We combine them, and prioritize the local 'message' simulating the MVP lacking message column
+    let combinedTickets = {};
+    dbTickets.forEach(t => combinedTickets[t.id] = { ...t, isDb: true });
+    allOpen.forEach(t => {
+      if (!combinedTickets[t.id]) combinedTickets[t.id] = t;
+      else {
+        // Merge simulated message into DB record
+        combinedTickets[t.id].message = t.message;
+        combinedTickets[t.id].task_name = t.task_name;
+        combinedTickets[t.id].project_name = t.project_name;
+        combinedTickets[t.id].created_by_name = t.created_by;
+      }
+    });
+
+    const ticketsToShow = Object.values(combinedTickets).sort((a, b) => b.id - a.id);
 
     if (ticketsToShow.length === 0) {
       addBotMessage('No open tickets found.');
     } else {
-      const formatted = ticketsToShow.map(t => `🎫 Ticket #${t.id}\n📁 Project: ${t.project}\n📋 Task: ${t.task || 'N/A'}\n💬 Message: ${t.message}\n👤 By: ${t.created_by}`).join('\n\n---\n\n');
+      const formatted = ticketsToShow.map(t => {
+        const pName = t.projects?.name || t.project_name || 'N/A';
+        const tName = t.tasks?.name || t.task_name || 'N/A';
+        const uName = t.users?.name || t.created_by_name || t.created_by || 'Unknown';
+        const msgText = t.message || '(Ticket raised via system - see chat history)';
+        return `🎫 Ticket #${t.id}\n📁 Project: ${pName}\n📋 Task: ${tName}\n💬 Message: ${msgText}\n👤 By: ${uName}`;
+      }).join('\n\n---\n\n');
       addBotMessage(`Open Tickets:\n\n${formatted}`);
 
       ticketsToShow.forEach(t => {

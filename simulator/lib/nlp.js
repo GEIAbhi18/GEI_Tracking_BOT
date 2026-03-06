@@ -9,8 +9,10 @@ export function ruleBasedNLP(text) {
         create_task: ['create task', 'new task', 'add task', 'create a task'],
         create_project: ['create project', 'new project', 'add project', 'project:'],
         request_report: ['report', 'can i get the report', 'send today\'s report', 'daily report'],
-        view_tickets: ['show tickets', 'view tickets', 'open tickets', 'tickets', 'show me tickets'],
-        view_updates: ['show updates', 'view updates', 'get updates', 'updates for']
+        view_tickets: ['show tickets', 'view tickets', 'open tickets', 'tickets', 'show me tickets', 'show ticket', 'view ticket', 'ticket'],
+        raise_ticket: ['raise ticket', 'create ticket', 'raise a ticket'],
+        view_updates: ['show updates', 'view updates', 'get updates', 'updates for'],
+        view_projects: ['show projects', 'view projects', 'projects', 'show me projects']
     };
 
     let bestIntent = 'unknown';
@@ -18,8 +20,19 @@ export function ruleBasedNLP(text) {
 
     // Check for numbered update format e.g., "1. 60% done"
     const isNumberedUpdate = /^\d+\.\s+.*(?:done|delay|blocker|percent|%)/i.test(text.trim());
+
+    // Check for standard multi-line implicit task creation format:
+    const isImplicitProjectCreate = /^\s*project\s*:/i.test(text) && /end date:?\s*/i.test(text);
+    const isImplicitTaskCreate = !isImplicitProjectCreate && /end date:?\s*/i.test(text) && /project:?\s*/i.test(text);
+
     if (isNumberedUpdate) {
         bestIntent = 'update_numbered_task';
+        bestScore = 1;
+    } else if (isImplicitProjectCreate) {
+        bestIntent = 'create_project';
+        bestScore = 1;
+    } else if (isImplicitTaskCreate && !lowerText.includes('create project')) {
+        bestIntent = 'create_task';
         bestScore = 1;
     } else {
 

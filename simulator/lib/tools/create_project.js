@@ -5,8 +5,8 @@ export async function createProjectTool(entities) {
     const creator = entities.target_user || 'Kanav';
 
     // Example: "Project: Dashboard \n End date: 30 Mar"
-    const projMatch = rawMsg.match(/Project:\s*(.+)/i) || rawMsg.match(/create project (.*?) (?:for|deadline|end date)/i) || rawMsg.match(/create project (.*)/i);
-    const deadlineMatch = rawMsg.match(/End date:\s*(.+)/i) || rawMsg.match(/Deadline:\s*(.+)/i) || rawMsg.match(/End date (.+)/i);
+    const projMatch = rawMsg.match(/Project\s*:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/create project (.*?) (?:for|deadline|end date)/i) || rawMsg.match(/create project (.*)/i);
+    const deadlineMatch = rawMsg.match(/End date\s*:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/Deadline\s*:?\s*(.+?)(?:\n|$)/i);
 
     const projectName = projMatch ? projMatch[1].trim() : null;
     let deadlineStr = deadlineMatch ? deadlineMatch[1].trim() : null;

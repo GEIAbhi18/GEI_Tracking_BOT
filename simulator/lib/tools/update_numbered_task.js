@@ -46,20 +46,27 @@ export async function updateNumberedTaskTool(entities) {
         newBlocker = true;
         const blockerReasonMatch = updateText.match(/(?:delay|blocked|issue|blocker)[:\s]+([^.]+)/i) || updateText.match(/(.*)/);
         newReason = blockerReasonMatch ? blockerReasonMatch[1].trim() : "Unknown blocker";
-        if (newStatus !== 'completed') {
-            // Let it be what it is, or force "pending/in_progress" based on previous
-            // RAG logic handles "is_blocked = true" as RED.
-        }
     } else if (noBlocker) {
         newBlocker = false;
         newReason = null;
     }
 
-    await supabase.from('tasks').update({
+    // Check for new deadline
+    let newDeadline = null;
+    const deadlineMatch = updateText.match(/new deadline (?:is )?(.+?)(?:\n|$|\.)/i);
+    if (deadlineMatch) {
+        const dStr = deadlineMatch[1].trim();
+        newDeadline = new Date(`${dStr} 2026`).toISOString();
+    }
+
+    let payload = {
         status: newStatus,
         is_blocked: newBlocker,
         blocker_reason: newReason
-    }).eq('id', task.id);
+    };
+    if (newDeadline) payload.deadline = newDeadline;
+
+    await supabase.from('tasks').update(payload).eq('id', task.id);
 
     // Also record it into updates table
     await supabase.from('updates').insert([{
@@ -72,5 +79,6 @@ export async function updateNumberedTaskTool(entities) {
 
     let res = `Task "${task.name}" updated successfully. \nProgress: ${newProgress}%.`;
     if (newBlocker) res += `\nFlagged with blocker: ${newReason}`;
+    if (newDeadline) res += `\nDeadline explicitly changed!`;
     return res;
 }

@@ -4,15 +4,34 @@ export async function createTaskTool(entities) {
     const rawMsg = entities.raw_message || '';
     const creator = entities.target_user || 'Kanav';
 
-    // Example: "Task Waterproffing \n End date 08/03/2025 \n Project top terrace"
-    const taskMatch = rawMsg.match(/Task:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/create task (.*?) (?:for|in|deadline)/i) || rawMsg.match(/create a task for (.*?) now/i);
-    const deadlineMatch = rawMsg.match(/End date:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/Deadline:?\s*(.+?)(?:\n|$)/i);
-    const projMatch = rawMsg.match(/Project:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/in project:?\s*(.+?)(?:\n|$)/i);
+    // Check for "Task:" pattern or implicit first line formatting
+    let taskName = null;
+    let deadlineStr = null;
+    let projectName = null;
 
-    // We assume default project if none specified or we fail stringency
-    let projectName = projMatch ? projMatch[1].trim() : 'Top Terrace';
-    const taskName = taskMatch ? taskMatch[1].trim() : null;
-    let deadlineStr = deadlineMatch ? deadlineMatch[1].trim() : null;
+    const lines = rawMsg.split('\n').map(l => l.trim()).filter(l => l);
+
+    // Pattern matches
+    const taskMatch = rawMsg.match(/Task\s*:?\s*(.+?)(?:\n|$)/i);
+    const deadlineMatch = rawMsg.match(/End date\s*:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/Deadline\s*:?\s*(.+?)(?:\n|$)/i);
+    const projMatch = rawMsg.match(/Project\s*:?\s*(.+?)(?:\n|$)/i) || rawMsg.match(/in project\s*:?\s*(.+?)(?:\n|$)/i);
+
+    if (taskMatch) {
+        taskName = taskMatch[1].trim();
+    } else if (lines.length >= 2 && !rawMsg.match(/create task/i)) {
+        // If no explicit 'Task:' but user pasted lines like:
+        // To live the telegram bot
+        // End date 15 Mar
+        // Project : Test Project
+        taskName = lines[0]; // First line is the task name
+    } else {
+        // Single sentence fallback
+        const inlineMatch = rawMsg.match(/create task (.*?) (?:for|in|deadline)/i) || rawMsg.match(/create a task for (.*?) now/i);
+        if (inlineMatch) taskName = inlineMatch[1].trim();
+    }
+
+    deadlineStr = deadlineMatch ? deadlineMatch[1].trim() : null;
+    projectName = projMatch ? projMatch[1].trim() : 'Top Terrace';
 
     if (!taskName) {
         return "To create a task, please use this format:\n\nTask: <Name>\nEnd date: <DD MMM>\nProject: <Name>";
@@ -29,6 +48,12 @@ export async function createTaskTool(entities) {
 
     const projectId = projData[0].id;
 
+    // Try finding assignee user
+    let assigneeName = 'Asif';
+    if (/for kanav/i.test(rawMsg)) assigneeName = 'Kanav';
+    const { data: userData } = await supabase.from('users').select('id').ilike('name', `%${assigneeName}%`).limit(1);
+    const assignedToId = (userData && userData.length) ? userData[0].id : null;
+
     // Create task
     let deadlineDate = null;
     if (deadlineStr) {
@@ -37,10 +62,11 @@ export async function createTaskTool(entities) {
 
     await supabase.from('tasks').insert([{
         project_id: projectId,
+        assigned_to: assignedToId,
         name: taskName,
         deadline: deadlineDate ? deadlineDate.toISOString() : null,
         status: 'pending'
     }]);
 
-    return `Task "${taskName}" has been successfully created in Project. Remember to view it using the task list!`;
+    return `Task "${taskName}" has been successfully created and assigned to ${assigneeName}! Remember to view it using the task list!`;
 }
