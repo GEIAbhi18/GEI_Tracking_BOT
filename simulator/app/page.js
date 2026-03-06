@@ -488,6 +488,39 @@ export default function SimulatorApp() {
             </div>
           </div>
 
+          {/* Reports Section for Kanav */}
+          {currentUser === 'Kanav' && (
+            <div className="bg-slate-50/80 rounded-2xl border border-slate-200/60 p-2 flex-col gap-1 w-full">
+              <div className="px-3 py-1.5 text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                📊 Reports
+              </div>
+              <div className="space-y-1">
+                <button
+                  className="w-full bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold py-2 px-3 rounded-xl text-sm transition-all outline-none focus:ring-2 focus:ring-blue-400 shadow-sm"
+                  onClick={async () => {
+                    const res = await fetch('/api/generate-report', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ userName: currentUser })
+                    });
+                    if (res.ok) alert('Report generated successfully!');
+                    else alert('Failed to generate report.');
+                  }}
+                >
+                  Generate Report
+                </button>
+                <button
+                  className="w-full bg-green-50 hover:bg-green-100 text-green-700 font-semibold py-2 px-3 rounded-xl text-sm transition-all outline-none focus:ring-2 focus:ring-green-400 shadow-sm"
+                  onClick={() => {
+                    window.location.href = `/api/download-report?userName=${currentUser}`;
+                  }}
+                >
+                  Download Today's Report
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
             onClick={handleActionBtn}
             className="w-full text-sm bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-500 hover:to-amber-600 text-amber-950 px-4 py-3 rounded-xl font-bold shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1 cursor-pointer transform hover:-translate-y-0.5 whitespace-normal leading-snug"
