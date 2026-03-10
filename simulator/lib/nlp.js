@@ -10,23 +10,57 @@ export function ruleBasedNLP(text) {
         create_project: ['create project', 'new project', 'add project', 'project:'],
         request_report: ['report', 'can i get the report', 'send today\'s report', 'daily report'],
         view_tickets: ['show tickets', 'view tickets', 'open tickets', 'tickets', 'show me tickets', 'show ticket', 'view ticket', 'ticket'],
-        raise_ticket: ['raise ticket', 'create ticket', 'raise a ticket'],
+        raise_ticket: ['raise ticket', 'create ticket', 'raise a ticket', 'create new ticket', 'raise new ticket', 'new ticket', 'add ticket'],
         view_updates: ['show updates', 'view updates', 'get updates', 'updates for'],
-        view_projects: ['show projects', 'view projects', 'projects', 'show me projects']
+        view_projects: ['show projects', 'view projects', 'projects', 'show me projects'],
+        info_numbered_task: ['show me info about task', 'info task', 'task info', 'details about task']
     };
 
     let bestIntent = 'unknown';
     let bestScore = 0;
 
-    // Check for numbered update format e.g., "1. 60% done"
-    const isNumberedUpdate = /^\d+\.\s+.*(?:done|delay|blocker|percent|%)/i.test(text.trim());
+    // Check for numbered update format or update task format
+    let isNumberedUpdate = false;
+    let upNum = null;
+    let upText = null;
+
+    const addBlockerMatch = /^add blocker to task\s+(\d+)[\.\:]?\s+(.*)/i.exec(text.trim());
+    const updateTaskMatch = /^(?:update\s+(?:task\s+)?)?(\d+)[\.\:]?\s+(.*)/i.exec(text.trim());
+    const traditionalMatch = /^(\d+)\.\s+(.*)/i.exec(text.trim());
+
+    if (addBlockerMatch) {
+        isNumberedUpdate = true;
+        upNum = addBlockerMatch[1];
+        upText = "blocker: " + addBlockerMatch[2];
+    } else if (updateTaskMatch && text.toLowerCase().includes('update')) {
+        isNumberedUpdate = true;
+        upNum = updateTaskMatch[1];
+        upText = updateTaskMatch[2];
+    } else if (traditionalMatch && (text.includes('%') || text.includes('done') || text.includes('blocker') || text.includes('delay') || text.includes('percent'))) {
+        isNumberedUpdate = true;
+        upNum = traditionalMatch[1];
+        upText = traditionalMatch[2];
+    }
 
     // Check for standard multi-line implicit task creation format:
     const isImplicitProjectCreate = /^\s*project\s*:/i.test(text) && /end date:?\s*/i.test(text);
     const isImplicitTaskCreate = !isImplicitProjectCreate && /end date:?\s*/i.test(text) && /project:?\s*/i.test(text);
 
+    // Check for info task format e.g., "show me info about task 1"
+    const isInfoTask = /show me info about task (\d+)/i.exec(text.trim());
+
+    // Check for explicit ticket creation
+    const isNewTicket = /create new ticket for (.+) called "(.+)"/i.exec(text.trim())
+        || /raise new ticket for (.+) called "(.+)"/i.exec(text.trim());
+
     if (isNumberedUpdate) {
         bestIntent = 'update_numbered_task';
+        bestScore = 1;
+    } else if (isInfoTask) {
+        bestIntent = 'info_numbered_task';
+        bestScore = 1;
+    } else if (isNewTicket) {
+        bestIntent = 'raise_ticket';
         bestScore = 1;
     } else if (isImplicitProjectCreate) {
         bestIntent = 'create_project';
@@ -74,7 +108,10 @@ export function ruleBasedNLP(text) {
         entities: {
             target_user: targetUser,
             date,
-            raw_message: text
+            raw_message: isNumberedUpdate ? `${upNum}. ${upText}` : text,
+            task_number: isInfoTask ? parseInt(isInfoTask[1]) : null,
+            ticket_project: isNewTicket ? isNewTicket[1].trim() : null,
+            ticket_message: isNewTicket ? isNewTicket[2].trim() : null
         }
     };
 }

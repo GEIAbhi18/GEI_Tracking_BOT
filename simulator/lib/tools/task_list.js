@@ -10,9 +10,10 @@ export async function taskListTool(entities) {
     const userId = userData[0].id;
 
     // Fetch all active tasks for user ordered by deadline or created_at to keep index consistent
+    // Including updates to get progress and blockers count
     const { data: tasks, error } = await supabase
         .from('tasks')
-        .select('*, projects(name)')
+        .select('*, projects(name), updates(progress, blockers)')
         .eq('assigned_to', userId)
         .order('created_at', { ascending: true });
 
@@ -22,15 +23,40 @@ export async function taskListTool(entities) {
 
     let msg = `Here are the tasks currently assigned to ${targetUser}:\n\n`;
 
+    const groupedTasks = {};
+
     tasks.forEach((t, idx) => {
         const number = idx + 1;
-        const projName = t.projects?.name ? `[${t.projects.name}] ` : '';
-        const dlDate = t.deadline ? new Date(t.deadline) : null;
-        const deadlineStr = dlDate ? `${dlDate.getDate()} ${dlDate.toLocaleString('default', { month: 'short' })}` : 'No deadline';
+        const projName = t.projects?.name || 'No Project';
 
-        msg += `${number}. ${projName}${t.name} – Deadline: ${deadlineStr}\n`;
+        if (!groupedTasks[projName]) {
+            groupedTasks[projName] = [];
+        }
+
+        const updates = t.updates || [];
+        const progress = updates.length > 0 ? Math.max(...updates.map(u => u.progress || 0)) : 0;
+        const blockerCount = updates.filter(u => u.blockers && u.blockers.toLowerCase() !== 'none').length;
+
+        groupedTasks[projName].push({
+            number,
+            name: t.name,
+            deadline: t.deadline,
+            progress,
+            blockerCount
+        });
     });
 
-    msg += `\nYou can update tasks by typing the number (e.g. "1. 60% done no blocker")`;
+    for (const [projName, projTasks] of Object.entries(groupedTasks)) {
+        msg += `**${projName}**\n`;
+        projTasks.forEach(t => {
+            const dlDate = t.deadline ? new Date(t.deadline) : null;
+            const deadlineStr = dlDate ? `${dlDate.getDate()} ${dlDate.toLocaleString('default', { month: 'short' })}` : 'No deadline';
+
+            msg += `${t.number}. ${t.name} – Deadline: ${deadlineStr} | ${t.progress}% done | ${t.blockerCount} blocker(s)\n`;
+        });
+        msg += `\n`;
+    }
+
+    msg += `You can update tasks by typing the number (e.g. "1. 60% done no blocker")`;
     return msg;
 }

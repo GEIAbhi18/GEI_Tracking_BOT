@@ -65,6 +65,10 @@ export async function createTaskTool(entities) {
         assigned_to: assignedToId,
         name: taskName,
         deadline: deadlineDate ? deadlineDate.toISOString() : null,
+        planned_start_date: new Date().toISOString(),
+        planned_end_date: deadlineDate ? deadlineDate.toISOString() : null,
+        actual_start_date: null,
+        actual_end_date: null,
         status: 'pending'
     }]);
 

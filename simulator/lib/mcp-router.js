@@ -9,6 +9,7 @@ import { requestReportTool } from './tools/request_report';
 import { createProjectTool } from './tools/create_project';
 import { viewUpdatesTool } from './tools/view_updates';
 import { viewProjectsTool } from './tools/view_projects';
+import { infoNumberedTaskTool } from './tools/info_numbered_task';
 
 export const mcpTools = {
     check_blocker_status: checkBlockerTool,
@@ -21,7 +22,8 @@ export const mcpTools = {
     request_report: requestReportTool,
     create_project: createProjectTool,
     view_updates: viewUpdatesTool,
-    view_projects: viewProjectsTool
+    view_projects: viewProjectsTool,
+    info_numbered_task: infoNumberedTaskTool
 };
 
 export async function routeToTool(intentObj) {

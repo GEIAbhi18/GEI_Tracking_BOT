@@ -53,18 +53,44 @@ export async function updateNumberedTaskTool(entities) {
 
     // Check for new deadline
     let newDeadline = null;
-    const deadlineMatch = updateText.match(/new deadline (?:is )?(.+?)(?:\n|$|\.)/i);
+    const deadlineMatch = updateText.match(/(?:new deadline(?: is)?|update deadline to|set deadline to)\s+(.+?)(?:\n|$|\.)/i);
     if (deadlineMatch) {
         const dStr = deadlineMatch[1].trim();
         newDeadline = new Date(`${dStr} 2026`).toISOString();
     }
 
+    // Check for attachments/deliverables
+    let newAttachments = null;
+    const attachmentMatch = updateText.match(/(?:attached|attachment|deliverable|proof)[s]?[:\s]+([^.]+)/i);
+    if (attachmentMatch) {
+        newAttachments = [attachmentMatch[1].trim()];
+    }
+
+    let actualStartDate = task.actual_start_date;
+    if (newProgress > 0 && !actualStartDate) {
+        actualStartDate = new Date().toISOString();
+    }
+
+    let actualEndDate = task.actual_end_date;
+    if (newStatus === 'completed' && !actualEndDate) {
+        actualEndDate = new Date().toISOString();
+    }
+
     let payload = {
         status: newStatus,
         is_blocked: newBlocker,
-        blocker_reason: newReason
+        blocker_reason: newReason,
+        actual_start_date: actualStartDate,
+        actual_end_date: actualEndDate
     };
-    if (newDeadline) payload.deadline = newDeadline;
+    if (newAttachments) {
+        // if Postgres array, we either append or overwrite. 
+        // We'll just overwrite or let the simulator handle it
+        payload.attachments = task.attachments ? [...task.attachments, ...newAttachments] : newAttachments;
+    }
+    if (newDeadline) {
+        payload.deadline = newDeadline;
+    }
 
     await supabase.from('tasks').update(payload).eq('id', task.id);
 
@@ -74,11 +100,27 @@ export async function updateNumberedTaskTool(entities) {
         employee_id: userId,
         progress: newProgress,
         blockers: newBlocker ? newReason : 'none',
+        images: newAttachments || [],
         rag: newBlocker ? 'RED' : (newStatus === 'completed' ? 'GREEN' : 'AMBER')
     }]);
 
-    let res = `Task "${task.name}" updated successfully. \nProgress: ${newProgress}%.`;
+    const fmtDate = (dStr) => {
+        if (!dStr) return 'Not set';
+        const d = new Date(dStr);
+        return `${d.getDate()} ${d.toLocaleString('default', { month: 'short' }) + ' ' + d.getFullYear()}`;
+    };
+
+    let res = `Task "${task.name}" updated successfully.`;
+    if (progressMatch) res += `\nProgress: ${newProgress}%.`;
     if (newBlocker) res += `\nFlagged with blocker: ${newReason}`;
-    if (newDeadline) res += `\nDeadline explicitly changed!`;
+    if (newDeadline) res += `\nDeadline explicitly changed to: ${fmtDate(newDeadline)}`;
+    if (newAttachments) res += `\nAttached: ${newAttachments.join(', ')}`;
+
+    res += `\n\nDates Breakdown:`;
+    res += `\n- Planned Start Date: ${fmtDate(task.planned_start_date)}`;
+    res += `\n- Planned End Date: ${fmtDate(task.planned_end_date || task.deadline)}`;
+    res += `\n- Actual Start Date: ${fmtDate(actualStartDate)}`;
+    res += `\n- Actual End Date: ${fmtDate(actualEndDate)}`;
+
     return res;
 }

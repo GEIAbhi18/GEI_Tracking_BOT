@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS tasks (
     name TEXT NOT NULL,
     deadline TIMESTAMP WITH TIME ZONE,
     status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'completed')),
+    planned_start_date TIMESTAMP WITH TIME ZONE,
+    planned_end_date TIMESTAMP WITH TIME ZONE,
+    actual_start_date TIMESTAMP WITH TIME ZONE,
+    actual_end_date TIMESTAMP WITH TIME ZONE,
+    attachments TEXT[],
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 

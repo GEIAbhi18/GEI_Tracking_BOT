@@ -425,7 +425,29 @@ export default function SimulatorApp() {
 
         // UI triggers driven by NLP output
         if (intent === 'raise_ticket') {
-          return startRaiseTicket();
+          if (data.nlpData?.entities?.ticket_project && data.nlpData?.entities?.ticket_message) {
+            const finalProject = data.nlpData.entities.ticket_project;
+            const finalMessage = data.nlpData.entities.ticket_message;
+            const newTicket = { id: Date.now(), project_name: finalProject, task_name: '', message: finalMessage, created_by: currentUser, status: 'open' };
+            setGlobalTickets(prev => [...prev, newTicket]);
+
+            supabase.from('projects').select('id').ilike('name', `%${finalProject}%`).limit(1).then(pData => {
+              let pId = pData.data && pData.data.length ? pData.data[0].id : null;
+              supabase.from('users').select('id').ilike('name', currentUser).limit(1).then(uData => {
+                let uId = uData.data && uData.data.length ? uData.data[0].id : null;
+                supabase.from('tickets').insert([{
+                  project_id: pId,
+                  created_by: uId,
+                  status: 'open'
+                }]).then();
+              });
+            });
+
+            addBotMessage(`Ticket raised successfully for project ${finalProject}! ✅`);
+            return;
+          } else {
+            return startRaiseTicket();
+          }
         }
 
         if (intent === 'view_tickets') {
