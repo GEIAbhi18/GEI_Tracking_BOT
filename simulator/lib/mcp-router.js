@@ -10,6 +10,8 @@ import { createProjectTool } from './tools/create_project';
 import { viewUpdatesTool } from './tools/view_updates';
 import { viewProjectsTool } from './tools/view_projects';
 import { infoNumberedTaskTool } from './tools/info_numbered_task';
+import { promptTaskCompleteTool, promptTaskUpdateTool, promptTaskBlockerTool } from './tools/prompt_task';
+import { raiseTicketTool } from './tools/raise_ticket';
 
 export const mcpTools = {
     check_blocker_status: checkBlockerTool,
@@ -23,7 +25,11 @@ export const mcpTools = {
     create_project: createProjectTool,
     view_updates: viewUpdatesTool,
     view_projects: viewProjectsTool,
-    info_numbered_task: infoNumberedTaskTool
+    info_numbered_task: infoNumberedTaskTool,
+    prompt_task_complete: promptTaskCompleteTool,
+    prompt_task_update: promptTaskUpdateTool,
+    prompt_task_blocker: promptTaskBlockerTool,
+    raise_ticket: raiseTicketTool
 };
 
 export async function routeToTool(intentObj) {

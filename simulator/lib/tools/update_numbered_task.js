@@ -53,17 +53,23 @@ export async function updateNumberedTaskTool(entities) {
 
     // Check for new deadline
     let newDeadline = null;
-    const deadlineMatch = updateText.match(/(?:new deadline(?: is)?|update deadline to|set deadline to)\s+(.+?)(?:\n|$|\.)/i);
+    const deadlineMatch = updateText.match(/(?:new deadline|update deadline|set deadline|deadline)(?:\s+is|\s+to)?\s+([0-9]{1,2}\s+[a-zA-Z]+)(?:$|\n|\.)/i) || updateText.match(/(?:new deadline|update deadline|set deadline|deadline)(?:\s+is|\s+to)?\s+(.+?)(?:$|\n|\.)/i);
     if (deadlineMatch) {
         const dStr = deadlineMatch[1].trim();
+        // Just parsing whatever they give + 2026. Or simply use the string if it's parseable.
         newDeadline = new Date(`${dStr} 2026`).toISOString();
     }
 
     // Check for attachments/deliverables
     let newAttachments = null;
-    const attachmentMatch = updateText.match(/(?:attached|attachment|deliverable|proof)[s]?[:\s]+([^.]+)/i);
+    const attachmentMatch = updateText.match(/(?:attached|attachment|deliverable|proof)[s]?[:\s]+(\S+)/i);
     if (attachmentMatch) {
         newAttachments = [attachmentMatch[1].trim()];
+    }
+
+    // Enforce image proof for completed tasks
+    if (newProgress === 100 && !newAttachments) {
+        return `Please provide an image proof to mark task "${task.name}" as 100% completed. (e.g., "1. 100% done attached: https://link-to-image.com")`;
     }
 
     let actualStartDate = task.actual_start_date;
@@ -90,6 +96,7 @@ export async function updateNumberedTaskTool(entities) {
     }
     if (newDeadline) {
         payload.deadline = newDeadline;
+        payload.planned_end_date = newDeadline;
     }
 
     await supabase.from('tasks').update(payload).eq('id', task.id);
@@ -114,11 +121,11 @@ export async function updateNumberedTaskTool(entities) {
     if (progressMatch) res += `\nProgress: ${newProgress}%.`;
     if (newBlocker) res += `\nFlagged with blocker: ${newReason}`;
     if (newDeadline) res += `\nDeadline explicitly changed to: ${fmtDate(newDeadline)}`;
-    if (newAttachments) res += `\nAttached: ${newAttachments.join(', ')}`;
+    if (newAttachments) res += `\nAttached Proof: ${newAttachments.join(', ')}`;
 
     res += `\n\nDates Breakdown:`;
     res += `\n- Planned Start Date: ${fmtDate(task.planned_start_date)}`;
-    res += `\n- Planned End Date: ${fmtDate(task.planned_end_date || task.deadline)}`;
+    res += `\n- Planned End Date: ${fmtDate(newDeadline || task.planned_end_date || task.deadline)}`;
     res += `\n- Actual Start Date: ${fmtDate(actualStartDate)}`;
     res += `\n- Actual End Date: ${fmtDate(actualEndDate)}`;
 

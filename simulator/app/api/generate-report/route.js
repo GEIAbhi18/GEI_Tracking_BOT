@@ -123,7 +123,16 @@ export async function POST(req) {
 
             const blockerTxt = t.is_blocked ? t.blocker_reason || 'Unknown blocker' : 'None';
             doc.text(`Blocker: ${blockerTxt}`, margin + 5, y);
-            y += 10;
+            y += 6;
+
+            if (t.attachments && t.attachments.length > 0) {
+              doc.setTextColor(0, 0, 255); // Blue color for links
+              doc.textWithLink('View Proof Image', margin + 5, y, { url: t.attachments[0] });
+              // doc.text(`Proof: ${t.attachments[0]}`, margin + 5, y);
+              doc.setTextColor(0, 0, 0); // Reset to black
+              y += 6;
+            }
+            y += 4;
           });
         }
         y += 5;
