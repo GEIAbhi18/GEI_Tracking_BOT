@@ -34,7 +34,7 @@ export async function taskListTool(entities) {
         }
 
         const updates = t.updates || [];
-        const progress = updates.length > 0 ? Math.max(...updates.map(u => u.progress || 0)) : 0;
+        const progress = t.progress !== undefined && t.progress !== null ? t.progress : (updates.length > 0 ? Math.max(...updates.map(u => u.progress || 0)) : 0);
         const blockerCount = updates.filter(u => u.blockers && u.blockers.toLowerCase() !== 'none').length;
 
         groupedTasks[projName].push({

@@ -475,21 +475,52 @@ export default function SimulatorApp() {
     }
   };
 
-  const handleActionBtn = () => {
+  const handleActionBtn = async () => {
     if (currentUser === 'Kanav') {
       addBotMessage('Update request sent to Asif.');
-      setUserStates(prev => ({
-        ...prev,
-        Asif: {
-          ...prev.Asif,
-          messages: [...prev.Asif.messages, {
-            id: Date.now(),
-            sender: 'bot',
-            text: '🔔 Kanav is asking for your current update',
-            time: formatTime(new Date())
-          }]
-        }
-      }));
+      try {
+        const res = await fetch('/api/process-message', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: "update task", userName: "Asif" })
+        });
+        const data = await res.json();
+        
+        setUserStates(prev => ({
+          ...prev,
+          Asif: {
+            ...prev.Asif,
+            messages: [
+              ...prev.Asif.messages,
+              {
+                id: Date.now(),
+                sender: 'bot',
+                text: '🔔 Kanav is asking for your current update',
+                time: formatTime(new Date())
+              },
+              {
+                id: Date.now() + 1,
+                sender: 'bot',
+                text: data.reply || "Please provide your task update.",
+                time: formatTime(new Date())
+              }
+            ]
+          }
+        }));
+      } catch (err) {
+        setUserStates(prev => ({
+          ...prev,
+          Asif: {
+            ...prev.Asif,
+            messages: [...prev.Asif.messages, {
+              id: Date.now(),
+              sender: 'bot',
+              text: '🔔 Kanav is asking for your current update',
+              time: formatTime(new Date())
+            }]
+          }
+        }));
+      }
     } else {
       // currentUser === 'Asif'
       setMode('send_blocker');

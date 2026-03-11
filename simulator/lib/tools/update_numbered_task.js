@@ -30,7 +30,7 @@ export async function updateNumberedTaskTool(entities) {
     let newStatus = task.status;
     let newBlocker = task.is_blocked;
     let newReason = task.blocker_reason;
-    let newProgress = 0;
+    let newProgress = task.progress || 0;
 
     // Determine info from updateText
     const progressMatch = updateText.match(/(\d+)%\s*(?:completed|done)?/i) || updateText.match(/(\d+)\s*percent/i);
@@ -84,6 +84,7 @@ export async function updateNumberedTaskTool(entities) {
 
     let payload = {
         status: newStatus,
+        progress: newProgress,
         is_blocked: newBlocker,
         blocker_reason: newReason,
         actual_start_date: actualStartDate,
