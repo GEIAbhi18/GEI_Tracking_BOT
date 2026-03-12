@@ -1,4 +1,4 @@
-import { supabase } from '../supabase';
+import { supabase } from '../supabase.js';
 
 export async function viewProjectsTool(entities) {
     const { data: projects, error } = await supabase.from('projects').select('*').order('created_at', { ascending: false }).limit(20);

@@ -1,3 +1,3 @@
 export async function greetingTool(entities) {
-    return "Hello! I am your GEI Team Workflow Assistant. How can I assist you with your project today?";
+    return "Hello! I am the Good Earth Infra Tracking Bot. 👷‍♂️🏗️\nI am here to help you manage tasks, track progress, and handle project tickets. How can I assist you or the team today?";
 }

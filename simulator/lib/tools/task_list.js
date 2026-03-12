@@ -1,4 +1,4 @@
-import { supabase } from '../supabase';
+import { supabase } from '../supabase.js';
 
 export async function taskListTool(entities) {
     const targetUser = entities.target_user || 'Asif';

@@ -1,4 +1,4 @@
-import { supabase } from '../supabase';
+import { supabase } from '../supabase.js';
 import { taskListTool } from './task_list';
 
 export async function promptTaskTool(entities, actionType) {

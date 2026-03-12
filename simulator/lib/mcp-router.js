@@ -1,35 +1,35 @@
-import { checkBlockerTool } from './tools/blocker';
-import { greetingTool } from './tools/greeting';
-import { helpTool } from './tools/help';
-import { reportUpdateTool } from './tools/update';
-import { taskListTool } from './tools/task_list';
-import { updateNumberedTaskTool } from './tools/update_numbered_task';
-import { createTaskTool } from './tools/create_task';
-import { requestReportTool } from './tools/request_report';
-import { createProjectTool } from './tools/create_project';
-import { viewUpdatesTool } from './tools/view_updates';
+import { getTasksTool } from './tools/new_tasks';
+import { updateTaskTool, markDoneTool } from './tools/new_update_task';
+import { createTaskTool } from './tools/new_create_task';
+import { createTicketTool } from './tools/new_ticket';
+import { checkBlockersTool, addBlockerTool } from './tools/new_blocker';
+import { assignTaskTool } from './tools/new_assign';
+import { uploadDeliverableTool } from './tools/new_deliverable';
+import { taskDetailsTool } from './tools/new_task_details';
 import { viewProjectsTool } from './tools/view_projects';
-import { infoNumberedTaskTool } from './tools/info_numbered_task';
-import { promptTaskCompleteTool, promptTaskUpdateTool, promptTaskBlockerTool } from './tools/prompt_task';
-import { raiseTicketTool } from './tools/raise_ticket';
+import { viewTicketsTool } from './tools/view_tickets';
+import { replyTicketTool } from './tools/reply_ticket';
+import { closeTicketTool } from './tools/close_ticket';
+import { greetingTool } from './tools/greeting';
+import { requestReportTool } from './tools/request_report';
 
 export const mcpTools = {
-    check_blocker_status: checkBlockerTool,
-    greeting: greetingTool,
-    help: helpTool,
-    report_update: reportUpdateTool,
-    task_list: taskListTool,
-    update_numbered_task: updateNumberedTaskTool,
     create_task: createTaskTool,
-    request_report: requestReportTool,
-    create_project: createProjectTool,
-    view_updates: viewUpdatesTool,
+    create_ticket: createTicketTool,
+    update_task: updateTaskTool,
+    assign_task: assignTaskTool,
+    mark_done: markDoneTool,
+    list_tasks: getTasksTool,
+    add_blocker: addBlockerTool,
+    check_blockers: checkBlockersTool,
+    task_details: taskDetailsTool,
+    upload_deliverable: uploadDeliverableTool,
     view_projects: viewProjectsTool,
-    info_numbered_task: infoNumberedTaskTool,
-    prompt_task_complete: promptTaskCompleteTool,
-    prompt_task_update: promptTaskUpdateTool,
-    prompt_task_blocker: promptTaskBlockerTool,
-    raise_ticket: raiseTicketTool
+    view_tickets: viewTicketsTool,
+    request_report: requestReportTool,
+    reply_ticket: replyTicketTool,
+    close_ticket: closeTicketTool,
+    greeting: greetingTool
 };
 
 export async function routeToTool(intentObj) {

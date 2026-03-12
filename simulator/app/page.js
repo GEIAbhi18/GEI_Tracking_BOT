@@ -198,9 +198,14 @@ export default function SimulatorApp() {
           id,
           status,
           created_at,
-          projects:project_id(name),
-          tasks:task_id(name),
-          users:created_by(name)
+          projects (name),
+          tasks (name),
+          users:created_by (name),
+          ticket_messages (
+            message_text,
+            timestamp,
+            sender:sender_id (name)
+          )
         `)
         .eq('status', 'open').order('created_at', { ascending: false }).limit(10);
       if (!error && data && data.length > 0) dbTickets = data;
@@ -214,33 +219,43 @@ export default function SimulatorApp() {
     allOpen.forEach(t => {
       if (!combinedTickets[t.id]) combinedTickets[t.id] = t;
       else {
-        // Merge simulated message into DB record
-        combinedTickets[t.id].message = t.message;
+        // Merge simulated message into DB record jika belum ada history
+        if (!combinedTickets[t.id].ticket_messages || combinedTickets[t.id].ticket_messages.length === 0) {
+            combinedTickets[t.id].ticket_messages = [{ message_text: t.message, sender: { name: t.created_by } }];
+        }
         combinedTickets[t.id].task_name = t.task_name;
         combinedTickets[t.id].project_name = t.project_name;
         combinedTickets[t.id].created_by_name = t.created_by;
       }
     });
 
-    const ticketsToShow = Object.values(combinedTickets).sort((a, b) => b.id - a.id);
+    const ticketsToShow = Object.values(combinedTickets).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
     if (ticketsToShow.length === 0) {
       addBotMessage('No open tickets found.');
     } else {
-      const formatted = ticketsToShow.map(t => {
+      const formatted = ticketsToShow.map((t, idx) => {
         const pName = t.projects?.name || t.project_name || 'N/A';
         const tName = t.tasks?.name || t.task_name || 'N/A';
         const uName = t.users?.name || t.created_by_name || t.created_by || 'Unknown';
-        const msgText = t.message || '(Ticket raised via system - see chat history)';
-        return `🎫 Ticket #${t.id}\n📁 Project: ${pName}\n📋 Task: ${tName}\n💬 Message: ${msgText}\n👤 By: ${uName}`;
-      }).join('\n\n---\n\n');
-      addBotMessage(`Open Tickets:\n\n${formatted}`);
+        const date = new Date(t.created_at);
+        const dateStr = isNaN(date.getTime()) ? 'Recently' : `${date.getDate()} ${date.toLocaleString('default', { month: 'short' })}`;
 
-      ticketsToShow.forEach(t => {
-        const btns = [`Reply to Ticket #${t.id}`];
-        if (currentUser === 'Kanav') btns.push(`Close Ticket #${t.id}`);
-        addBotMessage(`Actions for Ticket #${t.id}:`, btns);
-      });
+        let tMsg = `${idx + 1}. **Project: ${pName}**\n   Task: ${tName}\n   By: ${uName} | Date: ${dateStr}\n   --- History ---\n`;
+        
+        const sortedMessages = (t.ticket_messages || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        if (sortedMessages.length === 0) {
+            tMsg += `   (No messages)\n`;
+        } else {
+            sortedMessages.forEach(m => {
+                const sender = m.sender?.name || "Unknown";
+                tMsg += `   • ${sender}: ${m.message_text}\n`;
+            });
+        }
+        return tMsg;
+      }).join('\n\n---\n\n');
+      
+      addBotMessage(`Open Tickets:\n\n${formatted}\n\n*To reply, type: "number. message" (e.g. "1. Working on it")*\n*To close, type: "close ticket number" (e.g. "close ticket 1")*`);
     }
   };
 
@@ -414,7 +429,11 @@ export default function SimulatorApp() {
         method: 'POST',
         cache: 'no-store',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: cleanMessage, userName: currentUser })
+        body: JSON.stringify({ 
+          message: cleanMessage, 
+          userName: currentUser,
+          chatHistory: messages.slice(-5) // Send last 5 messages for context
+        })
       });
 
       setMessages(prev => prev.filter(m => m.text !== 'Processing intent...'));
@@ -621,38 +640,6 @@ export default function SimulatorApp() {
             </div>
           </div>
 
-          {/* Reports Section for Kanav */}
-          {currentUser === 'Kanav' && (
-            <div className="bg-slate-50/80 rounded-2xl border border-slate-200/60 p-2 flex-col gap-1 w-full">
-              <div className="px-3 py-1.5 text-[10px] font-extrabold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
-                📊 Reports
-              </div>
-              <div className="space-y-1">
-                <button
-                  className="w-full bg-blue-50 hover:bg-blue-100 text-blue-700 font-semibold py-2 px-3 rounded-xl text-sm transition-all outline-none focus:ring-2 focus:ring-blue-400 shadow-sm"
-                  onClick={async () => {
-                    const res = await fetch('/api/generate-report', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ userName: currentUser })
-                    });
-                    if (res.ok) alert('Report generated successfully!');
-                    else alert('Failed to generate report.');
-                  }}
-                >
-                  Generate Report
-                </button>
-                <button
-                  className="w-full bg-green-50 hover:bg-green-100 text-green-700 font-semibold py-2 px-3 rounded-xl text-sm transition-all outline-none focus:ring-2 focus:ring-green-400 shadow-sm"
-                  onClick={() => {
-                    window.location.href = `/api/download-report?userName=${currentUser}`;
-                  }}
-                >
-                  Download Today's Report
-                </button>
-              </div>
-            </div>
-          )}
 
           <button
             onClick={handleActionBtn}
