@@ -13,11 +13,21 @@ export function ruleBasedNLP(text) {
         close_ticket: ['close ticket', 'resolve ticket', 'ticket resolved', 'close it'],
         reply_ticket: ['reply to ticket', 'respond to ticket'],
         view_projects: ['show projects', 'view projects', 'projects', 'show me projects'],
-        task_details: ['show me info about task', 'info task', 'task info', 'details about task']
+        task_details: ['show me info about task', 'info task', 'task info', 'details about task'],
+        llm_usage: ['llm usage', 'llm costing', 'llm cost', 'token usage', 'usage stats']
     };
 
     let bestIntent = 'unknown';
     let bestScore = 0;
+
+    // Direct match for LLM usage admin queries
+    if (lowerText.includes('llm usage') || lowerText.includes('llm costing') || lowerText.includes('llm cost')) {
+        return {
+            intent: 'llm_usage',
+            confidence: 1,
+            entities: { raw_message: text }
+        };
+    }
 
     // Check for numbered update format or update task format
     let isNumberedUpdate = false;

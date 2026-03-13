@@ -1,0 +1,8 @@
+Date: 2026-03-13
+
+Total LLM Calls: 1
+Total Input Tokens: 753
+Total Output Tokens: 87
+Total Tokens: 840
+
+Estimated Cost Today: ₹0.0069 INR

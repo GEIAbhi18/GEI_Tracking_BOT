@@ -1,0 +1,7 @@
+{"timestamp":"2026-03-13 08:41","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed"}
+{"timestamp":"2026-03-13 08:41","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","input_tokens":754,"output_tokens":63,"total_tokens":817,"estimated_cost":0.000082,"user_message":"llm usage","intent":"request_report"}
+{"timestamp":"2026-03-13 08:41","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed"}
+{"timestamp":"2026-03-13 08:41","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","input_tokens":802,"output_tokens":72,"total_tokens":874,"estimated_cost":0.000087,"user_message":"llm_usage","intent":"unknown"}
+{"timestamp":"2026-03-13 08:44","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed"}
+{"timestamp":"2026-03-13 08:44","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","input_tokens":706,"output_tokens":126,"total_tokens":832,"estimated_cost":0.000083,"user_message":"ll usage","intent":"unknown"}
+{"timestamp":"2026-03-13 08:48","provider":"gemini","model":"gemini-flash-latest","input_tokens":753,"output_tokens":87,"total_tokens":840,"estimated_cost":0.000083,"user_message":"test","intent":"unknown"}

@@ -1,19 +1,40 @@
+import { logLLMUsageAsync } from './llmLogger';
+
 export async function extractIntentWithLLM(message, chatHistory = []) {
+    const selectedProvider = process.env.LLM_PROVIDER || 'gemini';
+    
     const providers = [
-        { name: 'openrouter', fn: callOpenRouter },
-        { name: 'gemini', fn: callGemini },
-        { name: 'anthropic', fn: callAnthropic },
-        { name: 'openai', fn: callOpenAI },
-        { name: 'huggingface', fn: callHuggingFace }
+        { name: 'openrouter', fn: callOpenRouter, model: 'meta-llama/llama-3-8b-instruct' },
+        { name: 'gemini', fn: callGemini, model: 'gemini-flash-latest' },
+        { name: 'anthropic', fn: callAnthropic, model: 'claude-3-sonnet-20240229' },
+        { name: 'openai', fn: callOpenAI, model: 'gpt-3.5-turbo' },
+        { name: 'huggingface', fn: callHuggingFace, model: 'meta-llama/Llama-2-7b-chat-hf' }
     ];
 
-    for (const provider of providers) {
+    // Reorder to put selected provider first
+    const sortedProviders = [...providers].sort((a, b) => {
+        if (a.name === selectedProvider) return -1;
+        if (b.name === selectedProvider) return 1;
+        return 0;
+    });
+
+    for (const provider of sortedProviders) {
         try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
 
-            const result = await provider.fn(message, controller.signal, chatHistory);
+            const { result, usage } = await provider.fn(message, controller.signal, chatHistory);
             clearTimeout(timeoutId);
+
+            // Log usage
+            logLLMUsageAsync({
+                provider: provider.name,
+                model: provider.model,
+                input_tokens: usage?.input_tokens || 0,
+                output_tokens: usage?.output_tokens || 0,
+                user_message: message,
+                parsed_intent: result?.intent
+            });
 
             if (result && typeof result === 'object' && 'intent' in result) {
                 const rawEntities = result.entities || {};
@@ -43,6 +64,12 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
             }
         } catch (err) {
             console.error(`Provider ${provider.name} failed:`, err.message || err);
+            logLLMUsageAsync({
+                provider: provider.name,
+                model: provider.model,
+                error: err.message || String(err),
+                user_message: message
+            });
         }
     }
 
@@ -127,7 +154,13 @@ async function callOpenAI(message, signal, chatHistory = []) {
 
     if (!res.ok) throw new Error(`OpenAI error: ${res.statusText}`);
     const data = await res.json();
-    return JSON.parse(data.choices[0].message.content);
+    return {
+        result: JSON.parse(data.choices[0].message.content),
+        usage: {
+            input_tokens: data.usage?.prompt_tokens || 0,
+            output_tokens: data.usage?.completion_tokens || 0
+        }
+    };
 }
 
 async function callGemini(message, signal, chatHistory = []) {
@@ -158,7 +191,13 @@ async function callGemini(message, signal, chatHistory = []) {
     if (!res.ok) throw new Error(`Gemini error: ${res.statusText}`);
     const data = await res.json();
     const rawText = data.candidates[0].content.parts[0].text;
-    return JSON.parse(rawText);
+    return {
+        result: JSON.parse(rawText),
+        usage: {
+            input_tokens: data.usageMetadata?.promptTokenCount || 0,
+            output_tokens: data.usageMetadata?.candidatesTokenCount || 0
+        }
+    };
 }
 
 async function callHuggingFace(message, signal, chatHistory = []) {
@@ -191,7 +230,10 @@ async function callHuggingFace(message, signal, chatHistory = []) {
         text = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
     }
 
-    return JSON.parse(text);
+    return {
+        result: JSON.parse(text),
+        usage: { input_tokens: 0, output_tokens: 0 } // HF Inference API doesn't always provide tokens easily
+    };
 }
 
 async function callAnthropic(message, signal, chatHistory = []) {
@@ -231,7 +273,13 @@ async function callAnthropic(message, signal, chatHistory = []) {
         text = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
     }
 
-    return JSON.parse(text);
+    return {
+        result: JSON.parse(text),
+        usage: {
+            input_tokens: data.usage?.input_tokens || 0,
+            output_tokens: data.usage?.output_tokens || 0
+        }
+    };
 }
 
 async function callOpenRouter(message, signal, chatHistory = []) {
@@ -271,5 +319,11 @@ async function callOpenRouter(message, signal, chatHistory = []) {
         text = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
     }
 
-    return JSON.parse(text);
+    return {
+        result: JSON.parse(text),
+        usage: {
+            input_tokens: data.usage?.prompt_tokens || 0,
+            output_tokens: data.usage?.completion_tokens || 0
+        }
+    };
 }

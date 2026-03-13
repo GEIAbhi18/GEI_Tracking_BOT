@@ -3,6 +3,8 @@ import { extractIntentWithLLM } from '@/lib/llm';
 import { routeToTool } from '@/lib/mcp-router';
 import { supabase } from '@/lib/supabase';
 import { ruleBasedNLP } from '@/lib/nlp';
+import fs from 'fs';
+import path from 'path';
 
 async function logUnknown(message, llmResult = {}, userName = 'Kanav') {
     try {
@@ -56,6 +58,20 @@ export async function POST(req) {
             const cmd = parts[0].toLowerCase();
             const rest = parts.slice(1).join(' ');
 
+            const isLLMUsage = cmd === 'llm_usage' || lowerText.includes('llm usage') || lowerText.includes('llm costing') || lowerText.includes('llm cost');
+
+            if (isLLMUsage) {
+                if (userName !== 'Kanav') {
+                    return NextResponse.json({ reply: "Access denied. Only admins can use this command." });
+                }
+                const costFile = path.join(process.cwd(), 'reports', 'llm_cost_summary.txt');
+                let summary = "No LLM usage recorded today.";
+                if (fs.existsSync(costFile)) {
+                    summary = fs.readFileSync(costFile, 'utf-8');
+                }
+                return NextResponse.json({ reply: `LLM Usage Stats:\n\n${summary}` });
+            }
+
             const allowedCommands = ['update_task', 'add_blocker', 'create_ticket', 'create_task', 'assign_task', 'mark_done', 'list_tasks', 'check_blockers', 'task_details', 'upload_deliverable', 'view_projects', 'view_tickets', 'request_report', 'reply_ticket', 'close_ticket'];
             
             if (allowedCommands.includes(cmd)) {
@@ -92,12 +108,30 @@ export async function POST(req) {
                 finalIntent.entities.userName = userName;
                 finalIntent.entities.raw_message = message;
             } else {
-                await logUnknown(message, llmResult, userName);
-                return NextResponse.json({
-                    reply: "I couldn't specify your request intent. Here are the allowed commands you can try or rephrase your message.",
-                    nlpData: { intent: 'unknown' }
-                });
+                // Secondary check for LLM usage before falling back to unknown
+                const isLLMNatural = lowerText.includes('llm usage') || lowerText.includes('llm costing') || lowerText.includes('llm cost');
+                if (isLLMNatural) {
+                    finalIntent = { intent: 'llm_usage', confidence: 1, entities: { userName } };
+                } else {
+                    await logUnknown(message, llmResult, userName);
+                    return NextResponse.json({
+                        reply: "I couldn't specify your request intent. Here are the allowed commands you can try or rephrase your message.",
+                        nlpData: { intent: 'unknown' }
+                    });
+                }
             }
+        }
+
+        if (finalIntent?.intent === 'llm_usage') {
+            if (userName !== 'Kanav') {
+                return NextResponse.json({ reply: "Access denied. Only admins can use this command." });
+            }
+            const costFile = path.join(process.cwd(), 'reports', 'llm_cost_summary.txt');
+            let summary = "No LLM usage recorded today.";
+            if (fs.existsSync(costFile)) {
+                summary = fs.readFileSync(costFile, 'utf-8');
+            }
+            return NextResponse.json({ reply: `LLM Usage Stats:\n\n${summary}` });
         }
 
         const response = await routeToTool(finalIntent);

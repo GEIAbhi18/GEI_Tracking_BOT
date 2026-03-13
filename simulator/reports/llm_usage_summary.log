@@ -1,0 +1,40 @@
+
+---
+Time: 14:11:04
+Model: meta-llama/llama-3-8b-instruct
+Intent: request_report
+Input Tokens: 754
+Output Tokens: 63
+Total Tokens: 817
+Estimated Cost: $0.000082
+------------------------
+
+---
+Time: 14:11:23
+Model: meta-llama/llama-3-8b-instruct
+Intent: unknown
+Input Tokens: 802
+Output Tokens: 72
+Total Tokens: 874
+Estimated Cost: $0.000087
+------------------------
+
+---
+Time: 14:14:55
+Model: meta-llama/llama-3-8b-instruct
+Intent: unknown
+Input Tokens: 706
+Output Tokens: 126
+Total Tokens: 832
+Estimated Cost: $0.000083
+------------------------
+
+---
+Time: 14:18:43
+Model: gemini-flash-latest
+Intent: unknown
+Input Tokens: 753
+Output Tokens: 87
+Total Tokens: 840
+Estimated Cost: ₹0.0069 INR
+------------------------
