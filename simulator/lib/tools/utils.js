@@ -1,36 +1,62 @@
 import { supabase } from '../supabase.js';
 
 export async function getUserAndTasks(targetUser = 'Asif') {
-    const { data: userData } = await supabase.from('users').select('id').ilike('name', `%${targetUser}%`).limit(1);
-    if (!userData || userData.length === 0) return { error: 'No tasks found for user: ' + targetUser };
-    const userId = userData[0].id;
+    const { data: users } = await supabase.from('users').select('id, name').ilike('name', `%${targetUser}%`);
+    if (!users || users.length === 0) return { error: 'User not found in database: ' + targetUser };
+    
+    // If multiple users match (e.g. duplicate Asifs), find the one who actually has tasks
+    for (const user of users) {
+        const { data: tasks, error } = await supabase
+            .from('tasks')
+            .select('*, projects(name), updates(progress, blockers)')
+            .eq('assigned_to', user.id)
+            .order('created_at', { ascending: true });
+            
+        if (tasks && tasks.length > 0) {
+            return { userId: user.id, tasks };
+        }
+    }
 
-    const { data: tasks, error } = await supabase
-        .from('tasks')
-        .select('*, projects(name), updates(progress, blockers)')
-        .eq('assigned_to', userId)
-        .order('created_at', { ascending: true });
-
-    if (error) return { error: 'Failed to fetch tasks.' };
-    return { userId, tasks: tasks || [] };
+    // Fallback: Use the first one found if none have tasks
+    return { userId: users[0].id, tasks: [] };
 }
 
 export function findTaskByEntities(tasks, entities) {
-    if (entities.task_id) {
-        // Assume task_id represents the 1-based index in the user's task list (derived from "Here are open tasks: 1. ...")
-        const match = entities.task_id.toString().match(/\d+/);
+    if (!tasks || tasks.length === 0) return null;
+
+    // 1. Try task_id/task_number which are often pure numbers
+    const idVal = entities.task_id || entities.task_number;
+    if (idVal) {
+        const match = idVal.toString().match(/\d+/);
         if (match) {
             const idx = parseInt(match[0], 10) - 1;
             if (idx >= 0 && idx < tasks.length) return tasks[idx];
         }
     }
     
+    // 2. Try task_name - check for "Task 1" style references
     if (entities.task_name) {
-        const lowerName = entities.task_name.toLowerCase();
-        return tasks.find(t => t.name.toLowerCase().includes(lowerName));
+        const lowerName = entities.task_name.toLowerCase().trim();
+        
+        // Handle "Task 1", "Task #1", etc.
+        const taskRefMatch = lowerName.match(/^task\s*#?(\d+)$/);
+        if (taskRefMatch) {
+            const idx = parseInt(taskRefMatch[1], 10) - 1;
+            if (idx >= 0 && idx < tasks.length) return tasks[idx];
+        }
+
+        // Handle pure number strings
+        if (/^\d+$/.test(lowerName)) {
+            const idx = parseInt(lowerName, 10) - 1;
+            if (idx >= 0 && idx < tasks.length) return tasks[idx];
+        }
+
+        // Fuzzy inclusion match
+        const found = tasks.find(t => t.name.toLowerCase().includes(lowerName));
+        if (found) return found;
     }
     
-    // Fallback: check raw message for a leading number
+    // 3. Last fallback: check raw message for any leading number if other entities failed
     if (entities.raw_message) {
         const match = entities.raw_message.match(/^(\d+)/);
         if (match) {
@@ -84,14 +110,19 @@ export function buildGroupedTasksList(tasks) {
 
         const updates = t.updates || [];
         const progress = t.progress !== undefined && t.progress !== null ? t.progress : (updates.length > 0 ? Math.max(...updates.map(u => u.progress || 0)) : 0);
-        const blockerCount = updates.filter(u => u.blockers && u.blockers.toLowerCase() !== 'none').length;
+        
+        let blockerCount = updates.filter(u => u.blockers && u.blockers.toLowerCase() !== 'none').length;
+        if (t.blocker_reason && t.blocker_reason.toLowerCase() !== 'none' && !updates.some(u => u.blockers === t.blocker_reason)) {
+            blockerCount += 1;
+        }
 
         groupedTasks[projName].push({
             number,
             name: t.name,
             deadline: t.deadline,
             progress,
-            blockerCount
+            blockerCount,
+            attachments: t.attachments
         });
     });
 

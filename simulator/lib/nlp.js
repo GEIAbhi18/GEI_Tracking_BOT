@@ -2,10 +2,10 @@ export function ruleBasedNLP(text) {
     const lowerText = text.toLowerCase();
 
     const intents = {
-        check_blocker_status: ['show blockers', 'what are the blockers', 'status'],
+        query_blockers: ['show blockers', 'what are the blockers', 'show all blockers', 'blockers status', 'blockers list', 'project wise blocker', 'show project wise blocker', 'what blockers', 'blocker status', 'show blocker'],
         greeting: ['hi', 'hello', 'hey', 'namaste', 'morning', 'evening'],
         help: ['help', 'support', 'commands', 'what can you do'],
-        task_list: ['task list', 'show me tasks', 'get task', 'tasks', 'get_task'],
+        list_tasks: ['task list', 'show me tasks', 'get task', 'tasks', 'get_task', 'show tasks', 'show my tasks'],
         create_task: ['create task', 'new task', 'add task', 'create a task'],
         request_report: ['report', 'can i get the report', 'send today\'s report', 'daily report'],
         view_tickets: ['show tickets', 'view tickets', 'open tickets', 'tickets', 'show me tickets', 'show ticket', 'view ticket', 'ticket'],
@@ -13,7 +13,9 @@ export function ruleBasedNLP(text) {
         close_ticket: ['close ticket', 'resolve ticket', 'ticket resolved', 'close it'],
         reply_ticket: ['reply to ticket', 'respond to ticket'],
         view_projects: ['show projects', 'view projects', 'projects', 'show me projects'],
+        create_project: ['create project', 'new project', 'add project', 'create a project'],
         task_details: ['show me info about task', 'info task', 'task info', 'details about task'],
+        complete_task: ['complete task', 'mark done', 'mark as complete', 'finish task'],
         llm_usage: ['llm usage', 'llm costing', 'llm cost', 'token usage', 'usage stats']
     };
 
@@ -52,25 +54,25 @@ export function ruleBasedNLP(text) {
         isNumberedUpdate = true;
         upNum = completeTaskMatch[1];
         upText = "100% done";
-    } else if (updateTaskMatch && text.toLowerCase().includes('update')) {
-        isNumberedUpdate = true;
-        upNum = updateTaskMatch[1];
-        upText = updateTaskMatch[2];
-    } else if (traditionalMatch) {
-        // If it starts with "N. "
-        const num = traditionalMatch[1];
-        const content = traditionalMatch[2];
-        
-        // If it mentioned ticket/bug/issue, it's a ticket reply
-        if (content.toLowerCase().match(/ticket|bug|issue|concern/)) {
-            bestIntent = 'reply_ticket';
-            bestScore = 1;
-            upNum = num;
-            upText = content;
-        } else {
-            isNumberedUpdate = true;
-            upNum = num;
-            upText = content;
+    } else {
+        const numMatch = updateTaskMatch || traditionalMatch;
+        if (numMatch && !closeTicketMatch && !completeTaskMatch && !justNumberMatch) {
+            const num = numMatch[1];
+            const content = numMatch[2];
+            const lowerContent = content.toLowerCase();
+
+            // Priority Check: Is it a ticket reply?
+            // If it starts with a number and mentions ticket/bug/issue/blocker or user names
+            if (lowerContent.match(/ticket|bug|issue|concern|blocker|asif|kanav/)) {
+                bestIntent = 'reply_ticket';
+                bestScore = 1;
+                upNum = num;
+                upText = content;
+            } else if (text.toLowerCase().includes('update') || traditionalMatch) {
+                isNumberedUpdate = true;
+                upNum = num;
+                upText = content;
+            }
         }
     }
 
@@ -94,6 +96,10 @@ export function ruleBasedNLP(text) {
         for (const [intent, keywords] of Object.entries(intents)) {
             let matches = 0;
             for (const kw of keywords) {
+                if (lowerText === kw) {
+                    matches = 2; // Exact full match
+                    break;
+                }
                 if (lowerText.includes(kw)) {
                     matches += 1;
                 }
@@ -106,10 +112,13 @@ export function ruleBasedNLP(text) {
         }
     }
 
-    // Adjust confidence dynamically based on word matches
-    let confidence = Math.min(bestScore * 0.4 + 0.5, 0.99);
+    // Adjust confidence: Max score 2 (exact) -> 1.0 confidence. Score 1 -> 0.85 confidence.
+    let confidence = 0.5;
+    if (bestScore >= 1) confidence = 0.95;
+    else if (bestScore >= 0.5) confidence = 0.8;
+    else if (bestScore > 0) confidence = 0.65;
 
-    if (confidence < 0.6 || bestScore === 0) {
+    if (bestIntent === 'unknown' || confidence < 0.6) {
         bestIntent = 'unknown';
         confidence = 0.5;
     }

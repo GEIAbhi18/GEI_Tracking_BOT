@@ -37,5 +37,35 @@ export async function replyTicketTool(entities) {
 
     if (replyErr) return "Failed to post reply.";
 
-    return `Reply attached to ticket successfully by ${userName}.`;
+    // Fetch updated ticket history for display
+    const { data: updatedTicket } = await supabase
+        .from('tickets')
+        .select(`
+            id,
+            status,
+            created_at,
+            projects (name),
+            tasks (name),
+            users:created_by (name),
+            ticket_messages (
+                message_text,
+                timestamp,
+                sender:sender_id (name)
+            )
+        `)
+        .eq('id', ticket.id)
+        .single();
+
+    if (!updatedTicket) return `Reply attached to ticket successfully by ${userName}.`;
+
+    const pName = updatedTicket.projects?.name || 'N/A';
+    const tName = updatedTicket.tasks?.name || 'N/A';
+    const uName = updatedTicket.users?.name || 'Unknown';
+    const date = new Date(updatedTicket.created_at);
+    const dateStr = isNaN(date.getTime()) ? 'Recently' : `${date.getDate()} ${date.toLocaleString('default', { month: 'short' })}`;
+
+    const sortedMessages = (updatedTicket.ticket_messages || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    let historyText = sortedMessages.map(m => `   • ${m.sender?.name || 'Unknown'}: ${m.message_text}`).join('\n');
+
+    return `✅ Reply saved to Ticket\n\n**Project: ${pName}**\n   Task: ${tName}\n   By: ${uName} | Date: ${dateStr}\n   --- History ---\n${historyText}`;
 }

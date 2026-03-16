@@ -18,10 +18,13 @@ export default function SimulatorApp() {
   const [currentUser, setCurrentUser] = useState('Asif'); // 'Asif' or 'Kanav'
   const [mobileView, setMobileView] = useState('sidebar'); // 'sidebar' | 'chat'
   const [input, setInput] = useState('');
+  const [selectedFiles, setSelectedFiles] = useState([]); // Base64 strings
   const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile drawer
+  const fileInputRef = useRef(null);
 
   // Shared ticket state for simulation without Supabase
   const [globalTickets, setGlobalTickets] = useState([]);
+  const lastTicketListRef = useRef([]); // last rendered ticket list for numbered replies
 
   // Persistent states per user
   const [userStates, setUserStates] = useState({
@@ -65,6 +68,15 @@ export default function SimulatorApp() {
     endOfMessagesRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, mobileView]);
 
+  // Clear stale server-side conversation state on every page load
+  useEffect(() => {
+    fetch('/api/clear-state', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    }).catch(() => {}); // silent – non-critical
+  }, []);
+
   // Initial bot message on load for each user if empty
   useEffect(() => {
     if (messages.length === 0) {
@@ -84,11 +96,11 @@ export default function SimulatorApp() {
     setMessages(prev => [...prev, { id: Date.now(), sender: 'bot', text, buttons, time: formatTime(new Date()) }]);
   };
 
-  const addUserMessage = (text) => {
-    setMessages(prev => [...prev, { id: Date.now(), sender: 'user', text, time: formatTime(new Date()), status: 'sent' }]);
+  const addUserMessage = (text, attachments = []) => {
+    setMessages(prev => [...prev, { id: Date.now(), sender: 'user', text, attachments, time: formatTime(new Date()), status: 'sent' }]);
     // Simulate read tick after a delay
     setTimeout(() => {
-      setMessages(prev => prev.map(m => m.text === text && m.sender === 'user' ? { ...m, status: 'read' } : m));
+      setMessages(prev => prev.map(m => (m.text === text || (attachments.length > 0 && m.attachments === attachments)) && m.sender === 'user' ? { ...m, status: 'read' } : m));
     }, 1000);
   };
 
@@ -256,6 +268,8 @@ export default function SimulatorApp() {
       }).join('\n\n---\n\n');
       
       addBotMessage(`Open Tickets:\n\n${formatted}\n\n*To reply, type: "number. message" (e.g. "1. Working on it")*\n*To close, type: "close ticket number" (e.g. "close ticket 1")*`);
+      // Store for numbered reply lookup
+      lastTicketListRef.current = ticketsToShow;
     }
   };
 
@@ -339,9 +353,28 @@ export default function SimulatorApp() {
     setMode('normal');
   };
 
+  const handleFileChange = (e) => {
+    const files = Array.from(e.target.files);
+    files.forEach(file => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setSelectedFiles(prev => [...prev, reader.result]);
+      };
+      reader.readAsDataURL(file);
+    });
+    // Reset input value to allow selecting same file again
+    if (e.target) e.target.value = '';
+  };
+
+  const removeFile = (index) => {
+    setSelectedFiles(prev => prev.filter((_, i) => i !== index));
+  };
+
   const sendMessage = async (textOverride = null) => {
     let text = textOverride || input;
-    if (!text.trim()) return;
+    const currentAttachments = [...selectedFiles];
+    
+    if (!text.trim() && currentAttachments.length === 0) return;
 
     if (text === "Download Report") {
       window.location.href = `/api/download-report?userName=${currentUser}`;
@@ -350,7 +383,62 @@ export default function SimulatorApp() {
     }
 
     setInput('');
-    addUserMessage(text);
+    setSelectedFiles([]);
+    addUserMessage(text, currentAttachments);
+
+    // ── Numbered ticket reply: "N. message" ──────────────────────────────
+    const numberedReplyMatch = text.match(/^(\d+)[\.\:]?\s+(.+)/s);
+    if (numberedReplyMatch && lastTicketListRef.current.length > 0) {
+      const ticketIdx = parseInt(numberedReplyMatch[1], 10) - 1;
+      const replyText = numberedReplyMatch[2].trim();
+      const ticket = lastTicketListRef.current[ticketIdx];
+
+      if (ticket) {
+        const senderName = currentUser;
+        const newMsg = { message_text: replyText, sender: { name: senderName }, timestamp: new Date().toISOString() };
+
+        // 1. Persist to Supabase if this is a DB ticket with a real UUID id
+        if (ticket.isDb && ticket.id) {
+          try {
+            const { data: uData } = await supabase.from('users').select('id').ilike('name', senderName).limit(1);
+            const senderId = uData && uData.length ? uData[0].id : null;
+            await supabase.from('ticket_messages').insert([{
+              ticket_id: ticket.id,
+              sender_id: senderId,
+              message_text: replyText
+            }]);
+          } catch (e) { console.error('Ticket reply save failed:', e); }
+        }
+
+        // 2. Update lastTicketListRef with the new message
+        const updatedList = [...lastTicketListRef.current];
+        const updatedTicket = {
+          ...updatedList[ticketIdx],
+          ticket_messages: [...(updatedList[ticketIdx].ticket_messages || []), newMsg]
+        };
+        updatedList[ticketIdx] = updatedTicket;
+        lastTicketListRef.current = updatedList;
+
+        // 3. Also update globalTickets if it is a local ticket
+        setGlobalTickets(prev => prev.map(t =>
+          t.id === ticket.id ? { ...t, ticket_messages: [...(t.ticket_messages || []), newMsg] } : t
+        ));
+
+        // 4. Re-render the updated ticket list
+        const pName = updatedTicket.projects?.name || updatedTicket.project_name || 'N/A';
+        const tName = updatedTicket.tasks?.name || updatedTicket.task_name || 'N/A';
+        const uName = updatedTicket.users?.name || updatedTicket.created_by_name || updatedTicket.created_by || 'Unknown';
+        const date = new Date(updatedTicket.created_at);
+        const dateStr = isNaN(date.getTime()) ? 'Recently' : `${date.getDate()} ${date.toLocaleString('default', { month: 'short' })}`;
+        const sortedMsgs = (updatedTicket.ticket_messages || []).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        let historyText = sortedMsgs.length === 0 ? '   (No messages)\n' : sortedMsgs.map(m => `   • ${m.sender?.name || 'Unknown'}: ${m.message_text}`).join('\n');
+        const ticketDisplay = `${ticketIdx + 1}. **Project: ${pName}**\n   Task: ${tName}\n   By: ${uName} | Date: ${dateStr}\n   --- History ---\n${historyText}`;
+
+        addBotMessage(`✅ Reply saved to Ticket #${ticketIdx + 1}\n\n${ticketDisplay}`);
+        return;
+      }
+    }
+    // ─────────────────────────────────────────────────────────────────────
 
     // Command handling
     if (text === '/start') {
@@ -432,7 +520,8 @@ export default function SimulatorApp() {
         body: JSON.stringify({ 
           message: cleanMessage, 
           userName: currentUser,
-          chatHistory: messages.slice(-5) // Send last 5 messages for context
+          chatHistory: messages.slice(-5), // Send last 5 messages for context
+          attachments: currentAttachments
         })
       });
 
@@ -498,13 +587,21 @@ export default function SimulatorApp() {
     if (currentUser === 'Kanav') {
       addBotMessage('Update request sent to Asif.');
       try {
+        // Fetch the full task list for Asif so the notification is informative
         const res = await fetch('/api/process-message', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ message: "update task", userName: "Asif" })
+          body: JSON.stringify({ message: "show tasks", userName: "Asif" })
         });
         const data = await res.json();
-        
+
+        // Also clear Asif's server state so the notification doesn't get confused
+        await fetch('/api/clear-state', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userName: 'Asif' })
+        });
+
         setUserStates(prev => ({
           ...prev,
           Asif: {
@@ -514,13 +611,14 @@ export default function SimulatorApp() {
               {
                 id: Date.now(),
                 sender: 'bot',
-                text: '🔔 Kanav is asking for your current update',
+                text: '🔔 Kanav is asking for your current update. Here are your tasks:',
                 time: formatTime(new Date())
               },
               {
                 id: Date.now() + 1,
                 sender: 'bot',
                 text: data.reply || "Please provide your task update.",
+                buttons: ['/update_task'],
                 time: formatTime(new Date())
               }
             ]
@@ -535,6 +633,7 @@ export default function SimulatorApp() {
               id: Date.now(),
               sender: 'bot',
               text: '🔔 Kanav is asking for your current update',
+              buttons: ['/update_task'],
               time: formatTime(new Date())
             }]
           }
@@ -713,6 +812,15 @@ export default function SimulatorApp() {
                     showTail && !isUser ? "rounded-bl-sm" : ""
                   )}
                 >
+                  {msg.attachments && msg.attachments.length > 0 && (
+                    <div className="mb-2 flex flex-wrap gap-2">
+                      {msg.attachments.map((url, idx) => (
+                        <div key={idx} className="relative group">
+                          <img src={url} alt="upload" className="max-w-full h-auto rounded-lg shadow-sm border border-slate-200 max-h-64 cursor-zoom-in" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="whitespace-pre-wrap">{msg.text}</div>
 
                   {msg.buttons && msg.buttons.length > 0 && (
@@ -751,10 +859,40 @@ export default function SimulatorApp() {
         </div>
 
         {/* Input Bar */}
-        <div className="bg-white px-2 py-2 flex items-end gap-2 z-20 shrink-0 shadow-[0_-1px_10px_rgba(0,0,0,0.03)] border-t border-slate-200/50 w-full max-w-4xl mx-auto pb-safe md:pb-4 md:px-6 md:rounded-t-2xl">
-          <button className="text-slate-400 hover:text-blue-500 p-2 sm:mb-1 transition-colors shrink-0 outline-none rounded-full focus:bg-slate-100">
-            <Paperclip size={26} strokeWidth={1.5} />
-          </button>
+        <div className="bg-white flex flex-col z-20 shrink-0 shadow-[0_-1px_10px_rgba(0,0,0,0.03)] border-t border-slate-200/50 w-full max-w-4xl mx-auto pb-safe md:pb-4 md:px-6 md:rounded-t-2xl">
+          
+          {/* File Previews */}
+          {selectedFiles.length > 0 && (
+            <div className="px-4 py-3 flex gap-3 overflow-x-auto bg-slate-50/50 border-b border-slate-100">
+              {selectedFiles.map((file, idx) => (
+                <div key={idx} className="relative shrink-0 w-20 h-20 group transition-all transform hover:scale-105">
+                  <img src={file} alt="preview" className="w-full h-full object-cover rounded-xl border-2 border-white shadow-md" />
+                  <button 
+                    onClick={() => removeFile(idx)}
+                    className="absolute -top-2 -right-2 bg-slate-800/90 text-white rounded-full p-1 shadow-lg hover:bg-red-500 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="px-2 py-2 flex items-end gap-2">
+            <button 
+              onClick={() => fileInputRef.current?.click()}
+              className="text-slate-400 hover:text-blue-500 p-2 sm:mb-1 transition-colors shrink-0 outline-none rounded-full focus:bg-slate-100"
+            >
+              <Paperclip size={26} strokeWidth={1.5} />
+            </button>
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              onChange={handleFileChange} 
+              accept="image/*" 
+              multiple 
+              className="hidden" 
+            />
 
           <div className="flex-1 bg-slate-100/80 border border-slate-200/60 relative rounded-2xl flex items-end shadow-inner transition-colors focus-within:bg-white focus-within:border-blue-300">
             <textarea
@@ -780,7 +918,7 @@ export default function SimulatorApp() {
             </button>
           </div>
 
-          {input.trim() ? (
+          {(input.trim() || selectedFiles.length > 0) ? (
             <button
               onClick={() => sendMessage()}
               className="bg-blue-500 hover:bg-blue-600 active:scale-95 text-white w-12 h-12 rounded-full transition-all flex items-center justify-center shrink-0 shadow-md shadow-blue-500/20 mb-[2px] outline-none"
@@ -792,7 +930,8 @@ export default function SimulatorApp() {
               <Mic size={22} strokeWidth={1.5} />
             </button>
           )}
-        </div>
+          </div>{/* end: px-2 py-2 flex items-end */}
+        </div>{/* end: bg-white flex flex-col input bar */}
 
       </div>
 

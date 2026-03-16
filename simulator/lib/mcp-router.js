@@ -12,16 +12,20 @@ import { replyTicketTool } from './tools/reply_ticket';
 import { closeTicketTool } from './tools/close_ticket';
 import { greetingTool } from './tools/greeting';
 import { requestReportTool } from './tools/request_report';
+import { createProjectTool } from './tools/create_project';
 
 export const mcpTools = {
     create_task: createTaskTool,
+    create_project: createProjectTool,
     create_ticket: createTicketTool,
     update_task: updateTaskTool,
     assign_task: assignTaskTool,
     mark_done: markDoneTool,
+    complete_task: markDoneTool,
     list_tasks: getTasksTool,
     add_blocker: addBlockerTool,
     check_blockers: checkBlockersTool,
+    query_blockers: checkBlockersTool,
     task_details: taskDetailsTool,
     upload_deliverable: uploadDeliverableTool,
     view_projects: viewProjectsTool,

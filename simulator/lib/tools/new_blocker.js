@@ -36,29 +36,56 @@ export async function addBlockerTool(entities) {
 }
 
 export async function checkBlockersTool(entities) {
-    const { data: usersData } = await supabase.from('users').select('id, name');
-    if (!usersData || usersData.length === 0) return 'No users found.';
+    const { data: tasks, error } = await supabase
+        .from('tasks')
+        .select('*, projects(name), users(name), updates(blockers)')
+        .order('created_at', { ascending: true });
 
-    let resMsg = `Blocker Status:\n`;
-    
-    for (const u of usersData) {
-        const { data: tasks } = await supabase
-            .from('tasks')
-            .select('name, blocker_reason, project_id, projects(name)')
-            .eq('assigned_to', u.id)
-            .eq('is_blocked', true);
+    if (error) return 'Failed to fetch blockers.';
+
+    // Filter tasks that have at least one reported blocker
+    const tasksWithBlockers = tasks.filter(t => {
+        const hasHistoryBlockers = t.updates && t.updates.some(u => u.blockers && u.blockers.toLowerCase() !== 'none');
+        return (t.blocker_reason && t.blocker_reason.toLowerCase() !== 'none') || hasHistoryBlockers;
+    });
+
+    if (tasksWithBlockers.length === 0) return 'No blockers currently reported by anyone. 🟢';
+
+    const groupedByProject = {};
+    // We want global task numbers based on the full task list
+    const taskToNumber = new Map();
+    tasks.forEach((t, idx) => taskToNumber.set(t.id, idx + 1));
+
+    tasksWithBlockers.forEach(t => {
+        const projectName = t.projects?.name || 'Unassigned Project';
+        if (!groupedByProject[projectName]) groupedByProject[projectName] = [];
+        groupedByProject[projectName].push(t);
+    });
+
+    let resMsg = `🛑 **Project-Wise Blockers:**\n\n`;
+    for (const [project, projectTasks] of Object.entries(groupedByProject)) {
+        resMsg += `**${project}**\n`;
+        projectTasks.forEach(t => {
+            const taskNum = taskToNumber.get(t.id);
+            const blockerReports = (t.updates || [])
+                .filter(u => u.blockers && u.blockers.toLowerCase() !== 'none')
+                .map(u => u.blockers);
             
-        if (tasks && tasks.length > 0) {
-            resMsg += `\n**${u.name}**\n`;
-            for (const t of tasks) {
-                resMsg += `- Task: ${t.name} (Project: ${t.projects?.name || 'Unknown'})\n  Blocker: ${t.blocker_reason}\n`;
+            // Also include current blocker_reason if it's not already in the last history record
+            if (t.blocker_reason && t.blocker_reason.toLowerCase() !== 'none') {
+                // If it's not the same as any report, add it (usually it IS one of them)
+                if (!blockerReports.includes(t.blocker_reason)) {
+                    blockerReports.push(t.blocker_reason);
+                }
             }
-        }
+
+            resMsg += `${taskNum}. **${t.name}** (Assigned to: ${t.users?.name || 'Unknown'})\n`;
+            blockerReports.forEach(b => {
+                resMsg += `  ⚠️ Blocker: ${b}\n`;
+            });
+        });
+        resMsg += `\n`;
     }
-    
-    if (resMsg === `Blocker Status:\n`) {
-        resMsg = `No blockers currently reported by anyone.`;
-    }
-    
-    return resMsg;
+
+    return resMsg.trim();
 }

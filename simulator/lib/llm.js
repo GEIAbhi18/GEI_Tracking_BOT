@@ -21,20 +21,10 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
     for (const provider of sortedProviders) {
         try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // Increased to 10 seconds
 
             const { result, usage } = await provider.fn(message, controller.signal, chatHistory);
             clearTimeout(timeoutId);
-
-            // Log usage
-            logLLMUsageAsync({
-                provider: provider.name,
-                model: provider.model,
-                input_tokens: usage?.input_tokens || 0,
-                output_tokens: usage?.output_tokens || 0,
-                user_message: message,
-                parsed_intent: result?.intent
-            });
 
             if (result && typeof result === 'object' && 'intent' in result) {
                 const rawEntities = result.entities || {};
@@ -74,7 +64,7 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
         }
     }
 
-    return null;
+    return { intent: 'unknown', entities: {}, confidence: 'low' };
 }
 
 const COMMON_PROMPT = `You are a construction project management assistant for GEI.
@@ -94,6 +84,7 @@ ALLOWED INTENTS:
 - close_ticket: For resolving/closing a ticket (e.g. "close ticket 1", "ticket 2 is resolved").
 - assign_task: For assigning a task (e.g. "assign the solar task to Asif").
 - add_blocker: For reporting blockers (e.g. "task is blocked by rain").
+- query_blockers: For showing blockers project-wise (e.g. "show project wise blocker", "what are the blockers?").
 - request_report: For daily summaries/PDFs (e.g. "give me report", "generate pdf").
 - view_projects: For listing projects.
 - view_tickets: For showing open tickets/issues.
@@ -124,7 +115,9 @@ JSON Schema:
     "blocker_name": "string"
   },
   "confidence": "high|low"
-}`;
+}
+
+STRICT RULE: Return ONLY the JSON object. Do NOT include any conversational text, explanations, or code blocks. Your response must be a valid raw JSON string that can be parsed by JSON.parse().`;
 
 async function callOpenAI(message, signal, chatHistory = []) {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -156,13 +149,18 @@ async function callOpenAI(message, signal, chatHistory = []) {
 
     if (!res.ok) throw new Error(`OpenAI error: ${res.statusText}`);
     const data = await res.json();
-    return {
-        result: JSON.parse(data.choices[0].message.content),
-        usage: {
-            input_tokens: data.usage?.prompt_tokens || 0,
-            output_tokens: data.usage?.completion_tokens || 0
-        }
-    };
+    try {
+        return {
+            result: JSON.parse(data.choices[0].message.content),
+            usage: {
+                input_tokens: data.usage?.prompt_tokens || 0,
+                output_tokens: data.usage?.completion_tokens || 0
+            }
+        };
+    } catch (e) {
+        console.error("Failed to parse OpenAI JSON:", data.choices[0].message.content);
+        return { result: { intent: 'unknown' }, usage: { input_tokens: 0, output_tokens: 0 } };
+    }
 }
 
 async function callGemini(message, signal, chatHistory = []) {
@@ -193,13 +191,18 @@ async function callGemini(message, signal, chatHistory = []) {
     if (!res.ok) throw new Error(`Gemini error: ${res.statusText}`);
     const data = await res.json();
     const rawText = data.candidates[0].content.parts[0].text;
-    return {
-        result: JSON.parse(rawText),
-        usage: {
-            input_tokens: data.usageMetadata?.promptTokenCount || 0,
-            output_tokens: data.usageMetadata?.candidatesTokenCount || 0
-        }
-    };
+    try {
+        return {
+            result: JSON.parse(rawText),
+            usage: {
+                input_tokens: data.usageMetadata?.promptTokenCount || 0,
+                output_tokens: data.usageMetadata?.candidatesTokenCount || 0
+            }
+        };
+    } catch (e) {
+        console.error("Failed to parse Gemini JSON:", rawText);
+        return { result: { intent: 'unknown' }, usage: { input_tokens: 0, output_tokens: 0 } };
+    }
 }
 
 async function callHuggingFace(message, signal, chatHistory = []) {
@@ -232,10 +235,15 @@ async function callHuggingFace(message, signal, chatHistory = []) {
         text = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
     }
 
-    return {
-        result: JSON.parse(text),
-        usage: { input_tokens: 0, output_tokens: 0 } // HF Inference API doesn't always provide tokens easily
-    };
+    try {
+        return {
+            result: JSON.parse(text),
+            usage: { input_tokens: 0, output_tokens: 0 }
+        };
+    } catch (e) {
+        console.error("Failed to parse HuggingFace JSON:", text);
+        return { result: { intent: 'unknown' }, usage: { input_tokens: 0, output_tokens: 0 } };
+    }
 }
 
 async function callAnthropic(message, signal, chatHistory = []) {
@@ -275,13 +283,18 @@ async function callAnthropic(message, signal, chatHistory = []) {
         text = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
     }
 
-    return {
-        result: JSON.parse(text),
-        usage: {
-            input_tokens: data.usage?.input_tokens || 0,
-            output_tokens: data.usage?.output_tokens || 0
-        }
-    };
+    try {
+        return {
+            result: JSON.parse(text),
+            usage: {
+                input_tokens: data.usage?.input_tokens || 0,
+                output_tokens: data.usage?.output_tokens || 0
+            }
+        };
+    } catch (e) {
+        console.error("Failed to parse Anthropic JSON:", text);
+        return { result: { intent: 'unknown' }, usage: { input_tokens: 0, output_tokens: 0 } };
+    }
 }
 
 async function callOpenRouter(message, signal, chatHistory = []) {
@@ -321,11 +334,16 @@ async function callOpenRouter(message, signal, chatHistory = []) {
         text = text.substring(text.indexOf("{"), text.lastIndexOf("}") + 1);
     }
 
-    return {
-        result: JSON.parse(text),
-        usage: {
-            input_tokens: data.usage?.prompt_tokens || 0,
-            output_tokens: data.usage?.completion_tokens || 0
-        }
-    };
+    try {
+        return {
+            result: JSON.parse(text),
+            usage: {
+                input_tokens: data.usage?.prompt_tokens || 0,
+                output_tokens: data.usage?.completion_tokens || 0
+            }
+        };
+    } catch (e) {
+        console.error("Failed to parse OpenRouter JSON:", text);
+        return { result: { intent: 'unknown' }, usage: { input_tokens: 0, output_tokens: 0 } };
+    }
 }

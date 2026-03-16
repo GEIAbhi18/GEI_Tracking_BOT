@@ -26,11 +26,18 @@ export async function updateTaskTool(entities) {
 
     let newProgress = task.progress || 0;
     if (perc !== null && !isNaN(perc)) {
+        if (perc === 100) {
+            const hasImages = (entities.attachments && entities.attachments.length > 0) || (task.attachments && task.attachments.length > 0);
+            if (!hasImages) {
+                return `To mark task "${task.name}" (Project: ${task.projects?.name || 'Unknown'}) as 100% complete, please upload an image proof (photo of the work). 📸`;
+            }
+            payload.status = 'completed';
+        } else if (perc > 0 && task.status !== 'completed') {
+            payload.status = 'in_progress';
+        }
         newProgress = perc;
         changed = true;
-        if (perc === 100) payload.status = 'completed';
-        else if (perc > 0 && task.status !== 'completed') payload.status = 'in_progress';
-        resMsg += `\nCompletion updated to ${perc}%`;
+        resMsg = `Task "${task.name}" updated successfully.\nCompletion updated to ${perc}%`;
     }
     
     let rawDeadline = entities.deadline;
@@ -66,6 +73,11 @@ export async function updateTaskTool(entities) {
         payload.progress = newProgress;
     }
 
+    if (entities.attachments && entities.attachments.length > 0) {
+        // Merge or replace attachments
+        payload.attachments = [...(task.attachments || []), ...entities.attachments];
+    }
+
     const { error: updateErr } = await supabase.from('tasks').update(payload).eq('id', task.id);
     if (updateErr) {
         console.error("Task update error:", updateErr);
@@ -80,7 +92,7 @@ export async function updateTaskTool(entities) {
         employee_id: result.userId,
         progress: newProgress,
         blockers: task.blocker_reason || 'none',
-        images: task.attachments || [],
+        images: entities.attachments || [],
         rag: payload.status === 'completed' ? 'GREEN' : 'AMBER'
     }]);
 
@@ -102,12 +114,18 @@ export async function markDoneTool(entities) {
 
     const task = findTaskByEntities(openTasks, entities);
     if (!task) {
-        return `Please select a task by number to mark it complete:\n\n${buildGroupedTasksList(openTasks)}`;
+        return `Please provide the project and task name (or select by number) to mark it complete. Also upload an image proof (photo of the work) to finalize. 📸\n\n${buildGroupedTasksList(openTasks)}`;
+    }
+
+    const hasImages = (entities.attachments && entities.attachments.length > 0) || (task.attachments && task.attachments.length > 0);
+    if (!hasImages) {
+        return `To mark task "${task.name}" (Project: ${task.projects?.name || 'Unknown'}) as 100% complete, please upload an image proof (photo of the work). 📸`;
     }
 
     const payload = {
         status: 'completed',
         progress: 100,
+        attachments: [...(task.attachments || []), ...(entities.attachments || [])]
     };
     if (!task.actual_start_date) payload.actual_start_date = new Date().toISOString();
     if (!task.actual_end_date) payload.actual_end_date = new Date().toISOString();
@@ -120,7 +138,7 @@ export async function markDoneTool(entities) {
         employee_id: result.userId,
         progress: 100,
         blockers: 'none',
-        images: task.attachments || [],
+        images: entities.attachments || [],
         rag: 'GREEN'
     }]);
 

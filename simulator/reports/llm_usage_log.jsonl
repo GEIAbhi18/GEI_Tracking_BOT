@@ -9,3 +9,39 @@
 {"timestamp":"2026-03-16 05:03","provider":"gemini","model":"gemini-flash-latest","input_tokens":960,"output_tokens":109,"total_tokens":1069,"estimated_usd":0.000105,"estimated_inr":0.0087,"user_message":"add blockers to task 1. no material found","intent":"add_blocker"}
 {"timestamp":"2026-03-16 05:03","provider":"gemini","model":"gemini-flash-latest","input_tokens":978,"output_tokens":110,"total_tokens":1088,"estimated_usd":0.000106,"estimated_inr":0.0088,"user_message":"no material found","intent":"add_blocker"}
 {"timestamp":"2026-03-16 05:13","provider":"gemini","model":"gemini-flash-latest","input_tokens":1155,"output_tokens":89,"total_tokens":1244,"estimated_usd":0.000113,"estimated_inr":0.0094,"user_message":"raise ticket","intent":"create_ticket"}
+{"timestamp":"2026-03-16 08:11","provider":"gemini","model":"gemini-flash-latest","input_tokens":809,"output_tokens":99,"total_tokens":908,"estimated_usd":0.00009,"estimated_inr":0.0075,"user_message":"show tasks","intent":"list_tasks"}
+{"timestamp":"2026-03-16 08:11","provider":"gemini","model":"gemini-flash-latest","input_tokens":971,"output_tokens":117,"total_tokens":1088,"estimated_usd":0.000108,"estimated_inr":0.009,"user_message":"add blocker to Task 1. no material found","intent":"add_blocker"}
+{"timestamp":"2026-03-16 08:12","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed","user_message":"task 1."}
+{"timestamp":"2026-03-16 08:12","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","input_tokens":893,"output_tokens":100,"total_tokens":993,"estimated_usd":0.000099,"estimated_inr":0.0082,"user_message":"task 1.","intent":"add_blocker"}
+{"timestamp":"2026-03-16 08:12","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed","user_message":"complete the task"}
+{"timestamp":"2026-03-16 08:12","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","input_tokens":869,"output_tokens":209,"total_tokens":1078,"estimated_usd":0.000108,"estimated_inr":0.0089,"user_message":"complete the task","intent":"update_task"}
+{"timestamp":"2026-03-16 08:13","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed","user_message":"show tasks"}
+{"timestamp":"2026-03-16 08:13","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","error_message":"Unexpected token 'H', \"Here are t\"... is not valid JSON","status":"failed","user_message":"show tasks"}
+{"timestamp":"2026-03-16 08:13","provider":"anthropic","model":"claude-3-sonnet-20240229","error_message":"Anthropic error: Bad Request","status":"failed","user_message":"show tasks"}
+{"timestamp":"2026-03-16 08:13","provider":"openai","model":"gpt-3.5-turbo","error_message":"OpenAI error: Too Many Requests","status":"failed","user_message":"show tasks"}
+{"timestamp":"2026-03-16 08:13","provider":"huggingface","model":"meta-llama/Llama-2-7b-chat-hf","error_message":"HuggingFace error: Gone","status":"failed","user_message":"show tasks"}
+{"timestamp":"2026-03-16 08:13","provider":"gemini","model":"gemini-flash-latest","input_tokens":834,"output_tokens":99,"total_tokens":933,"estimated_usd":0.000092,"estimated_inr":0.0077,"user_message":"show tasks","intent":"list_tasks"}
+{"timestamp":"2026-03-16 08:14","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed","user_message":"show project wise blocker"}
+{"timestamp":"2026-03-16 08:14","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","error_message":"Unexpected token 'H', \"Here are t\"... is not valid JSON","status":"failed","user_message":"show project wise blocker"}
+{"timestamp":"2026-03-16 08:14","provider":"anthropic","model":"claude-3-sonnet-20240229","error_message":"Anthropic error: Bad Request","status":"failed","user_message":"show project wise blocker"}
+{"timestamp":"2026-03-16 08:14","provider":"openai","model":"gpt-3.5-turbo","error_message":"OpenAI error: Too Many Requests","status":"failed","user_message":"show project wise blocker"}
+{"timestamp":"2026-03-16 08:14","provider":"huggingface","model":"meta-llama/Llama-2-7b-chat-hf","error_message":"HuggingFace error: Gone","status":"failed","user_message":"show project wise blocker"}
+{"timestamp":"2026-03-16 08:14","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:14","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","error_message":"Unexpected token 'H', \"Here are t\"... is not valid JSON","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:14","provider":"anthropic","model":"claude-3-sonnet-20240229","error_message":"Anthropic error: Bad Request","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:14","provider":"openai","model":"gpt-3.5-turbo","error_message":"OpenAI error: Too Many Requests","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:14","provider":"huggingface","model":"meta-llama/Llama-2-7b-chat-hf","error_message":"HuggingFace error: Gone","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:14","provider":"gemini","model":"gemini-flash-latest","error_message":"This operation was aborted","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:14","provider":"openrouter","model":"meta-llama/llama-3-8b-instruct","input_tokens":868,"output_tokens":137,"total_tokens":1005,"estimated_usd":0.000101,"estimated_inr":0.0083,"user_message":"show blockers","intent":"view_tickets"}
+{"timestamp":"2026-03-16 08:33","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:33","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"show all blockers"}
+{"timestamp":"2026-03-16 08:36","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"show tasks"}
+{"timestamp":"2026-03-16 08:37","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"show blockers"}
+{"timestamp":"2026-03-16 08:43","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"complete the task"}
+{"timestamp":"2026-03-16 08:49","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"update task"}
+{"timestamp":"2026-03-16 08:50","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"complete the task"}
+{"timestamp":"2026-03-16 08:53","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"Test Task"}
+{"timestamp":"2026-03-16 09:35","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"create project"}
+{"timestamp":"2026-03-16 09:43","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"task completed"}
+{"timestamp":"2026-03-16 09:56","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"update task"}
+{"timestamp":"2026-03-16 10:07","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"message"}
