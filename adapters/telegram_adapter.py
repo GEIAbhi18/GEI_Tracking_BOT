@@ -3,7 +3,7 @@ from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import ContextTypes, MessageHandler, filters
 
 from core.update_engine import process_update_message
-from core.message_parser import parse_message
+from core.llm_parser import parse_with_llm
 from db import get_projects, get_tasks_for_project, get_user_by_telegram_id, create_ticket, get_open_tickets, add_ticket_message
 from config import EMPLOYEE_CHAT_ID
 
@@ -43,7 +43,7 @@ async def test_parse(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /test_parse <message>")
         return
         
-    parsed = parse_message(text)
+    parsed = parse_with_llm(text)
     import json
     await update.message.reply_text(json.dumps(parsed, indent=2))
 

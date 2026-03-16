@@ -38,3 +38,43 @@ Output Tokens: 87
 Total Tokens: 840
 Estimated Cost: ₹0.0069 INR
 ------------------------
+
+---
+Time: 10:33:09
+Model: gemini-flash-latest
+Intent: list_tasks
+Input Tokens: 798
+Output Tokens: 89
+Total Tokens: 887
+Estimated Cost: ₹0.0072 INR
+------------------------
+
+---
+Time: 10:33:33
+Model: gemini-flash-latest
+Intent: add_blocker
+Input Tokens: 960
+Output Tokens: 109
+Total Tokens: 1069
+Estimated Cost: ₹0.0087 INR
+------------------------
+
+---
+Time: 10:33:50
+Model: gemini-flash-latest
+Intent: add_blocker
+Input Tokens: 978
+Output Tokens: 110
+Total Tokens: 1088
+Estimated Cost: ₹0.0088 INR
+------------------------
+
+---
+Time: 10:43:50
+Model: gemini-flash-latest
+Intent: create_ticket
+Input Tokens: 1155
+Output Tokens: 89
+Total Tokens: 1244
+Estimated Cost: ₹0.0094 INR
+------------------------

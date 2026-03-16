@@ -1,80 +1,129 @@
 import logging
-from core.message_parser import parse_message
-from db import get_projects, get_all_tasks, get_user_by_telegram_id, save_update
+import json
+from core.llm_parser import parse_with_llm
+from core.conversation_state import get_state, set_state, clear_state
+from core.context_manager import get_context, update_context
+from core.message_parser import parse_message as rule_based_parse_message
+import core.intent_handlers as handlers
+from db import get_all_tasks, get_projects, get_user_by_telegram_id, create_ticket
 
 logger = logging.getLogger(__name__)
 
+async def handle_message(text: str, user_id: int, images: list, send_reply_func):
+    """
+    Main message handler implementing the audit-compliant architecture:
+    State -> LLM -> Intent Handlers -> Fallback
+    """
+    
+    # Update context with raw message
+    update_context(user_id, message=text)
+    context = get_context(user_id)
+
+    # 1. Check for command mode (bypass LLM/State)
+    if text.startswith('/'):
+        # Handled by telegram_adapter CommandHandlers
+        return
+
+    # 2. Check Conversation State
+    state = get_state(user_id)
+    if state:
+        await continue_conversation(text, user_id, state, images, send_reply_func)
+        return
+
+    # 3. LLM Intent Parser
+    try:
+        parsed = parse_with_llm(text)
+        intent = parsed.get("intent", "unknown")
+    except Exception as e:
+        logger.error(f"LLM parsing failed: {e}")
+        # 4. Fallback to Rule-based Parser
+        rule_parsed = rule_based_parse_message(text)
+        if rule_parsed["confidence"] != "low":
+            parsed = {
+                "intent": "update_task",
+                "task_name": f"{rule_parsed['project']} {rule_parsed['task_keyword']}",
+                "progress": rule_parsed["progress"],
+                "blocker_description": rule_parsed["blocker"]
+            }
+            intent = "update_task"
+        else:
+            intent = "unknown"
+
+    # 5. Intent Router / Handlers
+    if intent == "task_update":
+        await handlers.handle_task_update(parsed, user_id, context, send_reply_func)
+    elif intent == "complete_task":
+        await handlers.handle_complete_task(parsed, user_id, context, send_reply_func)
+    elif intent == "add_blocker":
+        await handlers.handle_add_blocker(parsed, user_id, context, send_reply_func)
+    elif intent == "remove_blocker":
+        await handlers.handle_remove_blocker(parsed, user_id, context, send_reply_func)
+    elif intent == "list_tasks" or intent == "query_tasks":
+        await handlers.handle_query_tasks(parsed, user_id, context, send_reply_func)
+    elif intent == "query_blockers":
+        await handlers.handle_query_blockers(parsed, user_id, context, send_reply_func)
+    elif intent == "help":
+        await handlers.handle_help(parsed, user_id, context, send_reply_func)
+    elif intent == "unknown":
+        # 6. Removal of Hard Reject -> Clarify
+        await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
+    else:
+        # Catch-all for other intents
+        await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
+
+async def continue_conversation(text, user_id, state, images, send_reply_func):
+    """Handles multi-step conversation flows based on stored state."""
+    action = state.get("action")
+    step = state.get("step")
+    context = get_context(user_id)
+
+    if action == "add_blocker":
+        if step == "waiting_for_task":
+            await handlers.handle_add_blocker({"task_name": text}, user_id, context, send_reply_func)
+            # handle_add_blocker will set next state internally if needed
+        elif step == "waiting_for_description":
+            task_query = state.get("task_query")
+            await handlers.perform_add_blocker(task_query, text, user_id, send_reply_func)
+            clear_state(user_id)
+    
+    elif action == "remove_blocker":
+        if step == "waiting_for_task":
+            await handlers.perform_remove_blocker(text, user_id, send_reply_func)
+            clear_state(user_id)
+    
+    elif action == "update_task":
+        if step == "waiting_for_task":
+            set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": text})
+            await send_reply_func(f"What is the progress % for '{text}'?")
+        elif step == "waiting_for_progress":
+            task_query = state.get("task_query")
+            await handlers.perform_update(task_query, text, user_id, send_reply_func)
+            clear_state(user_id)
+    
+    elif action == "complete_task":
+        if step == "waiting_for_task":
+            await handlers.perform_update(text, "100", user_id, send_reply_func)
+            clear_state(user_id)
+
+    elif action == "create_ticket":
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            state["step"] = "waiting_for_description"
+            set_state(user_id, state)
+            await send_reply_func("What is the issue or concern?")
+        elif step == "waiting_for_description":
+            project_query = state.get("project_query")
+            # Logic for creating ticket (can be moved to handlers too)
+            projects = get_projects()
+            match = next((p for p in projects if project_query.lower() in p['name'].lower()), None)
+            u_info = get_user_by_telegram_id(user_id)
+            if match and u_info:
+                create_ticket(u_info['id'], match['id'], message=text)
+                await send_reply_func(f"✅ Ticket raised for project '{match['name']}'.")
+            else:
+                await send_reply_func("Failed to create ticket. Project not found.")
+            clear_state(user_id)
+
+# Legacy support for process_update_message (if still needed by some parts)
 async def process_update_message(text: str, user_id: int, images: list, send_reply_func):
-    parsed = parse_message(text)
-    
-    if parsed["confidence"] == "low":
-        await send_reply_func(
-            "Update samajh nahi aaya.\n"
-            "Please send in format:\n"
-            "Project name + task + % + blocker.\n"
-            "Example:\n"
-            "Top Terrace waterproofing 40% material delay"
-        )
-        return
-
-    # We match it to the DB project and task
-    project_name = parsed["project"]
-    task_keyword = parsed["task_keyword"]
-    
-    # We know confidence is high or medium, so we have task_keyword and progress
-    projects = get_projects()
-    tasks = get_all_tasks()
-    
-    # Resolve project_id if possible
-    project_id = None
-    if project_name:
-        for p in projects:
-            if p['name'].lower() == project_name.lower():
-                project_id = p['id']
-                break
-                
-    task_id = None
-    resolved_task_name = "Unknown Task"
-    resolved_project_name = project_name or "Unknown Project"
-
-    # resolve task ID from keyword and project
-    for t in tasks:
-        # if we know project ID, only search within that project
-        if project_id and t['project_id'] != project_id:
-            continue
-            
-        if task_keyword.lower() in t['name'].lower():
-            task_id = t['id']
-            resolved_task_name = t['name']
-            if not project_id:
-                # auto-resolve project
-                for p in projects:
-                    if p['id'] == t['project_id']:
-                        project_id = p['id']
-                        resolved_project_name = p['name']
-                        break
-            break
-
-    if not task_id:
-        # Fallback if somehow not strictly matched
-        await send_reply_func(
-            "Could not exactly match your task in the database.\n"
-            "Please ensure you mention correct task details."
-        )
-        return
-        
-    u_info = get_user_by_telegram_id(user_id)
-    emp_uuid = u_info['id'] if u_info else None
-    
-    assigned_blocker = parsed["blocker"] or "None"
-        
-    # save update
-    save_update(task_id, parsed["progress"], assigned_blocker, images, emp_uuid)
-
-    await send_reply_func(
-        f"Update saved ✅\n"
-        f"Project: {resolved_project_name}\n"
-        f"Task: {resolved_task_name}\n"
-        f"Progress: {parsed['progress']}%\n"
-        f"Blocker: {assigned_blocker}"
-    )
+    await handle_message(text, user_id, images, send_reply_func)

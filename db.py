@@ -88,3 +88,53 @@ def close_ticket(ticket_id):
 def get_user_by_telegram_id(tid):
     r = supabase.table("users").select("*").eq("telegram_id", tid).execute()
     return r.data[0] if r.data else None
+
+def get_tasks_for_user(user_uuid):
+    response = supabase.table("tasks").select("*, projects(name)").eq("assigned_to", user_uuid).execute()
+    return response.data
+
+def complete_task(task_id):
+    data = {
+        "status": "completed",
+        "progress": 100,
+        "actual_end_date": datetime.now().isoformat()
+    }
+    response = supabase.table("tasks").update(data).eq("id", task_id).execute()
+    return response.data
+
+def add_blocker(task_id, blocker_text):
+    data = {
+        "is_blocked": True,
+        "blocker_reason": blocker_text
+    }
+    response = supabase.table("tasks").update(data).eq("id", task_id).execute()
+    return response.data
+
+def remove_blocker(task_id):
+    data = {
+        "is_blocked": False,
+        "blocker_reason": None
+    }
+    response = supabase.table("tasks").update(data).eq("id", task_id).execute()
+    return response.data
+
+def get_task_blockers(task_id):
+    # Get from tasks table
+    task_res = supabase.table("tasks").select("blocker_reason").eq("id", task_id).execute()
+    # Also could get from updates history
+    update_res = supabase.table("updates").select("blockers").eq("task_id", task_id).neq("blockers", "None").execute()
+    
+    reasons = []
+    if task_res.data and task_res.data[0]['blocker_reason']:
+        reasons.append(task_res.data[0]['blocker_reason'])
+    
+    for u in update_res.data:
+        if u['blockers'] not in reasons:
+            reasons.append(u['blockers'])
+            
+    return reasons
+
+def get_task_by_name(task_name):
+    # Basic partial match
+    response = supabase.table("tasks").select("*, projects(name)").ilike("name", f"%{task_name}%").execute()
+    return response.data

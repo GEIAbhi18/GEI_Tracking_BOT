@@ -57,7 +57,8 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
                         ticket_message: rawEntities.ticket_message || rawEntities.ticket_name || null,
                         ticket_project: rawEntities.project_name || null,
                         project_name: rawEntities.project_name || null,
-                        task_name: rawEntities.task_name || null
+                        task_name: rawEntities.task_name || null,
+                        blocker_name: rawEntities.blocker_name || rawEntities.blocker_description || rawEntities.blocker_reason || null
                     },
                     provider_used: provider.name
                 };
@@ -119,7 +120,8 @@ JSON Schema:
     "task_id": "number",
     "completion_percent": "number",
     "ticket_name": "string",
-    "deadline": "string"
+    "deadline": "string",
+    "blocker_name": "string"
   },
   "confidence": "high|low"
 }`;
