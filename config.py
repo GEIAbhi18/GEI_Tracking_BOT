@@ -13,5 +13,6 @@ TIMEZONE = os.getenv("TIMEZONE", "Asia/Kolkata")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+GROQCLOUD_API_KEY = os.getenv("GROQCLOUD_API_KEY", "")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini") # Default to gemini
 

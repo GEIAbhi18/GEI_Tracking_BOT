@@ -6,6 +6,7 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
     const providers = [
         { name: 'openrouter', fn: callOpenRouter, model: 'meta-llama/llama-3-8b-instruct' },
         { name: 'gemini', fn: callGemini, model: 'gemini-flash-latest' },
+        { name: 'groq', fn: callGroq, model: 'llama3-8b-8192' },
         { name: 'anthropic', fn: callAnthropic, model: 'claude-3-sonnet-20240229' },
         { name: 'openai', fn: callOpenAI, model: 'gpt-3.5-turbo' },
         { name: 'huggingface', fn: callHuggingFace, model: 'meta-llama/Llama-2-7b-chat-hf' }
@@ -27,22 +28,31 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
             clearTimeout(timeoutId);
 
             if (result && typeof result === 'object' && 'intent' in result) {
-                const rawEntities = result.entities || {};
+                // Map new schema keys to internal representation
+                const rawEntities = {
+                    ... (result.entities || {}),
+                    task_name: result.task_reference || result.project_name || (result.entities?.task_name),
+                    project_name: result.project_name || (result.entities?.project_name),
+                    completion_percent: result.progress !== undefined ? result.progress : (result.entities?.completion_percent),
+                    blocker_name: result.blocker_text || (result.entities?.blocker_name),
+                    ticket_id: result.task_reference || (result.entities?.ticket_id),
+                    ticket_name: result.blocker_text || (result.entities?.ticket_name)
+                };
                 
                 // Robust Cleanups
                 const cleanProgress = (rawEntities.completion_percent || "").toString().match(/\d+/)?. [0] || null;
-                const cleanTaskId = (rawEntities.task_id || "").toString().match(/\d+/)?. [0] || null;
+                const cleanTaskId = (rawEntities.task_name || "").toString().match(/\d+/)?. [0] || null;
 
                 return {
                     intent: result.intent,
-                    confidence: result.confidence || "high",
+                    confidence: result.confidence || 0.5,
                     entities: {
                         ...rawEntities,
                         assignee: rawEntities.assignee || null,
                         target_user: rawEntities.assignee || null,
                         task_number: cleanTaskId,
-                        task_id: cleanTaskId ? parseInt(cleanTaskId) : null,
-                        ticket_id: cleanTaskId ? parseInt(cleanTaskId) : null,
+                        task_id: cleanTaskId && !isNaN(cleanTaskId) ? parseInt(cleanTaskId) : null,
+                        ticket_id: cleanTaskId && !isNaN(cleanTaskId) ? parseInt(cleanTaskId) : null,
                         completion_percent: cleanProgress ? parseInt(cleanProgress) : null,
                         ticket_message: rawEntities.ticket_message || rawEntities.ticket_name || null,
                         ticket_project: rawEntities.project_name || null,
@@ -67,57 +77,72 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
     return { intent: 'unknown', entities: {}, confidence: 'low' };
 }
 
-const COMMON_PROMPT = `You are a construction project management assistant for GEI.
-Analyze the user's message and chat conversation history to identify the intent and extract entities into JSON.
+const COMMON_PROMPT = `You are an AI assistant for a construction task management system.
 
-CONTEXT:
-Kanav is the Manager/Director (handles assignment and reports).
-Asif is an Employee (handles progress updates).
+ROLE:
+You classify user messages into intents and extract structured data.
+
+INSTRUCTIONS:
+* Identify the user intent
+* Extract all relevant entities
+* Return structured JSON only
 
 ALLOWED INTENTS:
-- greeting: For simple greetings (e.g. "hi", "hello", "good morning").
-- create_task: For adding new tasks (e.g. "create task for Asif", "add waterproof test").
-- list_tasks: For showing/listing tasks (e.g. "show my tasks", "what is Asif doing?").
-- update_task: For progress updates (e.g. "task 1 is 60% done").
-- create_ticket: For raising issues/concerns (e.g. "raise ticket for Top Terrace", "issue with materials").
-- reply_ticket: For responding to an existing ticket by its number (e.g. "1. I have fixed the leak", "reply to ticket 2: okay", "1. update completed").
-- close_ticket: For resolving/closing a ticket (e.g. "close ticket 1", "ticket 2 is resolved").
-- assign_task: For assigning a task (e.g. "assign the solar task to Asif").
-- add_blocker: For reporting blockers (e.g. "task is blocked by rain").
-- query_blockers: For showing blockers project-wise (e.g. "show project wise blocker", "what are the blockers?").
-- request_report: For daily summaries/PDFs (e.g. "give me report", "generate pdf").
-- view_projects: For listing projects.
-- view_tickets: For showing open tickets/issues.
-- task_details: For seeing full dates/details of a specific task.
-- unknown: Use if intent is unclear.
+* task_update: For progress updates (e.g., "60% done")
+* complete_task: To mark a task as finished
+* add_blocker: To report a new blocker/issue
+* remove_blocker: To resolve an existing blocker
+* query_tasks: To list or find tasks (formerly list_tasks)
+* query_blockers: To see current blockers
+* greeting: For simple greetings (e.g. "hi", "hello")
+* create_task: For adding new tasks
+* create_ticket: For raising issues/concerns
+* reply_ticket: For responding to an existing ticket by number
+* close_ticket: For resolving/closing a ticket
+* assign_task: For assigning a task
+* request_report: For daily summaries/PDFs
+* view_projects: For listing projects
+* view_tickets: For showing open tickets
+* task_details: For full dates/details of a specific task
+* help: For assistance or commands
+* clarify: If the message is ambiguous (formerly unknown)
 
-IMPORTANT:
-- If the user starts a message with a number (like "1. fix confirmed"), check history:
-  - If previous message was a list of tickets, use reply_ticket.
-  - If previous message was tasks, use update_task.
-- ENTITY PERSISTENCE: If an entity (like project_name or task_name) was identified in a previous turn of the same conversation and isn't mentioned again, keep it in the JSON unless the user explicitly changes it or starts a completely new intent.
-- During create_ticket flow:
-  1. Turn 1: "raise ticket" -> {intent: "create_ticket", entities: { ticket_name: null, project_name: null }}
-  2. Turn 2: "New Project" -> {intent: "create_ticket", entities: { ticket_name: null, project_name: "New Project" }}
-  3. Turn 3: "Pipe leak" -> {intent: "create_ticket", entities: { ticket_name: "Pipe leak", project_name: "New Project" }}
+CONSTRAINTS:
+* Output must be valid JSON only
+* Do not include any explanation text
+* If uncertain, return intent = "clarify"
+* Always include a confidence score between 0 and 1
 
-JSON Schema:
+FEW-SHOT EXAMPLES:
+Example 1:
+User: "complete task 2"
+Output: {"intent": "complete_task", "task_reference": "task 2", "confidence": 0.95}
+
+Example 2:
+User: "add blocker no material found"
+Output: {"intent": "add_blocker", "blocker_text": "no material found", "confidence": 0.9}
+
+Example 3:
+User: "show my tasks"
+Output: {"intent": "query_tasks", "confidence": 0.98}
+
+Example 4:
+User: "Top Terrace waterproofing 60%"
+Output: {"intent": "task_update", "project_name": "Top Terrace", "progress": 60, "confidence": 0.92}
+
+OUTPUT FORMAT:
 {
-  "intent": "string",
-  "entities": {
-    "project_name": "string",
-    "task_name": "string",
-    "assignee": "string",
-    "task_id": "number",
-    "completion_percent": "number",
-    "ticket_name": "string",
-    "deadline": "string",
-    "blocker_name": "string"
-  },
-  "confidence": "high|low"
+"intent": "",
+"task_reference": "",
+"project_name": "",
+"progress": null,
+"blocker_text": "",
+"confidence": 0.0
 }
 
-STRICT RULE: Return ONLY the JSON object. Do NOT include any conversational text, explanations, or code blocks. Your response must be a valid raw JSON string that can be parsed by JSON.parse().`;
+IMPORTANT:
+- If the user starts a message with a number (like "1. fix confirmed"), check history to decide if it is a reply or update.
+- Return ONLY the JSON object. Do NOT include any conversational text.`;
 
 async function callOpenAI(message, signal, chatHistory = []) {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -345,5 +370,50 @@ async function callOpenRouter(message, signal, chatHistory = []) {
     } catch (e) {
         console.error("Failed to parse OpenRouter JSON:", text);
         return { result: { intent: 'unknown' }, usage: { input_tokens: 0, output_tokens: 0 } };
+    }
+}
+async function callGroq(message, signal, chatHistory = []) {
+    const apiKey = process.env.GROQCLOUD_API_KEY;
+    if (!apiKey) throw new Error("Missing GROQCLOUD_API_KEY");
+
+    const messages = [
+        { role: "system", content: COMMON_PROMPT },
+        ...chatHistory.slice(-6).map(msg => ({
+            role: msg.sender === 'bot' ? 'assistant' : 'user',
+            content: msg.text
+        })),
+        { role: "user", content: message }
+    ];
+
+    const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({
+            model: "llama3-8b-8192",
+            temperature: 0,
+            messages,
+            response_format: { type: "json_object" }
+        }),
+        signal
+    });
+
+    if (!res.ok) throw new Error(`Groq error: ${res.statusText}`);
+    const data = await res.json();
+    let text = data.choices[0].message.content;
+
+    try {
+        return {
+            result: JSON.parse(text),
+            usage: {
+                input_tokens: data.usage?.prompt_tokens || 0,
+                output_tokens: data.usage?.completion_tokens || 0
+            }
+        };
+    } catch (e) {
+        console.error("Failed to parse Groq JSON:", text);
+        return { result: { intent: 'clarify' }, usage: { input_tokens: 0, output_tokens: 0 } };
     }
 }

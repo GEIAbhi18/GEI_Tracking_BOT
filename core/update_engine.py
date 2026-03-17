@@ -32,22 +32,42 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
 
     # 3. LLM Intent Parser
     try:
-        parsed = parse_with_llm(text)
-        intent = parsed.get("intent", "unknown")
+        # Prepare history for LLM context
+        history = [{"role": "user", "content": m} for m in context.get("messages", [])[:-1]]
+        
+        parsed_obj = parse_with_llm(text, history=history, state=state)
+        intent = parsed_obj.get("intent", "clarify")
+        confidence = parsed_obj.get("confidence", 0)
+
+        # Mapping new schema to existing handler keys
+        parsed = {
+            "intent": intent,
+            "task_name": parsed_obj.get("task_reference") or parsed_obj.get("project_name"),
+            "progress": parsed_obj.get("progress"),
+            "blocker_description": parsed_obj.get("blocker_text"),
+            "confidence": confidence
+        }
+
+        # Step 7: Fallback if confidence is low
+        if confidence < 0.6:
+            raise ValueError("Low confidence")
+
     except Exception as e:
-        logger.error(f"LLM parsing failed: {e}")
-        # 4. Fallback to Rule-based Parser
+        logger.warning(f"LLM parsing failed or low confidence: {e}. Falling back to rule-based parser.")
+        # 4. Fallback to Rule-based Parser (Step 7)
         rule_parsed = rule_based_parse_message(text)
         if rule_parsed["confidence"] != "low":
             parsed = {
-                "intent": "update_task",
-                "task_name": f"{rule_parsed['project']} {rule_parsed['task_keyword']}",
-                "progress": rule_parsed["progress"],
-                "blocker_description": rule_parsed["blocker"]
+                "intent": "task_update", # Default to task_update for rule-based
+                "task_name": f"{rule_parsed.get('project', '')} {rule_parsed.get('task_keyword', '')}".strip(),
+                "progress": rule_parsed.get("progress"),
+                "blocker_description": rule_parsed.get("blocker"),
+                "confidence": 0.8 # Manual boost for valid rule-based match
             }
-            intent = "update_task"
+            intent = "task_update"
         else:
-            intent = "unknown"
+            intent = "clarify"
+            parsed = {"intent": "clarify", "confidence": 0}
 
     # 5. Intent Router / Handlers
     if intent == "task_update":
@@ -64,8 +84,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_query_blockers(parsed, user_id, context, send_reply_func)
     elif intent == "help":
         await handlers.handle_help(parsed, user_id, context, send_reply_func)
-    elif intent == "unknown":
-        # 6. Removal of Hard Reject -> Clarify
+    elif intent == "clarify":
         await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
     else:
         # Catch-all for other intents
