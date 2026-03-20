@@ -9,16 +9,23 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+# --- LOCAL TESTING ID CONFIG ---
+# TEST_USER_ID = 123456789 # Asif Temp ID
+TEST_USER_ID = 987654321 # Kanav Temp ID
+# TEST_USER_ID = update.effective_user.id # Use this for production
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command to welcome the user."""
-    welcome_message = "Welcome to the GEI Tracking Bot! I am ready to help you with task updates, blockers, and queries."
+    from db import get_user_by_telegram_id
+    user_id = TEST_USER_ID
+    u_info = get_user_by_telegram_id(user_id)
+    name = u_info['name'] if u_info else "there"
+    welcome_message = f"Hi {name}, What can I help you with?"
     await update.message.reply_text(welcome_message)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Main message handler acting as an input/output layer for the centralized backend."""
-    user_message = update.message.text or update.message.caption or ""
-    user_id = update.effective_user.id
+    user_message = (update.message.text or update.message.caption or "").lstrip('/')
+    user_id = TEST_USER_ID
     
     # Extract images if a photo was uploaded
     images = []
@@ -28,8 +35,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         images.append(photo_file.file_path)
     
     # Define how the backend should send replies back to this Telegram user
-    async def reply_function(text: str):
-        await update.message.reply_text(text)
+    async def reply_function(text: str = None, document: str = None, target_user_id: int = None):
+        target = target_user_id if target_user_id else update.effective_chat.id
+        if document:
+            with open(document, 'rb') as f:
+                if text:
+                    await context.bot.send_document(chat_id=target, document=f, caption=text)
+                else:
+                    await context.bot.send_document(chat_id=target, document=f)
+        elif text:
+            await context.bot.send_message(chat_id=target, text=text)
         
     try:
         # Call the existing shared backend

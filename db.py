@@ -39,6 +39,7 @@ def save_update(task_id, progress, blockers, images, employee_id=None):
         data["employee_id"] = employee_id
         
     response = supabase.table("updates").insert(data).execute()
+    supabase.table("tasks").update({"progress": progress}).eq("id", task_id).execute()
     return response.data
 
 def get_todays_updates():
@@ -67,6 +68,36 @@ def create_ticket(created_by, project_id, task_id=None, message=""):
         add_ticket_message(ticket_id, created_by, message)
     return ticket_id
 
+def create_project_db(name, created_by=None):
+    from datetime import datetime
+    data = {
+        "name": name,
+        "status": "active",
+        "created_at": datetime.now().isoformat()
+    }
+    if created_by:
+        data["created_by"] = created_by
+    resp = supabase.table("projects").insert(data).execute()
+    return resp.data[0] if resp.data else None
+
+def add_task(project_id, name, deadline=None, assigned_to=None):
+    data = {
+        "project_id": project_id,
+        "name": name,
+        "status": "pending"
+    }
+    if assigned_to:
+        data["assigned_to"] = assigned_to
+    if deadline:
+        data["deadline"] = deadline
+    try:
+        resp = supabase.table("tasks").insert(data).execute()
+        return resp.data[0] if resp.data else None
+    except Exception as e:
+        import logging
+        logging.error(f"Error adding task: {e}")
+        return None
+
 def add_ticket_message(ticket_id, sender_id, message_text, image_url=None):
     data = {
         "ticket_id": ticket_id,
@@ -80,7 +111,12 @@ def add_ticket_message(ticket_id, sender_id, message_text, image_url=None):
 
 def get_open_tickets():
     response = supabase.table("tickets").select("*, projects(name), tasks(name), users!created_by(name)").eq("status", "open").execute()
-    return response.data
+    result = []
+    for t in response.data:
+        msgs = supabase.table("ticket_messages").select("message_text").eq("ticket_id", t["id"]).order("timestamp", desc=False).execute()
+        t["messages"] = [m["message_text"] for m in msgs.data] if msgs.data else []
+        result.append(t)
+    return result
 
 def close_ticket(ticket_id):
     supabase.table("tickets").update({"status": "closed"}).eq("id", ticket_id).execute()

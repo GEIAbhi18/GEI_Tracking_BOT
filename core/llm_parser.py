@@ -117,7 +117,7 @@ def _call_groq(message, system_prompt):
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama3-8b-8192", # Default Groq model
+        "model": "llama-3.1-8b-instant", # Default Groq model
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}

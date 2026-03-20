@@ -2,7 +2,8 @@ import logging
 import json
 from db import (
     get_all_tasks, save_update, create_ticket, get_user_by_telegram_id, 
-    get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers
+    get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers,
+    get_open_tickets
 )
 from core.conversation_state import set_state, clear_state
 from core.context_manager import update_context, get_context
@@ -39,11 +40,10 @@ async def handle_complete_task(entities, user_id, context, send_reply_func):
         task_name = context["recent_task_name"]
 
     if not task_name:
-        tasks = get_all_tasks()
-        open_tasks = [t for t in tasks if t.get('status') != 'completed']
-        tasks_msg = "\n".join([f"- {t['name']} ({t['projects']['name']})" for t in open_tasks])
-        set_state(user_id, {"action": "complete_task", "step": "waiting_for_task"})
-        await send_reply_func(f"Which task did you complete?\n\n{tasks_msg}")
+        set_state(user_id, {"action": "complete_task", "step": "waiting_for_project"})
+        projects = get_projects()
+        p_list = "\n".join([f"- {p['name']}" for p in projects])
+        await send_reply_func(f"Which project is the task in?\n\n{p_list}")
         return
 
     await perform_update(task_name, "100", user_id, send_reply_func)
@@ -91,7 +91,7 @@ async def handle_remove_blocker(entities, user_id, context, send_reply_func):
 
 async def handle_query_tasks(entities, user_id, context, send_reply_func):
     u_info = get_user_by_telegram_id(user_id)
-    if u_info:
+    if u_info and u_info['role'] != 'director':
         tasks = get_tasks_for_user(u_info['id'])
     else:
         tasks = get_all_tasks()
@@ -101,9 +101,10 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         return
         
     msg = "📋 *Task List:*\n"
-    for t in tasks:
+    for idx, t in enumerate(tasks):
         status_icon = "✅" if t.get('status') == 'completed' else "⏳"
-        msg += f"{status_icon} *{t['name']}*\n   Progress: {t.get('progress', 0)}%\n"
+        deadline_str = f" | Deadline: {t.get('deadline')}" if t.get('deadline') else ""
+        msg += f"{idx + 1}. {status_icon} *{t['name']}*\n   Progress: {t.get('progress', 0)}%{deadline_str}\n"
     
     await send_reply_func(msg)
 
@@ -115,10 +116,128 @@ async def handle_query_blockers(entities, user_id, context, send_reply_func):
         await send_reply_func("No blocked tasks found. Everything is on track! 🟢")
         return
         
-    msg = "🛑 *Current Blockers:*\n"
+    from collections import defaultdict
+    blocked_by_proj = defaultdict(list)
     for t in blocked_tasks:
-        msg += f"- *{t['name']}*: {t.get('blocker_reason', 'Unknown reason')}\n"
+        pname = t.get('projects', {}).get('name', 'Unknown Project') if t.get('projects') else "Unknown"
+        blocked_by_proj[pname].append(t)
+        
+    msg = "🛑 *Current Blockers:*\n"
+    for proj, blks in blocked_by_proj.items():
+        msg += f"\n- *{proj}*\n"
+        for t in blks:
+            msg += f"   - *{t['name']}*: blocker: {t.get('blocker_reason', 'Unknown reason')}\n"
     
+    await send_reply_func(msg)
+
+async def handle_view_tickets(entities, user_id, context, send_reply_func):
+    tickets = get_open_tickets()
+    if not tickets:
+        await send_reply_func("No open tickets found.")
+        return
+        
+    msg = "🎫 *Open Tickets:*\n\n"
+    for idx, t in enumerate(tickets):
+        p_name = t['projects']['name'] if t.get('projects') else 'Unknown'
+        t_name = t['tasks']['name'] if t.get('tasks') else 'Unknown'
+        u_name = t['users']['name'] if t.get('users') else 'Unknown'
+        issue_text = "No messages"
+        if t.get("messages"):
+            issue_text = t["messages"][0]
+            
+        msg += f"{idx + 1}. *Project: {p_name}*\n   Task: {t_name}\n   By: {u_name}\n   Issue: {issue_text}\n\n"
+        
+    msg += "*To reply, type:* '1. Working on it'\n*To close type* 'close Ticket 1'"
+    await send_reply_func(msg)
+
+async def handle_reply_ticket(entities, user_id, context, send_reply_func):
+    ticket_index = entities.get("ticket_index")
+    reply_msg = entities.get("message")
+    from db import get_open_tickets, add_ticket_message
+    tickets = get_open_tickets()
+    if ticket_index and 1 <= ticket_index <= len(tickets):
+        target_ticket = tickets[ticket_index - 1]
+        u_info = get_user_by_telegram_id(user_id)
+        if u_info:
+            add_ticket_message(target_ticket['id'], u_info['id'], reply_msg)
+            await send_reply_func(f"✅ Reply added to Ticket {ticket_index}.")
+        else:
+            await send_reply_func("User error.")
+    else:
+        await send_reply_func(f"Ticket {ticket_index} not found.")
+
+async def handle_close_ticket(entities, user_id, context, send_reply_func):
+    ticket_index = entities.get("ticket_index")
+    from db import get_open_tickets, close_ticket
+    tickets = get_open_tickets()
+    if ticket_index and 1 <= ticket_index <= len(tickets):
+        target_ticket = tickets[ticket_index - 1]
+        close_ticket(target_ticket['id'])
+        await send_reply_func(f"✅ Ticket {ticket_index} closed.")
+    else:
+        await send_reply_func(f"Ticket {ticket_index} not found.")
+
+async def handle_request_report(entities, user_id, context, send_reply_func):
+    from fpdf import FPDF
+    from db import get_all_tasks, get_projects
+    projects = get_projects()
+    tasks = get_all_tasks()
+    
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", 'B', 20)
+    pdf.cell(0, 10, txt="Daily Project Report", ln=1, align="C")
+    
+    for p in projects:
+        pdf.ln(10)
+        pdf.set_font("Arial", 'B', 16)
+        pdf.cell(0, 10, txt=f"Project: {p['name']}", ln=1)
+        
+        p_tasks = [t for t in tasks if t['project_id'] == p['id']]
+        red = sum(1 for t in p_tasks if t.get('is_blocked'))
+        green = sum(1 for t in p_tasks if t.get('status') == 'completed')
+        amber = len(p_tasks) - red - green
+        
+        pdf.set_font("Arial", size=12)
+        pdf.cell(0, 8, txt=f"Tasks: {len(p_tasks)} | Red: {red} | Amber: {amber} | Green: {green}", ln=1)
+        
+        for t in p_tasks:
+            pdf.ln(5)
+            pdf.set_font("Arial", 'B', 12)
+            status_txt = f"Task: {t['name']} - Progress: {t.get('progress', 0)}%"
+            pdf.cell(0, 8, txt=status_txt, ln=1)
+            pdf.set_font("Arial", size=10)
+            if t.get('is_blocked'):
+                pdf.cell(0, 6, txt=f"Blocker: {t.get('blocker_reason')}", ln=1)
+            
+    filepath = "/tmp/daily_report.pdf"
+    pdf.output(filepath)
+    await send_reply_func(text="Here is your detailed daily report.", document=filepath)
+
+async def handle_create_ticket(entities, user_id, context, send_reply_func):
+    projects = get_projects()
+    if not projects:
+        await send_reply_func("No projects exist. Create a project first.")
+        return
+    msg = "Which project is this for?\n\n"
+    for p in projects:
+        msg += f"- {p['name']}\n"
+    set_state(user_id, {"action": "create_ticket", "step": "waiting_for_project"})
+    await send_reply_func(msg)
+
+async def handle_create_project(entities, user_id, context, send_reply_func):
+    set_state(user_id, {"action": "create_project", "step": "waiting_for_name"})
+    await send_reply_func("What is the name of the new project?")
+
+async def handle_create_task(entities, user_id, context, send_reply_func):
+    projects = get_projects()
+    if not projects:
+        await send_reply_func("No projects exist. Create a project first.")
+        return
+    msg = "Which project should this task be added to?\n\n"
+    for p in projects:
+        msg += f"- {p['name']}\n"
+    set_state(user_id, {"action": "create_task", "step": "waiting_for_project"})
     await send_reply_func(msg)
 
 async def handle_help(entities, user_id, context, send_reply_func):
@@ -136,6 +255,7 @@ async def handle_help(entities, user_id, context, send_reply_func):
     await send_reply_func(msg)
 
 async def handle_clarify(entities, user_id, context, send_reply_func):
+    set_state(user_id, {"action": "clarify", "step": "waiting_for_choice"})
     msg = (
         "I'm not sure I understood that correctly. Did you want to:\n"
         "1. Update task progress\n"
