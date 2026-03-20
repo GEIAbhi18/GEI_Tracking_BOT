@@ -58,6 +58,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Error processing message for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("Sorry, an error occurred while processing your request.")
 
+async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
+    """Sends the daily PDF report to Kanav at 6 PM."""
+    from core.intent_handlers import generate_pdf_report
+    filepath = generate_pdf_report()
+    target_user_id = 987654321 # Kanav
+    
+    with open(filepath, 'rb') as f:
+        await context.bot.send_document(
+            chat_id=target_user_id, 
+            document=f, 
+            caption="📊 Automated Daily Project Report (6:00 PM)"
+        )
+
 # Initialize the application
 application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
@@ -67,5 +80,14 @@ application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle
 application.add_handler(MessageHandler(filters.PHOTO, handle_message))
 
 if __name__ == '__main__':
+    import datetime
+    import pytz
+    
     logging.info("Starting GEI Telegram Bot in polling mode...")
+    
+    # Schedule the 6 PM daily report for Kanav
+    tz = pytz.timezone('Asia/Kolkata')
+    job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
+    application.job_queue.run_daily(send_daily_report_job, time=job_time)
+    
     application.run_polling()

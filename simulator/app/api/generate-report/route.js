@@ -33,9 +33,9 @@ export async function POST(req) {
 
     const inProgressTasks = totalTasks - completedTasks - blockedTasks;
 
-    let healthStatus = '🟢 Good';
-    if (blockedTasks > 0) healthStatus = '🔴 At Risk (Blocked Tasks)';
-    else if (inProgressTasks > 0) healthStatus = '🟡 In Progress';
+    let healthStatus = 'Good';
+    if (blockedTasks > 0) healthStatus = 'At Risk (Blocked Tasks)';
+    else if (inProgressTasks > 0) healthStatus = 'In Progress';
 
     // Create reports directory if it doesn't exist
     const reportsDir = path.join(process.cwd(), 'reports');
@@ -84,9 +84,9 @@ export async function POST(req) {
           else projAmber++; // pending or in_progress
         });
 
-        let projRag = '🟢 Green';
-        if (projRed > 0) projRag = '🔴 Red';
-        else if (projAmber > 0) projRag = '🟡 Amber';
+        let projRag = 'Green';
+        if (projRed > 0) projRag = 'Red';
+        else if (projAmber > 0) projRag = 'Amber';
 
         checkPageBreak(30);
         doc.setFontSize(16);
@@ -94,7 +94,12 @@ export async function POST(req) {
         doc.text(`Project: ${proj.name}`, margin, y);
         y += 8;
         doc.setFontSize(12);
-        doc.text(`Overall Project RAG: ${projRag}`, margin, y);
+        doc.text(`Overall Project RAG: `, margin, y);
+        if (projRag === 'Red') doc.setTextColor(220, 0, 0);
+        else if (projRag === 'Green') doc.setTextColor(0, 180, 0);
+        else doc.setTextColor(200, 150, 0);
+        doc.text(projRag, margin + 48, y);
+        doc.setTextColor(0, 0, 0);
         y += 10;
 
         if (projTasks.length === 0) {
@@ -110,15 +115,24 @@ export async function POST(req) {
             y += 6;
 
             let tStatus = t.status || 'pending';
-            let tRag = '🟡 Amber';
-            if (t.status === 'completed') tRag = '🟢 Green';
-            if (t.is_blocked) tRag = '🔴 Red';
+            let tRag = 'Amber';
+            if (t.status === 'completed') tRag = 'Green';
+            if (t.is_blocked) tRag = 'Red';
 
             doc.setFontSize(12);
             doc.setFont('helvetica', 'normal');
-            doc.text(`Status: ${tStatus}`, margin + 5, y);
+            
+            const progress = t.progress || 0;
+            const deadline = t.deadline || 'None';
+            doc.text(`Status: ${tStatus} | Progress: ${progress}% | Deadline: ${deadline}`, margin + 5, y);
             y += 6;
-            doc.text(`RAG: ${tRag}`, margin + 5, y);
+            
+            doc.text(`RAG: `, margin + 5, y);
+            if (tRag === 'Red') doc.setTextColor(220, 0, 0);
+            else if (tRag === 'Green') doc.setTextColor(0, 180, 0);
+            else doc.setTextColor(200, 150, 0);
+            doc.text(tRag, margin + 18, y);
+            doc.setTextColor(0, 0, 0);
             y += 6;
 
             const blockerTxt = t.is_blocked ? t.blocker_reason || 'Unknown blocker' : 'None';
@@ -128,7 +142,6 @@ export async function POST(req) {
             if (t.attachments && t.attachments.length > 0) {
               doc.setTextColor(0, 0, 255); // Blue color for links
               doc.textWithLink('View Proof Image', margin + 5, y, { url: t.attachments[0] });
-              // doc.text(`Proof: ${t.attachments[0]}`, margin + 5, y);
               doc.setTextColor(0, 0, 0); // Reset to black
               y += 6;
             }
@@ -143,20 +156,26 @@ export async function POST(req) {
     checkPageBreak(50);
     doc.setFontSize(16);
     doc.setFont('helvetica', 'bold');
-    doc.text('End-of-report summary', margin, y);
+    doc.text('End-of-Report Summary', margin, y);
     y += 10;
 
     doc.setFontSize(12);
     doc.setFont('helvetica', 'normal');
-    doc.text(`Total tasks worked on today: ${totalTasks}`, margin, y);
+    doc.text(`Total Tasks Worked On Today: ${totalTasks}`, margin, y);
     y += 6;
-    doc.text(`Completed tasks: ${completedTasks}`, margin, y);
+    doc.text(`Completed Tasks: ${completedTasks}`, margin, y);
     y += 6;
-    doc.text(`Tasks in progress: ${inProgressTasks}`, margin, y);
+    doc.text(`Tasks In Progress: ${inProgressTasks}`, margin, y);
     y += 6;
-    doc.text(`Blocked tasks: ${blockedTasks}`, margin, y);
+    doc.text(`Blocked Tasks: ${blockedTasks}`, margin, y);
     y += 6;
-    doc.text(`Overall project health status: ${healthStatus}`, margin, y);
+    
+    doc.text(`Overall Project Health Status: `, margin, y);
+    if (healthStatus.includes('At Risk')) doc.setTextColor(220, 0, 0);
+    else if (healthStatus.includes('Good')) doc.setTextColor(0, 180, 0);
+    else doc.setTextColor(200, 150, 0);
+    doc.text(healthStatus, margin + 57, y);
+    doc.setTextColor(0, 0, 0);
 
     const pdfBuffer = Buffer.from(doc.output('arraybuffer'));
     fs.writeFileSync(filePath, pdfBuffer);

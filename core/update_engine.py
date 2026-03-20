@@ -80,6 +80,9 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     elif stripped_lower in ["get report", "/get_report", "request report", "/request_report"]:
         await handlers.handle_request_report({"intent": "request_report"}, user_id, context, send_reply_func)
         return
+    elif stripped_lower in ["hello", "hi", "hey", "greetings", "start", "/start", "help", "/help"]:
+        await handlers.handle_greeting({"intent": "greeting"}, user_id, context, send_reply_func)
+        return
         
     # 3. LLM Intent Parser
     try:
@@ -155,8 +158,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_query_tasks(parsed, user_id, context, send_reply_func)
     elif intent == "query_blockers":
         await handlers.handle_query_blockers(parsed, user_id, context, send_reply_func)
-    elif intent == "help":
-        await handlers.handle_help(parsed, user_id, context, send_reply_func)
+    elif intent == "help" or intent == "greeting":
+        await handlers.handle_greeting(parsed, user_id, context, send_reply_func)
     elif intent == "view_tickets":
         await handlers.handle_view_tickets(parsed, user_id, context, send_reply_func)
     elif intent == "request_report" or intent == "get_report":

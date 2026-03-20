@@ -177,7 +177,7 @@ async def handle_close_ticket(entities, user_id, context, send_reply_func):
     else:
         await send_reply_func(f"Ticket {ticket_index} not found.")
 
-async def handle_request_report(entities, user_id, context, send_reply_func):
+def generate_pdf_report():
     from fpdf import FPDF
     from db import get_all_tasks, get_projects
     projects = get_projects()
@@ -193,7 +193,7 @@ async def handle_request_report(entities, user_id, context, send_reply_func):
         pdf.set_font("Arial", 'B', 16)
         pdf.cell(0, 10, txt=f"Project: {p['name']}", ln=1)
         
-        p_tasks = [t for t in tasks if t['project_id'] == p['id']]
+        p_tasks = [t for t in tasks if t.get('project_id') == p['id']]
         red = sum(1 for t in p_tasks if t.get('is_blocked'))
         green = sum(1 for t in p_tasks if t.get('status') == 'completed')
         amber = len(p_tasks) - red - green
@@ -204,14 +204,45 @@ async def handle_request_report(entities, user_id, context, send_reply_func):
         for t in p_tasks:
             pdf.ln(5)
             pdf.set_font("Arial", 'B', 12)
-            status_txt = f"Task: {t['name']} - Progress: {t.get('progress', 0)}%"
-            pdf.cell(0, 8, txt=status_txt, ln=1)
+            pdf.cell(0, 8, txt=f"Task: {t['name']}", ln=1)
             pdf.set_font("Arial", size=10)
-            if t.get('is_blocked'):
-                pdf.cell(0, 6, txt=f"Blocker: {t.get('blocker_reason')}", ln=1)
+            
+            t_status = t.get('status', 'pending')
+            progress = t.get('progress', 0)
+            deadline = t.get('deadline') or 'None'
+            pdf.cell(0, 6, txt=f"Status: {t_status} | Progress: {progress}% | Deadline: {deadline}", ln=1)
+            
+            t_rag = "amber"
+            if t_status == 'completed': t_rag = "green"
+            if t.get('is_blocked'): t_rag = "red"
+            
+            pdf.cell(12, 6, txt="RAG: ")
+            if t_rag == "red":
+                pdf.set_text_color(220, 0, 0)
+                pdf.cell(0, 6, txt="Red", ln=1)
+            elif t_rag == "green":
+                pdf.set_text_color(0, 180, 0)
+                pdf.cell(0, 6, txt="Green", ln=1)
+            else:
+                pdf.set_text_color(200, 150, 0)
+                pdf.cell(0, 6, txt="Amber", ln=1)
+            pdf.set_text_color(0, 0, 0) # reset black
+            
+            blocker = t.get('blocker_reason') if t.get('is_blocked') else "None"
+            pdf.cell(0, 6, txt=f"Blocker: {blocker}", ln=1)
+            
+            atts = t.get('attachments')
+            if atts and isinstance(atts, list) and len(atts) > 0:
+                pdf.set_text_color(0, 0, 255)
+                pdf.cell(0, 6, txt="View Proof Image", link=atts[0], ln=1)
+                pdf.set_text_color(0, 0, 0)
             
     filepath = "/tmp/daily_report.pdf"
     pdf.output(filepath)
+    return filepath
+
+async def handle_request_report(entities, user_id, context, send_reply_func):
+    filepath = generate_pdf_report()
     await send_reply_func(text="Here is your detailed daily report.", document=filepath)
 
 async def handle_create_ticket(entities, user_id, context, send_reply_func):
@@ -254,6 +285,19 @@ async def handle_help(entities, user_id, context, send_reply_func):
     )
     await send_reply_func(msg)
 
+async def handle_greeting(entities, user_id, context, send_reply_func):
+    u_info = get_user_by_telegram_id(user_id)
+    name = u_info['name'] if u_info else "there"
+    role = u_info['role'] if u_info else "normal"
+    
+    msg = f"Hi {name}, What can I help you with?\n\n🤖 Available Commands:\n"
+    if role == 'director':
+        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /view_tickets\n• /help"
+    else:
+        msg += "• /update_task\n• /raise_ticket\n• /view_tickets\n• /create_task\n• /create_project\n• /help"
+    
+    await send_reply_func(msg)
+
 async def handle_clarify(entities, user_id, context, send_reply_func):
     set_state(user_id, {"action": "clarify", "step": "waiting_for_choice"})
     msg = (
@@ -261,7 +305,11 @@ async def handle_clarify(entities, user_id, context, send_reply_func):
         "1. Update task progress\n"
         "2. Add a blocker\n"
         "3. Complete a task\n"
-        "4. Show your tasks\n\n"
+        "4. Raise a ticket\n"
+        "5. View all tickets\n"
+        "6. Show All Blockers Project wise\n"
+        "7. Create Project or Task\n"
+        "8. Show your tasks\n\n"
         "Please specify your request."
     )
     await send_reply_func(msg)
