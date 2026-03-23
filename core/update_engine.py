@@ -128,6 +128,9 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         elif "project" in text.lower() and "create" in text.lower():
             intent = "create_project"
             parsed = {"intent": "create_project", "confidence": 0.8}
+        elif "project" in text.lower() and ("show" in text.lower() or "view" in text.lower() or "list" in text.lower()):
+            intent = "view_projects"
+            parsed = {"intent": "view_projects", "confidence": 0.8}
         elif "task" in text.lower() and "create" in text.lower():
             intent = "create_task"
             parsed = {"intent": "create_task", "confidence": 0.8}
@@ -163,6 +166,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_greeting(parsed, user_id, context, send_reply_func)
     elif intent == "view_tickets":
         await handlers.handle_view_tickets(parsed, user_id, context, send_reply_func)
+    elif intent == "view_projects":
+        await handlers.handle_view_projects(parsed, user_id, context, send_reply_func)
     elif intent == "request_report" or intent == "get_report":
         await handlers.handle_request_report(parsed, user_id, context, send_reply_func)
     elif intent == "create_project":
@@ -184,9 +189,43 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
     context = get_context(user_id)
 
     if action == "add_blocker":
-        if step == "waiting_for_task":
-            await handlers.handle_add_blocker({"task_name": text}, user_id, context, send_reply_func)
-            # handle_add_blocker will set next state internally if needed
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
+            projects = get_projects()
+            match = None
+            pq = text.strip()
+            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
+                match = projects[int(pq) - 1]
+            else:
+                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+                
+            tasks = get_all_tasks()
+            if match:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and t['projects']['id'] == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
+                
+            if not p_tasks:
+                await send_reply_func("No pending tasks found for this project.")
+                clear_state(user_id)
+                return
+                
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Which task is blocked? (Type the number)\n\n{tasks_msg}")
+        elif step == "waiting_for_task":
+            t_map = state.get("_task_map", [])
+            tq = text.strip()
+            if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
+                tq = t_map[int(tq) - 1]
+            state["task_query"] = tq
+            state["step"] = "waiting_for_description"
+            set_state(user_id, state)
+            await send_reply_func(f"What is the issue holding up '{tq}'?")
         elif step == "waiting_for_description":
             task_query = state.get("task_query")
             await handlers.perform_add_blocker(task_query, text, user_id, send_reply_func)
@@ -198,9 +237,43 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             clear_state(user_id)
     
     elif action == "update_task":
-        if step == "waiting_for_task":
-            set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": text})
-            await send_reply_func(f"What is the progress % for '{text}'?")
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
+            projects = get_projects()
+            match = None
+            pq = text.strip()
+            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
+                match = projects[int(pq) - 1]
+            else:
+                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+                
+            tasks = get_all_tasks()
+            if match:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and t['projects']['id'] == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
+                
+            if not p_tasks:
+                await send_reply_func("No pending tasks found for this project.")
+                clear_state(user_id)
+                return
+                
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Which task do you want to update? (Type the number)\n\n{tasks_msg}")
+        elif step == "waiting_for_task":
+            t_map = state.get("_task_map", [])
+            tq = text.strip()
+            if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
+                tq = t_map[int(tq) - 1]
+            state["task_query"] = tq
+            state["step"] = "waiting_for_progress"
+            set_state(user_id, state)
+            await send_reply_func(f"What is the progress % for '{tq}'?")
         elif step == "waiting_for_progress":
             task_query = state.get("task_query")
             await handlers.perform_update(task_query, text, user_id, send_reply_func)

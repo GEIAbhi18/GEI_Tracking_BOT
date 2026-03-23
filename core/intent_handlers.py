@@ -14,16 +14,14 @@ async def handle_task_update(entities, user_id, context, send_reply_func):
     task_name = entities.get("task_name")
     progress = entities.get("progress")
     
-    # Try to resolve from context if missing
     if not task_name and context.get("recent_task_name"):
         task_name = context["recent_task_name"]
 
     if not task_name:
-        tasks = get_all_tasks()
-        open_tasks = [t for t in tasks if t.get('status') != 'completed']
-        tasks_msg = "\n".join([f"- {t['name']} ({t['projects']['name']})" for t in open_tasks])
-        set_state(user_id, {"action": "update_task", "step": "waiting_for_task"})
-        await send_reply_func(f"Which task do you want to update?\n\n{tasks_msg}")
+        set_state(user_id, {"action": "update_task", "step": "waiting_for_project"})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
     
     if not progress:
@@ -42,8 +40,8 @@ async def handle_complete_task(entities, user_id, context, send_reply_func):
     if not task_name:
         set_state(user_id, {"action": "complete_task", "step": "waiting_for_project"})
         projects = get_projects()
-        p_list = "\n".join([f"- {p['name']}" for p in projects])
-        await send_reply_func(f"Which project is the task in?\n\n{p_list}")
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
 
     await perform_update(task_name, "100", user_id, send_reply_func)
@@ -56,11 +54,10 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func):
         task_name = context["recent_task_name"]
 
     if not task_name:
-        tasks = get_all_tasks()
-        open_tasks = [t for t in tasks if t.get('status') != 'completed']
-        tasks_msg = "\n".join([f"- {t['name']} ({t['projects']['name']})" for t in open_tasks])
-        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_task"})
-        await send_reply_func(f"Which task is blocked?\n\n{tasks_msg}")
+        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_project"})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
     
     if not blocker_text:
@@ -215,7 +212,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
     filters = entities.get("query_filters") or {}
     
     # Same logic as JS: check if all tasks were requested
-    raw_message = str(context.get("messages", [])[-1].get("content", "")).lower() if context.get("messages") else ""
+    raw_message = str(context.get("messages", [])[-1]).lower() if context.get("messages") else ""
     explicit_assignee = str(filters.get("assignee") or entities.get("assignee", "")).lower()
     is_all = "all tasks" in raw_message or "all task" in raw_message or explicit_assignee == "all"
     
@@ -442,6 +439,16 @@ async def handle_help(entities, user_id, context, send_reply_func):
         "Or use commands:\n"
         "/list_tasks, /view_projects, /raise_ticket"
     )
+    await send_reply_func(msg)
+
+async def handle_view_projects(entities, user_id, context, send_reply_func):
+    projects = get_projects()
+    if not projects:
+        await send_reply_func("No projects exist yet.")
+        return
+    msg = "**All Projects**\n\n"
+    for i, p in enumerate(projects, 1):
+        msg += f"{i}. {p['name']}\n"
     await send_reply_func(msg)
 
 async def handle_greeting(entities, user_id, context, send_reply_func):

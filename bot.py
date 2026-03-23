@@ -36,14 +36,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Define how the backend should send replies back to this Telegram user
     async def reply_function(text: str = None, document: str = None, target_user_id: int = None):
         target = target_user_id if target_user_id else update.effective_chat.id
+        
+        # Safe HTML escaping for Telegram
+        if text:
+            import html, re
+            text_html = html.escape(text)
+            text_html = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text_html)
+            text_html = re.sub(r'\*(.+?)\*', r'<b>\1</b>', text_html)
+        
         if document:
             with open(document, 'rb') as f:
                 if text:
-                    await context.bot.send_document(chat_id=target, document=f, caption=text)
+                    await context.bot.send_document(chat_id=target, document=f, caption=text_html, parse_mode='HTML')
                 else:
                     await context.bot.send_document(chat_id=target, document=f)
         elif text:
-            await context.bot.send_message(chat_id=target, text=text)
+            await context.bot.send_message(chat_id=target, text=text_html, parse_mode='HTML')
         
     try:
         # Call the existing shared backend
@@ -60,8 +68,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
     """Sends the daily PDF report to Kanav at 6 PM."""
     from core.intent_handlers import generate_pdf_report
+    from db import supabase
+    
+    # Get Kanav's true telegram_id dynamically
+    try:
+        response = supabase.table("users").select("telegram_id").eq("name", "Kanav").execute()
+        if not response.data or not response.data[0].get("telegram_id"):
+            logging.error("Could not find Kanav's telegram_id in DB for 6PM job.")
+            return
+        target_user_id = response.data[0]["telegram_id"]
+    except Exception as e:
+        logging.error(f"Error fetching Kanav's telegram_id: {e}")
+        return
+
     filepath = generate_pdf_report()
-    target_user_id = 987654321 # Kanav
     
     with open(filepath, 'rb') as f:
         await context.bot.send_document(
@@ -89,4 +109,4 @@ if __name__ == '__main__':
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
     
-    application.run_polling()
+    application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
