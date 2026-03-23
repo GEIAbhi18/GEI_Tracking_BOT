@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def get_projects():
-    response = supabase.table("projects").select("*").execute()
+    response = supabase.table("projects").select("*").order("created_at").execute()
     return response.data
 
 def get_tasks_for_project(project_id):

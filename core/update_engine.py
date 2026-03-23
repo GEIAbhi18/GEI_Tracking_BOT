@@ -211,16 +211,38 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             state["project_query"] = text
             state["step"] = "waiting_for_task"
             set_state(user_id, state)
+            
+            projects = get_projects()
+            match = None
+            pq = text.strip()
+            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
+                match = projects[int(pq) - 1]
+            else:
+                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+                
             tasks = get_all_tasks()
-            p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
+            if match:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and t['projects']['id'] == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
+                
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
                 clear_state(user_id)
                 return
-            tasks_msg = "\n".join([f"- {t['name']}" for t in p_tasks])
-            await send_reply_func(f"Which task should I complete in \"{text}\"?\n\n{tasks_msg}")
+                
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            # Save task list natively into state for index matching next turn
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Which task should I complete? (You can type the number)\n\n{tasks_msg}")
+            
         elif step == "waiting_for_task":
-            await handlers.perform_update(text, "100", user_id, send_reply_func)
+            t_map = state.get("_task_map", [])
+            tq = text.strip()
+            if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
+                tq = t_map[int(tq) - 1]
+            await handlers.perform_update(tq, "100", user_id, send_reply_func)
             clear_state(user_id)
 
     elif action == "create_ticket":
@@ -230,10 +252,14 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             await send_reply_func("What is the issue or concern?")
         elif step == "waiting_for_description":
-            project_query = state.get("project_query")
-            # Logic for creating ticket (can be moved to handlers too)
+            project_query = state.get("project_query", "")
+            pq = project_query.strip()
             projects = get_projects()
-            match = next((p for p in projects if project_query.lower() in p['name'].lower()), None)
+            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
+                match = projects[int(pq) - 1]
+            else:
+                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+                
             u_info = get_user_by_telegram_id(user_id)
             if match and u_info:
                 create_ticket(u_info['id'], match['id'], message=text)
@@ -263,11 +289,16 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             await send_reply_func("What is the deadline for this task? (e.g. YYYY-MM-DD or tomorrow)")
         elif step == "waiting_for_deadline":
-            project_query = state.get("project_query")
+            project_query = state.get("project_query", "")
             task_name = state.get("task_name")
             deadline = text
+            pq = project_query.strip()
             projects = get_projects()
-            match = next((p for p in projects if project_query.lower() in p['name'].lower()), None)
+            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
+                match = projects[int(pq) - 1]
+            else:
+                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+                
             if match:
                 from db import add_task
                 add_task(match['id'], task_name, deadline)

@@ -35,16 +35,26 @@ export async function POST(req) {
         // 1. Conversation State Manager (HIGHEST PRIORITY)
         const state = getState(userName);
         if (state) {
+            let pText = rawText;
+            if (rawText.match(/^\d+$/)) {
+                const idx = parseInt(rawText, 10) - 1;
+                if (state._proj_map && idx >= 0 && idx < state._proj_map.length) {
+                    pText = state._proj_map[idx];
+                } else if (state._task_map && idx >= 0 && idx < state._task_map.length) {
+                    pText = state._task_map[idx];
+                }
+            }
+            
             if (state.action === 'add_blocker') {
                 if (state.step === 'waiting_for_task') {
-                    state.task_query = rawText;
+                    state.task_query = pText;
                     state.step = 'waiting_for_description';
                     setState(userName, state);
                     return NextResponse.json({ reply: "What is the issue holding this task?" });
                 } else if (state.step === 'waiting_for_description') {
                     const intent = {
                         intent: 'add_blocker',
-                        entities: { task_name: state.task_query, blocker_name: rawText, assignee: userName, attachments }
+                        entities: { task_name: state.task_query, blocker_name: pText, assignee: userName, attachments }
                     };
                     clearState(userName);
                     const response = await routeToTool(intent);
@@ -55,14 +65,14 @@ export async function POST(req) {
                 }
             } else if (state.action === 'update_task') {
                 if (state.step === 'waiting_for_task') {
-                    state.task_query = rawText;
+                    state.task_query = pText;
                     state.step = 'waiting_for_progress';
                     setState(userName, state);
                     return NextResponse.json({ reply: "What is the progress %?" });
                 } else if (state.step === 'waiting_for_progress') {
                     const intent = {
                         intent: 'update_task',
-                        entities: { task_name: state.task_query, completion_percent: rawText, assignee: userName, attachments }
+                        entities: { task_name: state.task_query, completion_percent: pText, assignee: userName, attachments }
                     };
                     clearState(userName);
                     const response = await routeToTool(intent);
@@ -73,34 +83,36 @@ export async function POST(req) {
                 }
             } else if (state.action === 'complete_task') {
                 if (state.step === 'waiting_for_project') {
-                    state.project_query = rawText;
+                    state.project_query = pText;
                     state.step = 'waiting_for_task';
                     setState(userName, state);
-                    const { data: tasks } = await supabase.from('tasks').select('name, projects(name)').ilike('projects.name', `%${rawText}%`).neq('status', 'completed');
-                    const taskList = tasks && tasks.length > 0 ? tasks.map(t => `- ${t.name}`).join('\n') : "No pending tasks found for this project.";
-                    return NextResponse.json({ reply: `Which task should I complete in "${rawText}"?\n\n${taskList}` });
+                    const { data: tasks } = await supabase.from('tasks').select('name, projects(name)').ilike('projects.name', `%${pText}%`).neq('status', 'completed');
+                    const taskList = tasks && tasks.length > 0 ? tasks.map((t, i) => `${i + 1}. ${t.name}`).join('\n') : "No pending tasks found for this project.";
+                    state._task_map = tasks ? tasks.map(t => t.name) : [];
+                    setState(userName, state);
+                    return NextResponse.json({ reply: `Which task should I complete in "${pText}"? (Type the number)\n\n${taskList}` });
                 } else if (state.step === 'waiting_for_task') {
                     const intent = {
                         intent: 'complete_task',
-                        entities: { project_name: state.project_query, task_name: rawText, assignee: userName, attachments }
+                        entities: { project_name: state.project_query, task_name: pText, assignee: userName, attachments }
                     };
                     clearState(userName);
                     const response = await routeToTool(intent);
                     if (typeof response === 'string' && response.includes("please upload an image proof")) {
-                        setState(userName, { action: 'upload_proof', task_query: rawText, project_query: state.project_query });
+                        setState(userName, { action: 'upload_proof', task_query: pText, project_query: state.project_query });
                     }
                     return NextResponse.json({ reply: response, nlpData: intent });
                 }
             } else if (state.action === 'create_task') {
                 if (state.step === 'waiting_for_project') {
-                    state.project_query = rawText;
+                    state.project_query = pText;
                     state.step = 'waiting_for_task_name';
                     setState(userName, state);
                     return NextResponse.json({ reply: "What is the name of the new task?" });
                 } else if (state.step === 'waiting_for_task_name') {
                     const intent = {
                         intent: 'create_task',
-                        entities: { project_name: state.project_query, task_name: rawText, assignee: userName }
+                        entities: { project_name: state.project_query, task_name: pText, assignee: userName }
                     };
                     clearState(userName);
                     const response = await routeToTool(intent);
@@ -110,7 +122,7 @@ export async function POST(req) {
                 if (state.step === 'waiting_for_name') {
                     const intent = {
                         intent: 'create_project',
-                        entities: { raw_message: `Project: ${rawText}`, target_user: userName }
+                        entities: { raw_message: `Project: ${pText}`, target_user: userName }
                     };
                     clearState(userName);
                     const response = await routeToTool(intent);
@@ -130,14 +142,14 @@ export async function POST(req) {
                 }
             } else if (state.action === 'create_ticket') {
                 if (state.step === 'waiting_for_project') {
-                    state.project_query = rawText;
+                    state.project_query = pText;
                     state.step = 'waiting_for_description';
                     setState(userName, state);
                     return NextResponse.json({ reply: "What is the issue or concern?" });
                 } else if (state.step === 'waiting_for_description') {
                     const intent = {
                         intent: 'create_ticket',
-                        entities: { project_name: state.project_query, ticket_name: rawText, assignee: userName }
+                        entities: { project_name: state.project_query, ticket_name: pText, assignee: userName }
                     };
                     clearState(userName);
                     const response = await routeToTool(intent);
@@ -226,9 +238,9 @@ export async function POST(req) {
             if (finalIntent.intent === 'add_blocker') {
                 if (!finalIntent.entities.task_name && !finalIntent.entities.task_id) {
                     const { data: tasks } = await supabase.from('tasks').select('name, projects(name)').neq('status', 'completed');
-                    const taskList = tasks.map(t => `- ${t.name} (${t.projects?.name})`).join('\n');
-                    setState(userName, { action: 'add_blocker', step: 'waiting_for_task' });
-                    return NextResponse.json({ reply: `Which task is blocked?\n\n${taskList}`, nlpData: finalIntent });
+                    const taskList = tasks.map((t, idx) => `${idx + 1}. ${t.name} (${t.projects?.name})`).join('\n');
+                    setState(userName, { action: 'add_blocker', step: 'waiting_for_task', _task_map: tasks.map(t => t.name) });
+                    return NextResponse.json({ reply: `Which task is blocked? (Type the number)\n\n${taskList}`, nlpData: finalIntent });
                 }
                 if (!finalIntent.entities.blocker_name) {
                     setState(userName, { action: 'add_blocker', step: 'waiting_for_description', task_query: finalIntent.entities.task_name });
@@ -237,16 +249,16 @@ export async function POST(req) {
             } else if (finalIntent.intent === 'update_task') {
                 if (!finalIntent.entities.task_name && !finalIntent.entities.task_id) {
                     const { data: tasks } = await supabase.from('tasks').select('name, projects(name)').neq('status', 'completed');
-                    const taskList = tasks.map(t => `- ${t.name} (${t.projects?.name})`).join('\n');
-                    setState(userName, { action: 'update_task', step: 'waiting_for_task' });
-                    return NextResponse.json({ reply: `Which task do you want to update?\n\n${taskList}`, nlpData: finalIntent });
+                    const taskList = tasks.map((t, idx) => `${idx + 1}. ${t.name} (${t.projects?.name})`).join('\n');
+                    setState(userName, { action: 'update_task', step: 'waiting_for_task', _task_map: tasks.map(t => t.name) });
+                    return NextResponse.json({ reply: `Which task do you want to update? (Type the number)\n\n${taskList}`, nlpData: finalIntent });
                 }
             } else if (finalIntent.intent === 'create_task') {
                 if (!finalIntent.entities.project_name) {
-                    const { data: projects } = await supabase.from('projects').select('name');
-                    const projectList = projects.map(p => `- ${p.name}`).join('\n');
-                    setState(userName, { action: 'create_task', step: 'waiting_for_project' });
-                    return NextResponse.json({ reply: `Which project should this task be added to?\n\n${projectList}`, nlpData: finalIntent });
+                    const { data: projects } = await supabase.from('projects').select('name').order('created_at');
+                    const projectList = projects.map((p, idx) => `${idx + 1}. ${p.name}`).join('\n');
+                    setState(userName, { action: 'create_task', step: 'waiting_for_project', _proj_map: projects.map(p => p.name) });
+                    return NextResponse.json({ reply: `Which project should this task be added to? (Type the number)\n\n${projectList}`, nlpData: finalIntent });
                 }
                 if (!finalIntent.entities.task_name) {
                     setState(userName, { action: 'create_task', step: 'waiting_for_task_name', project_query: finalIntent.entities.project_name });

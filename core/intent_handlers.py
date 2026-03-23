@@ -409,9 +409,9 @@ async def handle_create_ticket(entities, user_id, context, send_reply_func):
     if not projects:
         await send_reply_func("No projects exist. Create a project first.")
         return
-    msg = "Which project is this for?\n\n"
-    for p in projects:
-        msg += f"- {p['name']}\n"
+    msg = "Which project is this for? (You can type the number)\n\n"
+    for i, p in enumerate(projects, 1):
+        msg += f"{i}. {p['name']}\n"
     set_state(user_id, {"action": "create_ticket", "step": "waiting_for_project"})
     await send_reply_func(msg)
 
@@ -424,9 +424,9 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
     if not projects:
         await send_reply_func("No projects exist. Create a project first.")
         return
-    msg = "Which project should this task be added to?\n\n"
-    for p in projects:
-        msg += f"- {p['name']}\n"
+    msg = "Which project should this task be added to? (You can type the number)\n\n"
+    for i, p in enumerate(projects, 1):
+        msg += f"{i}. {p['name']}\n"
     set_state(user_id, {"action": "create_task", "step": "waiting_for_project"})
     await send_reply_func(msg)
 
