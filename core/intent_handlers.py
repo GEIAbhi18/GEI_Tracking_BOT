@@ -214,7 +214,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
     # Same logic as JS: check if all tasks were requested
     raw_message = str(context.get("messages", [])[-1]).lower() if context.get("messages") else ""
     explicit_assignee = str(filters.get("assignee") or entities.get("assignee", "")).lower()
-    is_all = "all tasks" in raw_message or "all task" in raw_message or explicit_assignee == "all"
+    is_all = any(x in raw_message for x in ["all tasks", "all task", "view all", "list all", "show all"]) or explicit_assignee == "all"
     
     requester = u_info['name'] if u_info else 'Asif'
     
@@ -225,12 +225,12 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
     if requester == 'Kanav' and is_all and explicit_assignee not in ['kanav', 'asif']:
         msg = "**Tasks Assigned to Kanav**\n"
         all_tasks = get_all_tasks()
-        k_tasks = [t for t in all_tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'kanav']
+        k_tasks = [t for t in all_tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'kanav']
         k_tasks = filter_tasks(k_tasks, filters)
         msg += build_grouped_tasks_list_py(k_tasks) + "\n\n" if k_tasks else "No tasks match criteria\n\n"
         
         msg += "**Tasks Assigned to Asif**\n"
-        a_tasks = [t for t in all_tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'asif' or not t.get('assigned_to_user')]
+        a_tasks = [t for t in all_tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif') or not t.get('assigned_to_user')]
         a_tasks = filter_tasks(a_tasks, filters)
         msg += build_grouped_tasks_list_py(a_tasks) if a_tasks else "No tasks match criteria"
         
@@ -243,10 +243,19 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
     # If explicitly targeting kanav or asif but we are not there, try strictly checking logic
     tasks = get_all_tasks()
     if explicit_assignee == 'kanav':
-        tasks = [t for t in tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'kanav']
-    elif explicit_assignee == 'asif' or (requester == 'Asif' and not explicit_assignee):
-        tasks = [t for t in tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'asif' or not t.get('assigned_to_user')]
-    elif target_user_id and u_info['role'] != 'director':
+        tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'kanav']
+    elif explicit_assignee == 'asif':
+        tasks = [t for t in tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif') or not t.get('assigned_to_user')]
+    elif (requester == 'Asif' and not explicit_assignee and not is_all):
+        # Only restrict to self if they specifically said 'my tasks' or didn't use 'view all'
+        # Actually standard 'show tasks' for Asif we will now show everything if they want a common view
+        # But for strictly personal lists we use this:
+        if "my tasks" in raw_message:
+            tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif']
+        else:
+            # Default to showing everything since the user asked if 'anyone' sees all
+            pass 
+    elif target_user_id and u_info and u_info['role'] != 'director' and not is_all:
         tasks = get_tasks_for_user(target_user_id)
 
     filtered = filter_tasks(tasks, filters)

@@ -110,7 +110,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     except Exception as e:
         logger.warning(f"LLM parsing failed or low confidence: {e}. Falling back to rule-based parser.")
         # 4. Fallback to Rule-based Parser (Step 7)
-        if "task" in text.lower() and ("show" in text.lower() or "list" in text.lower() or "my" in text.lower()):
+        if "task" in text.lower() and ("show" in text.lower() or "list" in text.lower() or "my" in text.lower() or "view" in text.lower()):
             intent = "query_tasks"
             parsed = {"intent": "query_tasks", "confidence": 0.8}
         elif "blocker" in text.lower() and ("show" in text.lower() or "list" in text.lower() or "current" in text.lower()):
@@ -374,8 +374,29 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 
             if match:
                 from db import add_task
-                add_task(match['id'], task_name, deadline)
-                await send_reply_func(f"Task '{task_name}' created successfully for project '{match['name']}'! ✅")
+                from datetime import datetime, timedelta
+                
+                # Simple Natural Language Date Parser
+                parsed_deadline = deadline
+                dl_lower = deadline.lower()
+                today = datetime.now()
+                
+                if dl_lower == "today":
+                    parsed_deadline = today.strftime("%Y-%m-%d")
+                elif dl_lower == "tomorrow":
+                    parsed_deadline = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+                elif "day" in dl_lower and ("from now" in dl_lower or "from today" in dl_lower):
+                    import re
+                    m = re.search(r'(\d+)', dl_lower)
+                    if m:
+                        days = int(m.group(1))
+                        parsed_deadline = (today + timedelta(days=days)).strftime("%Y-%m-%d")
+                
+                result = add_task(match['id'], task_name, parsed_deadline)
+                if result:
+                    await send_reply_func(f"Task '{task_name}' created successfully for project '{match['name']}'! ✅")
+                else:
+                    await send_reply_func(f"Sorry, I couldn't save the task '{task_name}'. Please check the format and try again.")
             else:
                 await send_reply_func("Failed to create task. Project not found.")
             clear_state(user_id)

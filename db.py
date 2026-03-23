@@ -13,7 +13,7 @@ def get_tasks_for_project(project_id):
     return response.data
 
 def get_all_tasks():
-    response = supabase.table("tasks").select("*, projects(name)").execute()
+    response = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").execute()
     return response.data
 
 def save_update(task_id, progress, blockers, images, employee_id=None):
