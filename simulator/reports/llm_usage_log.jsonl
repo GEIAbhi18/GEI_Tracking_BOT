@@ -45,3 +45,8 @@
 {"timestamp":"2026-03-16 09:43","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"task completed"}
 {"timestamp":"2026-03-16 09:56","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"update task"}
 {"timestamp":"2026-03-16 10:07","provider":"gemini","model":"gemini-flash-latest","error_message":"Gemini error: Too Many Requests","status":"failed","user_message":"message"}
+{"timestamp":"2026-03-23 05:02","provider":"groq","model":"llama3-8b-8192","error_message":"Groq error: Bad Request","status":"failed","user_message":"deadline for tommorow"}
+{"timestamp":"2026-03-23 05:07","provider":"groq","model":"llama3-8b-8192","error_message":"Groq error: Bad Request","status":"failed","user_message":"Show deadlines for tomorrow"}
+{"timestamp":"2026-03-23 05:18","provider":"groq","model":"llama3-8b-8192","error_message":"Groq error: Bad Request","status":"failed","user_message":"Show me finished tasks"}
+{"timestamp":"2026-03-23 05:19","provider":"groq","model":"llama3-8b-8192","error_message":"Groq error: Bad Request","status":"failed","user_message":"Any tasks past deadline?"}
+{"timestamp":"2026-03-23 05:19","provider":"groq","model":"llama3-8b-8192","error_message":"Groq error: Bad Request","status":"failed","user_message":"Tasks due between 10 March and 25 March"}

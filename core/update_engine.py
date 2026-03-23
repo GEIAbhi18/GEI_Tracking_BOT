@@ -99,7 +99,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
             "task_name": parsed_obj.get("task_reference") or parsed_obj.get("project_name"),
             "progress": parsed_obj.get("progress"),
             "blocker_description": parsed_obj.get("blocker_text"),
-            "confidence": confidence
+            "confidence": confidence,
+            "query_filters": parsed_obj.get("query_filters")
         }
 
         # Step 7: Fallback if confidence is low

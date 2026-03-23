@@ -23,6 +23,7 @@ export const mcpTools = {
     mark_done: markDoneTool,
     complete_task: markDoneTool,
     list_tasks: getTasksTool,
+    query_tasks: getTasksTool,
     add_blocker: addBlockerTool,
     check_blockers: checkBlockersTool,
     query_blockers: checkBlockersTool,

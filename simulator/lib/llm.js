@@ -6,7 +6,7 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
     const providers = [
         { name: 'openrouter', fn: callOpenRouter, model: 'meta-llama/llama-3-8b-instruct' },
         { name: 'gemini', fn: callGemini, model: 'gemini-flash-latest' },
-        { name: 'groq', fn: callGroq, model: 'llama3-8b-8192' },
+        { name: 'groq', fn: callGroq, model: 'llama-3.1-8b-instant' },
         { name: 'anthropic', fn: callAnthropic, model: 'claude-3-sonnet-20240229' },
         { name: 'openai', fn: callOpenAI, model: 'gpt-3.5-turbo' },
         { name: 'huggingface', fn: callHuggingFace, model: 'meta-llama/Llama-2-7b-chat-hf' }
@@ -58,7 +58,8 @@ export async function extractIntentWithLLM(message, chatHistory = []) {
                         ticket_project: rawEntities.project_name || null,
                         project_name: rawEntities.project_name || null,
                         task_name: rawEntities.task_name || null,
-                        blocker_name: rawEntities.blocker_name || rawEntities.blocker_description || rawEntities.blocker_reason || null
+                        blocker_name: rawEntities.blocker_name || rawEntities.blocker_description || rawEntities.blocker_reason || null,
+                        query_filters: result.query_filters || {}
                     },
                     provider_used: provider.name
                 };
@@ -92,7 +93,7 @@ ALLOWED INTENTS:
 * complete_task: To mark a task as finished
 * add_blocker: To report a new blocker/issue
 * remove_blocker: To resolve an existing blocker
-* query_tasks: To list or find tasks (formerly list_tasks)
+* query_tasks: To list, find, or search tasks by date (e.g., "today", "this week", "overdue"), status (pending, finished), or blockers. Use this heavily instead of greeting.
 * query_blockers: To see current blockers
 * greeting: For simple greetings (e.g. "hi", "hello")
 * create_task: For adding new tasks
@@ -124,11 +125,15 @@ Output: {"intent": "add_blocker", "blocker_text": "no material found", "confiden
 
 Example 3:
 User: "show my tasks"
-Output: {"intent": "query_tasks", "confidence": 0.98}
+Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": null, "status": "pending"}}
 
 Example 4:
 User: "Top Terrace waterproofing 60%"
 Output: {"intent": "task_update", "project_name": "Top Terrace", "progress": 60, "confidence": 0.92}
+
+Example 5:
+User: "overdue tasks with blockers"
+Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "overdue", "has_blockers": true}}
 
 OUTPUT FORMAT:
 {
@@ -137,7 +142,17 @@ OUTPUT FORMAT:
 "project_name": "",
 "progress": null,
 "blocker_text": "",
-"confidence": 0.0
+"confidence": 0.0,
+"query_filters": {
+  "range": "overdue|today|tomorrow|this_week|custom_range",
+  "start_date": "",
+  "end_date": "",
+  "assignee": "",
+  "status": "pending|completed|all",
+  "has_blockers": false,
+  "progress_lt": null,
+  "include_no_deadline": false
+}
 }
 
 IMPORTANT:
@@ -392,7 +407,7 @@ async function callGroq(message, signal, chatHistory = []) {
             "Authorization": `Bearer ${apiKey}`
         },
         body: JSON.stringify({
-            model: "llama3-8b-8192",
+            model: "llama-3.1-8b-instant",
             temperature: 0,
             messages,
             response_format: { type: "json_object" }

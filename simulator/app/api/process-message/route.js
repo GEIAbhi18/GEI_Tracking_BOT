@@ -168,11 +168,11 @@ export async function POST(req) {
                 return NextResponse.json({ reply: `LLM Usage Stats:\n\n${summary}` });
             }
 
-            const allowedCommands = ['update_task', 'add_blocker', 'create_ticket', 'create_task', 'assign_task', 'mark_done', 'list_tasks', 'check_blockers', 'query_blockers', 'task_details', 'upload_deliverable', 'view_projects', 'view_tickets', 'request_report', 'reply_ticket', 'close_ticket'];
+            const allowedCommands = ['update_task', 'add_blocker', 'create_ticket', 'create_task', 'assign_task', 'mark_done', 'list_tasks', 'query_tasks', 'check_blockers', 'query_blockers', 'task_details', 'upload_deliverable', 'view_projects', 'view_tickets', 'request_report', 'reply_ticket', 'close_ticket'];
             
             if (allowedCommands.includes(cmd)) {
                 let targetAssignee = userName;
-                if (userName === 'Kanav' && ['list_tasks', 'create_task', 'update_task', 'task_details'].includes(cmd) && !rest.includes(targetAssignee)) {
+                if (userName === 'Kanav' && ['list_tasks', 'query_tasks', 'create_task', 'update_task', 'task_details'].includes(cmd) && !rest.includes(targetAssignee)) {
                     targetAssignee = 'Asif';
                 }
 
@@ -202,7 +202,7 @@ export async function POST(req) {
                 finalIntent = llmResult;
                 
                 if (userName === 'Kanav' && 
-                    ['list_tasks', 'create_task', 'update_task', 'task_details'].includes(finalIntent.intent) && 
+                    ['list_tasks', 'query_tasks', 'create_task', 'update_task', 'task_details'].includes(finalIntent.intent) && 
                     !finalIntent.entities.assignee) {
                     finalIntent.entities.assignee = 'Asif';
                 }
@@ -210,7 +210,11 @@ export async function POST(req) {
         }
 
         if (finalIntent) {
-            if (!finalIntent.entities.assignee) finalIntent.entities.assignee = userName;
+            // Only inject the speaking user as assignee by default if it's not a query tool, or if they are Asif.
+            // Avoid isolating queries to Kanav if he's just querying generally.
+            if (!finalIntent.entities.assignee && !(finalIntent.intent === 'query_tasks' && userName === 'Kanav')) {
+                finalIntent.entities.assignee = userName;
+            }
             finalIntent.entities.userName = userName;
             finalIntent.entities.raw_message = message;
             finalIntent.entities.attachments = attachments;

@@ -89,23 +89,175 @@ async def handle_remove_blocker(entities, user_id, context, send_reply_func):
 
     await perform_remove_blocker(task_name, user_id, send_reply_func)
 
+def filter_tasks(tasks, filters):
+    if not filters:
+        return tasks
+        
+    filtered = list(tasks)
+    from datetime import datetime, timedelta
+    
+    # Simple naive date for comparison matching JS
+    today = datetime.now().date()
+    
+    status = filters.get("status")
+    if status == "completed":
+        filtered = [t for t in filtered if t.get("status") == "completed"]
+    elif status == "pending":
+        filtered = [t for t in filtered if t.get("status") != "completed"]
+        
+    progress_lt = filters.get("progress_lt")
+    if progress_lt is not None:
+        filtered = [t for t in filtered if t.get("progress", 0) < progress_lt]
+        
+    if filters.get("has_blockers"):
+        filtered = [t for t in filtered if t.get("is_blocked")]
+        
+    rge = filters.get("range")
+    inc_no_dl = filters.get("include_no_deadline")
+    
+    if rge:
+        def parse_date(date_str):
+            if not date_str: return None
+            try:
+                # expecting something like ISO format or YYYY-MM-DD
+                return datetime.fromisoformat(date_str.split('T')[0]).date()
+            except:
+                try:
+                    from dateutil.parser import parse
+                    return parse(date_str).date()
+                except:
+                    return None
+                    
+        new_filtered = []
+        for t in filtered:
+            dl_str = t.get("deadline")
+            if not dl_str:
+                if inc_no_dl: new_filtered.append(t)
+                continue
+                
+            dl_date = parse_date(dl_str)
+            if not dl_date:
+                continue
+                
+            if rge == "overdue":
+                if dl_date < today and t.get("status") != "completed":
+                    new_filtered.append(t)
+            elif rge == "today":
+                if dl_date == today:
+                    new_filtered.append(t)
+            elif rge == "tomorrow":
+                if dl_date == today + timedelta(days=1):
+                    new_filtered.append(t)
+            elif rge == "this_week":
+                if today <= dl_date <= today + timedelta(days=7):
+                    new_filtered.append(t)
+            elif rge == "custom_range":
+                sd = parse_date(filters.get("start_date"))
+                ed = parse_date(filters.get("end_date"))
+                if sd and ed and (sd <= dl_date <= ed):
+                    new_filtered.append(t)
+            else:
+                new_filtered.append(t)
+        filtered = new_filtered
+    elif inc_no_dl:
+        filtered = [t for t in filtered if not t.get("deadline")]
+        
+    return filtered
+
+def build_grouped_tasks_list_py(tasks):
+    if not tasks: return "No tasks found."
+    
+    from collections import defaultdict
+    from datetime import datetime
+    
+    grouped = defaultdict(list)
+    for idx, t in enumerate(tasks):
+        number = idx + 1
+        p_name = t.get('projects', {}).get('name', 'No Project') if t.get('projects') else 'No Project'
+        
+        updates = t.get('updates', [])
+        prog = t.get('progress', 0)
+        if 'progress' not in t and updates:
+            prog = max([u.get('progress', 0) for u in updates]) if updates else 0
+            
+        blocker_count = sum(1 for u in updates if str(u.get('blockers', '')).lower() not in ['none', ''])
+        br = str(t.get('blocker_reason', '')).lower()
+        if br not in ['none', ''] and not any(str(u.get('blockers', '')).lower() == br for u in updates):
+            blocker_count += 1
+            
+        grouped[p_name].append({
+            'number': number,
+            'name': t.get('name', 'Unknown Task'),
+            'deadline': t.get('deadline'),
+            'progress': prog,
+            'blockerCount': blocker_count
+        })
+        
+    msg = ""
+    for p_name, t_list in grouped.items():
+        msg += f"**{p_name}**\n"
+        for t in t_list:
+            dl_str = "No deadline"
+            if t['deadline']:
+                try:
+                    d = datetime.fromisoformat(t['deadline'].replace('Z', '+00:00'))
+                    dl_str = d.strftime("%d %b")
+                except:
+                    # fallback date parser
+                    dl_str = t['deadline'][:10]
+            msg += f"{t['number']}. {t['name']} – Deadline: {dl_str} | {t['progress']}% done | {t['blockerCount']} blocker(s)\n"
+        msg += "\n"
+        
+    return msg.strip()
+
 async def handle_query_tasks(entities, user_id, context, send_reply_func):
     u_info = get_user_by_telegram_id(user_id)
-    if u_info and u_info['role'] != 'director':
-        tasks = get_tasks_for_user(u_info['id'])
-    else:
-        tasks = get_all_tasks()
+    filters = entities.get("query_filters") or {}
+    
+    # Same logic as JS: check if all tasks were requested
+    raw_message = str(context.get("messages", [])[-1].get("content", "")).lower() if context.get("messages") else ""
+    explicit_assignee = str(filters.get("assignee") or entities.get("assignee", "")).lower()
+    is_all = "all tasks" in raw_message or "all task" in raw_message or explicit_assignee == "all"
+    
+    requester = u_info['name'] if u_info else 'Asif'
+    
+    # Defaults for Manager Kanav
+    if requester == 'Kanav' and not explicit_assignee:
+        is_all = True
         
-    if not tasks:
-        await send_reply_func("No tasks found.")
+    if requester == 'Kanav' and is_all and explicit_assignee not in ['kanav', 'asif']:
+        msg = "**Tasks Assigned to Kanav**\n"
+        all_tasks = get_all_tasks()
+        k_tasks = [t for t in all_tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'kanav']
+        k_tasks = filter_tasks(k_tasks, filters)
+        msg += build_grouped_tasks_list_py(k_tasks) + "\n\n" if k_tasks else "No tasks match criteria\n\n"
+        
+        msg += "**Tasks Assigned to Asif**\n"
+        a_tasks = [t for t in all_tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'asif' or not t.get('assigned_to_user')]
+        a_tasks = filter_tasks(a_tasks, filters)
+        msg += build_grouped_tasks_list_py(a_tasks) if a_tasks else "No tasks match criteria"
+        
+        await send_reply_func(msg)
         return
         
-    msg = "📋 *Task List:*\n"
-    for idx, t in enumerate(tasks):
-        status_icon = "✅" if t.get('status') == 'completed' else "⏳"
-        deadline_str = f" | Deadline: {t.get('deadline')}" if t.get('deadline') else ""
-        msg += f"{idx + 1}. {status_icon} *{t['name']}*\n   Progress: {t.get('progress', 0)}%{deadline_str}\n"
+    # Not Kanav "all tasks"
+    target_user_id = u_info['id'] if u_info else None
     
+    # If explicitly targeting kanav or asif but we are not there, try strictly checking logic
+    tasks = get_all_tasks()
+    if explicit_assignee == 'kanav':
+        tasks = [t for t in tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'kanav']
+    elif explicit_assignee == 'asif' or (requester == 'Asif' and not explicit_assignee):
+        tasks = [t for t in tasks if str(t.get('assigned_to_user', {}).get('name', '')).lower() == 'asif' or not t.get('assigned_to_user')]
+    elif target_user_id and u_info['role'] != 'director':
+        tasks = get_tasks_for_user(target_user_id)
+
+    filtered = filter_tasks(tasks, filters)
+    if not filtered:
+        await send_reply_func("No tasks found matching criteria.")
+        return
+        
+    msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
     await send_reply_func(msg)
 
 async def handle_query_blockers(entities, user_id, context, send_reply_func):
@@ -233,8 +385,15 @@ def generate_pdf_report():
             
             atts = t.get('attachments')
             if atts and isinstance(atts, list) and len(atts) > 0:
+                img_url = atts[0]
+                proof_url = img_url
+                if proof_url.startswith('data:image'):
+                    import os
+                    host = os.getenv("NEXT_PUBLIC_SITE_URL", "http://localhost:3000")
+                    proof_url = f"{host}/api/proof?taskId={t['id']}"
+                    
                 pdf.set_text_color(0, 0, 255)
-                pdf.cell(0, 6, txt="View Proof Image", link=atts[0], ln=1)
+                pdf.cell(0, 6, txt="View Proof Image", link=proof_url, ln=1)
                 pdf.set_text_color(0, 0, 0)
             
     filepath = "/tmp/daily_report.pdf"

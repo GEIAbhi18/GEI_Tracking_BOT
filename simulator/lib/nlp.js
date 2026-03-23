@@ -5,7 +5,6 @@ export function ruleBasedNLP(text) {
         query_blockers: ['show blockers', 'what are the blockers', 'show all blockers', 'blockers status', 'blockers list', 'project wise blocker', 'show project wise blocker', 'what blockers', 'blocker status', 'show blocker'],
         greeting: ['hi', 'hello', 'hey', 'namaste', 'morning', 'evening'],
         help: ['help', 'support', 'commands', 'what can you do'],
-        list_tasks: ['task list', 'show me tasks', 'get task', 'tasks', 'get_task', 'show tasks', 'show my tasks'],
         create_task: ['create task', 'new task', 'add task', 'create a task'],
         request_report: ['report', 'can i get the report', 'send today\'s report', 'daily report'],
         view_tickets: ['show tickets', 'view tickets', 'open tickets', 'tickets', 'show me tickets', 'show ticket', 'view ticket', 'ticket'],

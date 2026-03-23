@@ -23,7 +23,7 @@ ALLOWED INTENTS:
 * complete_task: To mark a task as finished
 * add_blocker: To report a new blocker/issue
 * remove_blocker: To resolve an existing blocker
-* query_tasks: To list or find tasks (formerly list_tasks)
+* query_tasks: To list, find, or search tasks by date (e.g., "today", "this week", "overdue"), status (pending, finished), or blockers. Use this heavily instead of greeting.
 * query_blockers: To see current blockers
 * greeting: For simple greetings (e.g. "hi", "hello")
 * create_task: For adding new tasks
@@ -55,15 +55,15 @@ Output: {"intent": "add_blocker", "blocker_text": "no material found", "confiden
 
 Example 3:
 User: "show my tasks"
-Output: {"intent": "query_tasks", "confidence": 0.98}
+Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": null, "status": "pending"}}
 
 Example 4:
 User: "Top Terrace waterproofing 60%"
 Output: {"intent": "task_update", "project_name": "Top Terrace", "progress": 60, "confidence": 0.92}
 
 Example 5:
-User: "remove rain blocker"
-Output: {"intent": "remove_blocker", "blocker_text": "rain", "confidence": 0.9}
+User: "overdue tasks with blockers"
+Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "overdue", "has_blockers": true}}
 
 OUTPUT FORMAT:
 {
@@ -72,7 +72,17 @@ OUTPUT FORMAT:
 "project_name": "",
 "progress": null,
 "blocker_text": "",
-"confidence": 0.0
+"confidence": 0.0,
+"query_filters": {
+  "range": "overdue|today|tomorrow|this_week|custom_range",
+  "start_date": "",
+  "end_date": "",
+  "assignee": "",
+  "status": "pending|completed|all",
+  "has_blockers": false,
+  "progress_lt": null,
+  "include_no_deadline": false
+}
 }
 """
 

@@ -1,5 +1,15 @@
 from pydantic import BaseModel
-from typing import Optional, Union
+from typing import Optional, Union, Literal
+
+class QueryFilters(BaseModel):
+    range: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    assignee: Optional[str] = None
+    status: Optional[str] = None
+    has_blockers: Optional[bool] = None
+    progress_lt: Optional[int] = None
+    include_no_deadline: Optional[bool] = None
 
 class IntentResponse(BaseModel):
     intent: str
@@ -8,3 +18,4 @@ class IntentResponse(BaseModel):
     progress: Optional[Union[int, float]] = None
     blocker_text: Optional[str] = None
     confidence: float
+    query_filters: Optional[QueryFilters] = None

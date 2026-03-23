@@ -821,7 +821,13 @@ export default function SimulatorApp() {
                       ))}
                     </div>
                   )}
-                  <div className="whitespace-pre-wrap">{msg.text}</div>
+                  <div className="whitespace-pre-wrap">
+                    {(msg.text || '').split(/(\*\*.*?\*\*)/g).map((part, i) => 
+                      part.startsWith('**') && part.endsWith('**') ? 
+                        <strong key={i}>{part.slice(2, -2)}</strong> : 
+                        part
+                    )}
+                  </div>
 
                   {msg.buttons && msg.buttons.length > 0 && (
                     <div className="mt-3 flex flex-col gap-1.5 w-full pb-3 border-t border-slate-100 pt-3">
