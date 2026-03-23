@@ -9,17 +9,14 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-# LOCAL TESTING ID CONFIG
+# You can switch these comments out while testing locally
 # TEST_USER_ID = 123456789 # Asif Temp ID
 # TEST_USER_ID = 987654321 # Kanav Temp ID
-
-# Production ID CONFIG 
-TEST_USER_ID = update.effective_user.id
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command to welcome the user."""
     from db import get_user_by_telegram_id
-    user_id = TEST_USER_ID
+    user_id = update.effective_user.id
     u_info = get_user_by_telegram_id(user_id)
     name = u_info['name'] if u_info else "there"
     welcome_message = f"Hi {name}, What can I help you with?"
@@ -27,7 +24,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = (update.message.text or update.message.caption or "").lstrip('/')
-    user_id = TEST_USER_ID
+    user_id = update.effective_user.id
     
     # Extract images if a photo was uploaded
     images = []
