@@ -9,10 +9,12 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-# --- LOCAL TESTING ID CONFIG ---
+# LOCAL TESTING ID CONFIG
 # TEST_USER_ID = 123456789 # Asif Temp ID
-TEST_USER_ID = 987654321 # Kanav Temp ID
-# TEST_USER_ID = update.effective_user.id # Use this for production
+# TEST_USER_ID = 987654321 # Kanav Temp ID
+
+# Production ID CONFIG 
+TEST_USER_ID = update.effective_user.id
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command to welcome the user."""
