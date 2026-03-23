@@ -6,4 +6,4 @@ pytz==2024.1
 rapidfuzz==3.6.1
 requests
 pydantic
-
+fpdf2
