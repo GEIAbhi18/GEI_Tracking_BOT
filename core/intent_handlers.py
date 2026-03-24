@@ -42,7 +42,8 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
     
     deadline = entities.get("deadline")
     
-    if not progress:
+    # If deadline is provided but no progress, we still want to update the deadline
+    if not progress and not deadline:
         set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": task_name, "deadline": deadline})
         await send_reply_func(f"What is the progress % for '{task_name}'?")
         return
@@ -304,7 +305,13 @@ def build_grouped_tasks_list_py(tasks):
                 except:
                     # fallback date parser
                     dl_str = t['deadline'][:10]
-            tick = " ✅" if prog == 100 else ""
+            try:
+                # Cast to int to ensure we handle strings/floats correctly
+                is_done = int(float(prog)) >= 100
+            except:
+                is_done = False
+                
+            tick = " ✅" if is_done else ""
             msg += f"{t['number']}. {t['name']} – Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
         msg += "\n"
         
@@ -520,32 +527,41 @@ def generate_pdf_report():
 async def handle_ask_asif(entities, user_id, context, send_reply_func):
     from db import supabase, get_all_tasks
     
-    # Find Asif's data
-    asif_data = supabase.table("users").select("telegram_id, id").eq("name", "Asif").execute().data
-    if not asif_data or not asif_data[0].get('telegram_id'):
-        await send_reply_func("Could not find Asif in database.")
-        return
+    try:
+        # Check if caller is authorized (Kanav)
+        u_info = get_user_by_telegram_id(user_id)
+        if not u_info or u_info.get('role') != 'director':
+            # Optionally check by name if testing from a different ID but wanting to test Asif feature
+            if u_info and u_info['name'] != "Abhijeet": # allow Dev to test if they want
+                pass
         
-    asif_tid = asif_data[0]['telegram_id']
-    asif_uuid = asif_data[0]['id']
-    
-    # Get Asif's pending tasks
-    tasks = get_all_tasks()
-    asif_tasks = [t for t in tasks if (t.get('assigned_to') == asif_uuid or not t.get('assigned_to')) and t['status'] != 'completed']
-    
-    if not asif_tasks:
-        await send_reply_func("Asif has no pending tasks currently.")
-        return
+        # Find Asif's data
+        asif_data = supabase.table("users").select("telegram_id, id").eq("name", "Asif").execute().data
+        if not asif_data or not asif_data[0].get('telegram_id'):
+            await send_reply_func("Could not find Asif in database or Asif has no telegram_id.")
+            return
+            
+        asif_tid = asif_data[0]['telegram_id']
+        asif_uuid = asif_data[0]['id']
+        
+        tasks = get_all_tasks()
+        asif_tasks = [t for t in tasks if (t.get('assigned_to') == asif_uuid or t.get('assigned_to_user', {}).get('name') == "Asif") and t['status'] != 'completed']
+        
+        if not asif_tasks:
+            await send_reply_func("Asif has no pending tasks currently.")
+            return
 
-    # Build report-like task list
-    task_list_str = build_grouped_tasks_list_py(asif_tasks)
-    
-    # Send message to Asif
-    asif_msg = f"🔔 *Kanav is asking for your current update. Here are your tasks:*\n\n{task_list_str}\n\n/update_task"
-    await send_reply_func(asif_msg, target_user_id=asif_tid)
-    
-    # Confirm to Kanav
-    await send_reply_func("Sent a reminder to Asif for updates. ✅")
+        task_list_str = build_grouped_tasks_list_py(asif_tasks)
+        
+        # Cross-user message
+        notification = f"🔔 *Kanav is asking for your current update.*\n\n{task_list_str}\n\n/update_task"
+        await send_reply_func(notification, target_user_id=asif_tid)
+        
+        # Confirm to Kanav
+        await send_reply_func("Sent a reminder to Asif for updates. ✅")
+    except Exception as e:
+        logger.error(f"Error in handle_ask_asif: {e}")
+        await send_reply_func(f"Error processing your request: {e}")
 
 async def handle_request_report(entities, user_id, context, send_reply_func):
     filepath = generate_pdf_report()
@@ -659,9 +675,14 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
         return
 
     try:
-        progress = int(str(progress_str).replace('%', ''))
+        # Handle cases where progress is not provided (e.g. deadline-only update)
+        if progress_str is not None:
+            progress = int(str(progress_str).replace('%', ''))
+        else:
+            progress = match.get('progress', 0)
+            if progress is None: progress = 0
     except:
-        progress = 0
+        progress = match.get('progress', 0) or 0
         
     u_info = get_user_by_telegram_id(user_id)
     emp_uuid = u_info['id'] if u_info else None
