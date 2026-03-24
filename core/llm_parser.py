@@ -72,6 +72,7 @@ OUTPUT FORMAT:
 "project_name": "",
 "progress": null,
 "blocker_text": "",
+"deadline": "",
 "confidence": 0.0,
 "query_filters": {
   "range": "overdue|today|tomorrow|this_week|custom_range",

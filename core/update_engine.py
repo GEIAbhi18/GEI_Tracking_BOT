@@ -59,6 +59,13 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_ask_asif({}, user_id, context, send_reply_func)
         return
 
+    # Check for "no blocker" or "remove blocker" before progress updates
+    if "no blocker" in stripped_lower or "blocker resolved" in stripped_lower or "removed blocker" in stripped_lower:
+        m = re.search(r'(\d+)', stripped_lower)
+        t_ref = f"task {m.group(1)}" if m else None
+        await handlers.handle_remove_blocker({"intent": "remove_blocker", "task_name": t_ref}, user_id, context, send_reply_func)
+        return
+
     if stripped_lower in ["complete task", "/complete_task"]:
         await handlers.handle_complete_task({"intent": "complete_task"}, user_id, context, send_reply_func)
         return
@@ -242,7 +249,26 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
     elif action == "remove_blocker":
         if step == "waiting_for_task":
             await handlers.perform_remove_blocker(text, user_id, send_reply_func)
-            clear_state(user_id)
+            # clear_state will be handled inside perform_remove_blocker if it sets a new state
+        elif step == "waiting_for_resolve_choice":
+            choice = text.strip().lower()
+            if choice in ["all", "yes", "all resolved"]:
+                from db import remove_blocker
+                remove_blocker(state['task_id'])
+                await send_reply_func(f"All blockers resolved for '{state['task_name']}' 🟢")
+                clear_state(user_id)
+            elif choice.isdigit():
+                idx = int(choice) - 1
+                blockers = state.get('blockers', [])
+                if 0 <= idx < len(blockers):
+                    from db import remove_blocker
+                    remove_blocker(state['task_id'])
+                    await send_reply_func(f"Blocker '{blockers[idx]}' resolved. 🟢 (Task status set to unblocked)")
+                    clear_state(user_id)
+                else:
+                    await send_reply_func("Invalid choice. Please type the blocker number or 'All'.")
+            else:
+                await send_reply_func("Please type 'All' to resolve everything or the number of the specific blocker.")
     
     elif action == "update_task":
         if step == "waiting_for_project":
@@ -284,7 +310,8 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             await send_reply_func(f"What is the progress % for '{tq}'?")
         elif step == "waiting_for_progress":
             task_query = state.get("task_query")
-            await handlers.perform_update(task_query, text, user_id, send_reply_func)
+            deadline = state.get("deadline")
+            await handlers.perform_update(task_query, text, user_id, send_reply_func, deadline=deadline)
             clear_state(user_id)
     
     elif action == "complete_task":

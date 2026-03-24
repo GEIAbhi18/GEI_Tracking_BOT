@@ -40,12 +40,14 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
         await send_reply_func(f"Which task in '{project_match['name']}' do you want to update? (Type the number)\n\n{tasks_msg}")
         return
     
+    deadline = entities.get("deadline")
+    
     if not progress:
-        set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": task_name})
+        set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": task_name, "deadline": deadline})
         await send_reply_func(f"What is the progress % for '{task_name}'?")
         return
 
-    await perform_update(task_name, progress, user_id, send_reply_func, images=images)
+    await perform_update(task_name, progress, user_id, send_reply_func, images=images, deadline=deadline)
 
 async def handle_complete_task(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
@@ -302,7 +304,8 @@ def build_grouped_tasks_list_py(tasks):
                 except:
                     # fallback date parser
                     dl_str = t['deadline'][:10]
-            msg += f"{t['number']}. {t['name']} – Deadline: {dl_str} | {t['progress']}% done | {t['blockerCount']} blocker(s)\n"
+            tick = " ✅" if prog == 100 else ""
+            msg += f"{t['number']}. {t['name']} – Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
         msg += "\n"
         
     return msg.strip()
@@ -393,8 +396,8 @@ async def handle_query_blockers(entities, user_id, context, send_reply_func):
     msg = "🛑 *Current Blockers:*\n"
     for proj, blks in blocked_by_proj.items():
         msg += f"\n- *{proj}*\n"
-        for t in blks:
-            msg += f"   - *{t['name']}*: blocker: {t.get('blocker_reason', 'Unknown reason')}\n"
+        for idx, t in enumerate(blks, 1):
+            msg += f"   {idx}. *{t['name']}*: blocker: {t.get('blocker_reason', 'Unknown reason')}\n"
     
     await send_reply_func(msg)
 
@@ -539,10 +542,10 @@ async def handle_ask_asif(entities, user_id, context, send_reply_func):
     
     # Send message to Asif
     asif_msg = f"🔔 *Kanav is asking for your current update. Here are your tasks:*\n\n{task_list_str}\n\n/update_task"
-    await send_reply_func(text=asif_msg, target_user_id=asif_tid)
+    await send_reply_func(asif_msg, target_user_id=asif_tid)
     
     # Confirm to Kanav
-    await send_reply_func("Update request sent to Asif. ✅")
+    await send_reply_func("Sent a reminder to Asif for updates. ✅")
 
 async def handle_request_report(entities, user_id, context, send_reply_func):
     filepath = generate_pdf_report()
@@ -629,7 +632,7 @@ async def handle_clarify(entities, user_id, context, send_reply_func):
 
 # --- Helper Performers ---
 
-async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None):
+async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None, deadline=None):
     from core.context_manager import get_context
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
@@ -663,13 +666,14 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     u_info = get_user_by_telegram_id(user_id)
     emp_uuid = u_info['id'] if u_info else None
     
-    save_update(match['id'], progress, "None", images or [], emp_uuid)
+    save_update(match['id'], progress, "None", images or [], emp_uuid, new_deadline=deadline)
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
     
+    dl_msg = f"\nDeadline: {deadline}" if deadline else ""
     proof_msg = f"Proof: [Image]" if images else ""
-    await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}% {proof_msg}")
+    await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%{dl_msg}\n{proof_msg}")
 
 async def perform_add_blocker(task_query, description, user_id, send_reply_func, images=None):
     from core.context_manager import get_context
@@ -707,17 +711,61 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     await send_reply_func(f"Blocker added successfully 🛑\nTask: {match['name']}\nIssue: {description}")
 
 async def perform_remove_blocker(task_query, user_id, send_reply_func):
-    from db import remove_blocker
-    tasks = get_all_tasks()
-    match = next((t for t in tasks if task_query.lower() in t['name'].lower()), None)
+    from db import remove_blocker, get_all_tasks
     
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    
+    tasks = get_all_tasks()
+    match = None
+    
+    # Numeric index matching
+    import re
+    m = re.search(r'(\d+)', str(task_query))
+    if m and ("task" in str(task_query).lower() or str(task_query).isdigit()):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(last_list):
+            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
+            
+    if not match:
+        sq = str(task_query).lower()
+        if sq.startswith("task "): sq = sq[5:].strip()
+        match = next((t for t in tasks if sq in t['name'].lower()), None)
+        
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
+        return
+
+    # Check for multiple active blockers in update history
+    updates = match.get('updates') or []
+    active_blockers = []
+    for u in updates:
+        b_val = str(u.get('blockers') or '').lower()
+        if b_val and b_val not in ['none', 'null', 'undefined']:
+            active_blockers.append(u.get('blockers'))
+            
+    # Also check the core task blocker
+    br = str(match.get('blocker_reason') or '').lower()
+    if br and br not in ['none', 'null'] and br not in [str(b).lower() for b in active_blockers]:
+        active_blockers.append(match['blocker_reason'])
+
+    if len(active_blockers) > 1:
+        # Prompt for choice
+        bl_text = "\n".join([f"{i}. {b}" for i, b in enumerate(active_blockers, 1)])
+        set_state(user_id, {
+            "action": "remove_blocker", 
+            "step": "waiting_for_resolve_choice", 
+            "task_id": match['id'], 
+            "task_name": match['name'],
+            "blockers": active_blockers
+        })
+        await send_reply_func(f"Task '{match['name']}' has multiple blockers:\n\n{bl_text}\n\nAre ALL blockers resolved? (Type 'All' or the number of the resolved blocker)")
         return
 
     remove_blocker(match['id'])
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="remove_blocker")
-    
+    from core.conversation_state import clear_state
+    clear_state(user_id)
     await send_reply_func(f"Blocker removed from '{match['name']}' 🟢")

@@ -31,8 +31,15 @@ async def handle_employee_update(update: Update, context: ContextTypes.DEFAULT_T
         photo_file = await update.message.photo[-1].get_file()
         images.append(photo_file.file_path)
         
-    async def send_reply(msg):
-        await update.message.reply_text(msg)
+    async def send_reply(msg, target_user_id=None, document=None, **kwargs):
+        if target_user_id:
+            await context.bot.send_message(chat_id=target_user_id, text=msg, **kwargs)
+        elif document:
+            await update.message.reply_document(document=open(document, 'rb'), caption=msg)
+        else:
+            # check parse_mode in kwargs or default to Markdown
+            pm = kwargs.get('parse_mode', 'Markdown')
+            await update.message.reply_text(msg, parse_mode=pm)
         
     await process_update_message(text, user_id, images, send_reply)
 

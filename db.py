@@ -16,14 +16,17 @@ def get_all_tasks():
     response = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").execute()
     return response.data
 
-def save_update(task_id, progress, blockers, images, employee_id=None):
+def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None):
     from rag import calculate_rag
     
     task_response = supabase.table("tasks").select("created_at, deadline").eq("id", task_id).execute()
     task_data = task_response.data[0] if task_response.data else {}
     
     task_created_at = datetime.fromisoformat(task_data.get("created_at")) if task_data.get("created_at") else None
-    task_deadline = datetime.fromisoformat(task_data.get("deadline")) if task_data.get("deadline") else None
+    
+    # Use new deadline if provided, else use existing
+    final_deadline_str = new_deadline if new_deadline else task_data.get("deadline")
+    task_deadline = datetime.fromisoformat(final_deadline_str) if final_deadline_str else None
     
     rag_color, _ = calculate_rag(progress, task_created_at, task_deadline, blockers, 0)
     
@@ -39,7 +42,13 @@ def save_update(task_id, progress, blockers, images, employee_id=None):
         data["employee_id"] = employee_id
         
     response = supabase.table("updates").insert(data).execute()
-    supabase.table("tasks").update({"progress": progress}).eq("id", task_id).execute()
+    
+    # Update task progress and optionally deadline
+    task_update_data = {"progress": progress}
+    if new_deadline:
+        task_update_data["deadline"] = new_deadline
+        
+    supabase.table("tasks").update(task_update_data).eq("id", task_id).execute()
     return response.data
 
 def get_todays_updates():
