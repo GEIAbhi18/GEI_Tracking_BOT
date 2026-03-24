@@ -75,13 +75,27 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
         await send_reply_func(f"Which task in '{project_match['name']}' should I complete? (Type the number)\n\n{tasks_msg}")
         return
 
+    # Resolve task_name if it's a number from a list
+    resolved_name = task_name
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    import re
+    m = re.search(r'(\d+)', str(task_name))
+    if m and ("task" in str(task_name).lower() or str(task_name).isdigit()):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(last_list):
+            tasks = get_all_tasks()
+            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
+            if match:
+                resolved_name = match['name']
+
     # Require proof for completion
     if not images:
-        set_state(user_id, {"action": "complete_task", "step": "waiting_for_proof", "task_query": task_name})
-        await send_reply_func(f"Please upload an image proof to mark '{task_name}' as complete.")
+        set_state(user_id, {"action": "complete_task", "step": "waiting_for_proof", "task_query": resolved_name})
+        await send_reply_func(f"Please upload an image proof to mark '{resolved_name}' as complete.")
         return
 
-    await perform_update(task_name, "100", user_id, send_reply_func, images=images)
+    await perform_update(resolved_name, "100", user_id, send_reply_func, images=images)
 
 async def handle_add_blocker(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
@@ -112,12 +126,26 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
         await send_reply_func(f"Which task in '{project_match['name']}' is blocked? (Type the number)\n\n{tasks_msg}")
         return
     
+    # Resolve task_name if it's a number from a list
+    resolved_name = task_name
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    import re
+    m = re.search(r'(\d+)', str(task_name))
+    if m and ("task" in str(task_name).lower() or str(task_name).isdigit()):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(last_list):
+            tasks = get_all_tasks()
+            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
+            if match:
+                resolved_name = match['name']
+
     if not blocker_text:
-        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_description", "task_query": task_name})
-        await send_reply_func(f"What is the issue holding up '{task_name}'?")
+        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_description", "task_query": resolved_name})
+        await send_reply_func(f"What is the issue holding up '{resolved_name}'?")
         return
 
-    await perform_add_blocker(task_name, blocker_text, user_id, send_reply_func, images=images)
+    await perform_add_blocker(resolved_name, blocker_text, user_id, send_reply_func, images=images)
 
 async def handle_remove_blocker(entities, user_id, context, send_reply_func):
     task_name = entities.get("task_name")
@@ -221,26 +249,46 @@ def build_grouped_tasks_list_py(tasks):
     
     grouped = defaultdict(list)
     for idx, t in enumerate(tasks):
-        number = idx + 1
-        p_name = t.get('projects', {}).get('name', 'No Project') if t.get('projects') else 'No Project'
-        
-        updates = t.get('updates', [])
-        prog = t.get('progress', 0)
-        if 'progress' not in t and updates:
-            prog = max([u.get('progress', 0) for u in updates]) if updates else 0
+        try:
+            number = idx + 1
+            # Safer project name lookup
+            p_obj = t.get('projects')
+            if isinstance(p_obj, list) and p_obj:
+                p_name = p_obj[0].get('name', 'No Project')
+            elif isinstance(p_obj, dict):
+                p_name = p_obj.get('name', 'No Project')
+            else:
+                p_name = 'No Project'
             
-        blocker_count = sum(1 for u in updates if str(u.get('blockers', '')).lower() not in ['none', ''])
-        br = str(t.get('blocker_reason', '')).lower()
-        if br not in ['none', ''] and not any(str(u.get('blockers', '')).lower() == br for u in updates):
-            blocker_count += 1
+            updates = t.get('updates') or []
+            prog = t.get('progress', 0)
+            if prog is None: prog = 0
             
-        grouped[p_name].append({
+            if ('progress' not in t or t.get('progress') is None) and updates:
+                valid_progs = [u.get('progress') for u in updates if u.get('progress') is not None]
+                if valid_progs:
+                    prog = max(valid_progs)
+                
+            blocker_count = 0
+            for u in updates:
+                b_val = str(u.get('blockers') or '').lower()
+                if b_val and b_val not in ['none', 'null', 'undefined']:
+                    blocker_count += 1
+                    
+            br = str(t.get('blocker_reason') or '').lower()
+            if br and br not in ['none', 'null'] and not any(str(u.get('blockers') or '').lower() == br for u in updates):
+                blocker_count += 1
+                
+            grouped[p_name].append({
             'number': number,
             'name': t.get('name', 'Unknown Task'),
             'deadline': t.get('deadline'),
             'progress': prog,
             'blockerCount': blocker_count
-        })
+            })
+        except Exception as e:
+            logger.error(f"Error processing task {t.get('id', 'unknown')}: {e}")
+            continue
         
     msg = ""
     for p_name, t_list in grouped.items():
@@ -330,7 +378,16 @@ async def handle_query_blockers(entities, user_id, context, send_reply_func):
     from collections import defaultdict
     blocked_by_proj = defaultdict(list)
     for t in blocked_tasks:
-        pname = t.get('projects', {}).get('name', 'Unknown Project') if t.get('projects') else "Unknown"
+        try:
+            p_obj = t.get('projects')
+            if isinstance(p_obj, list) and p_obj:
+                pname = p_obj[0].get('name', 'Unknown')
+            elif isinstance(p_obj, dict):
+                pname = p_obj.get('name', 'Unknown')
+            else:
+                pname = "Unknown"
+        except:
+            pname = "Unknown"
         blocked_by_proj[pname].append(t)
         
     msg = "🛑 *Current Blockers:*\n"

@@ -26,6 +26,14 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
 
     # 2. Check Conversation State
     state = get_state(user_id)
+    stripped_lower = text.strip().lower()
+
+    # Pre-intercept "state-breakers" - If user types a clear top-level command, break any existing loop
+    COMMAND_KEYWORDS = ["/start", "show tasks", "view tasks", "list tasks", "show blockers", "help", "/help", "exit", "cancel"]
+    if state and any(cmd in stripped_lower for cmd in COMMAND_KEYWORDS):
+        clear_state(user_id)
+        state = None # Fall through to LLM/Router
+
     if state:
         await continue_conversation(text, user_id, state, images, send_reply_func)
         return

@@ -9,14 +9,13 @@ from config import EMPLOYEE_CHAT_ID
 
 logger = logging.getLogger(__name__)
 
+from core.conversation_state import get_state, set_state, clear_state
+import core.intent_handlers as handlers
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.chat_id
-    if user_id == EMPLOYEE_CHAT_ID:
-        await update.message.reply_text(
-            "Hello Asif! 👋\nDin kaisa ja raha hai? \nUpdate format: 'Project Task 50% done, blocker'"
-        )
-    else:
-        await update.message.reply_text("Welcome Kanav. You will receive automated 6 PM reports here.")
+    clear_state(user_id)
+    await handlers.handle_greeting({}, user_id, {}, update.message.reply_text)
 
 async def handle_employee_update(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.chat_id
