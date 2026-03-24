@@ -105,7 +105,7 @@ if __name__ == '__main__':
     import pytz
     
     logging.info("Starting GEI Telegram Bot in polling mode...")
-    
+    time.sleep(10)
     # Schedule the 6 PM daily report for Kanav
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
