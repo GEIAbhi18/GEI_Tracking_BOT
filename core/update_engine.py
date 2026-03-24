@@ -32,7 +32,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
 
     # 2.5 Intercept specific commands and regexes before LLM
     import re
-    match_reply = re.match(r'^(\d+)\.\s*(.+)$', text.strip())
+    match_reply = re.match(r'^Ticket\s*(\d+)\.\s*(.+)$', text.strip(), re.IGNORECASE)
     match_close = re.match(r'^close Ticket\s*(\d+)$', text.strip(), re.IGNORECASE)
     
     if match_close:
@@ -47,10 +47,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     stripped_lower = text.strip().lower()
     
     # 2.6 Kanav specific notification ping request
-    if "ask asif" in stripped_lower or "ask for update" in stripped_lower:
-        await send_reply_func(text="Update request sent to Asif. ✅")
-        # pinging asif globally (123456789 is asif's id)
-        await send_reply_func(text="🔔 Kanav is asking for your current update.\nPlease run /update_task to submit your progress.", target_user_id=123456789)
+    if "ask asif" in stripped_lower or "ask for update" in stripped_lower or stripped_lower == "/ask_asif":
+        await handlers.handle_ask_asif({}, user_id, context, send_reply_func)
         return
 
     if stripped_lower in ["complete task", "/complete_task"]:
@@ -151,11 +149,11 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
 
     # 5. Intent Router / Handlers
     if intent == "task_update":
-        await handlers.handle_task_update(parsed, user_id, context, send_reply_func)
+        await handlers.handle_task_update(parsed, user_id, context, send_reply_func, images=images)
     elif intent == "complete_task":
-        await handlers.handle_complete_task(parsed, user_id, context, send_reply_func)
+        await handlers.handle_complete_task(parsed, user_id, context, send_reply_func, images=images)
     elif intent == "add_blocker":
-        await handlers.handle_add_blocker(parsed, user_id, context, send_reply_func)
+        await handlers.handle_add_blocker(parsed, user_id, context, send_reply_func, images=images)
     elif intent == "remove_blocker":
         await handlers.handle_remove_blocker(parsed, user_id, context, send_reply_func)
     elif intent == "list_tasks" or intent == "query_tasks":
@@ -166,6 +164,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_greeting(parsed, user_id, context, send_reply_func)
     elif intent == "view_tickets":
         await handlers.handle_view_tickets(parsed, user_id, context, send_reply_func)
+    elif intent == "reply_ticket":
+        await handlers.handle_reply_ticket(parsed, user_id, context, send_reply_func)
     elif intent == "view_projects":
         await handlers.handle_view_projects(parsed, user_id, context, send_reply_func)
     elif intent == "request_report" or intent == "get_report":
@@ -204,7 +204,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and t['projects']['id'] == match['id']]
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
             else:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
                 
@@ -252,7 +252,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and t['projects']['id'] == match['id']]
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
             else:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
                 
@@ -295,7 +295,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and t['projects']['id'] == match['id']]
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
             else:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
                 
@@ -315,7 +315,19 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             tq = text.strip()
             if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
                 tq = t_map[int(tq) - 1]
-            await handlers.perform_update(tq, "100", user_id, send_reply_func)
+            
+            # Now ask for proof instead of finishing
+            state["task_query"] = tq
+            state["step"] = "waiting_for_proof"
+            set_state(user_id, state)
+            await send_reply_func(f"Please upload an image proof to mark '{tq}' as complete.")
+            
+        elif step == "waiting_for_proof":
+            if not images:
+                await send_reply_func("Please upload an actual image as proof.")
+                return
+            tq = state.get("task_query")
+            await handlers.perform_update(tq, "100", user_id, send_reply_func, images=images)
             clear_state(user_id)
 
     elif action == "create_ticket":
@@ -334,11 +346,13 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
                 
             u_info = get_user_by_telegram_id(user_id)
-            if match and u_info:
+            if not match:
+                await send_reply_func("Failed to create ticket. Project not found.")
+            elif not u_info:
+                await send_reply_func(f"Employee/User with Telegram ID {user_id} not found in database. Please contact admin to register your device before raising tickets.")
+            else:
                 create_ticket(u_info['id'], match['id'], message=text)
                 await send_reply_func(f"✅ Ticket raised for project '{match['name']}'.")
-            else:
-                await send_reply_func("Failed to create ticket. Project not found.")
             clear_state(user_id)
 
     elif action == "create_project":

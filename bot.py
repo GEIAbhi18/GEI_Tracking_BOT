@@ -9,6 +9,8 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram").setLevel(logging.WARNING)
 # You can switch these comments out while testing locally
 # TEST_USER_ID = 123456789 # Asif Temp ID
 # TEST_USER_ID = 987654321 # Kanav Temp ID
@@ -108,5 +110,4 @@ if __name__ == '__main__':
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
-    
     application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)

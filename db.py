@@ -113,8 +113,8 @@ def get_open_tickets():
     response = supabase.table("tickets").select("*, projects(name), tasks(name), users!created_by(name)").eq("status", "open").execute()
     result = []
     for t in response.data:
-        msgs = supabase.table("ticket_messages").select("message_text").eq("ticket_id", t["id"]).order("timestamp", desc=False).execute()
-        t["messages"] = [m["message_text"] for m in msgs.data] if msgs.data else []
+        msgs = supabase.table("ticket_messages").select("message_text, users!sender_id(name)").eq("ticket_id", t["id"]).order("timestamp", desc=False).execute()
+        t["messages"] = [f"{m['users']['name']}: {m['message_text']}" for m in msgs.data] if msgs.data else []
         result.append(t)
     return result
 

@@ -1,5 +1,6 @@
 import logging
 import json
+import re
 from db import (
     get_all_tasks, save_update, create_ticket, get_user_by_telegram_id, 
     get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers,
@@ -10,7 +11,7 @@ from core.context_manager import update_context, get_context
 
 logger = logging.getLogger(__name__)
 
-async def handle_task_update(entities, user_id, context, send_reply_func):
+async def handle_task_update(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
     progress = entities.get("progress")
     
@@ -23,15 +24,30 @@ async def handle_task_update(entities, user_id, context, send_reply_func):
         p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
         await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
+
+    # Check if task_name is actually a project name
+    projects = get_projects()
+    project_match = next((p for p in projects if p['name'].lower() == task_name.lower()), None)
+    if project_match:
+        from db import get_all_tasks
+        tasks = get_all_tasks()
+        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        if not p_tasks:
+            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            return
+        tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+        set_state(user_id, {"action": "update_task", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
+        await send_reply_func(f"Which task in '{project_match['name']}' do you want to update? (Type the number)\n\n{tasks_msg}")
+        return
     
     if not progress:
         set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": task_name})
         await send_reply_func(f"What is the progress % for '{task_name}'?")
         return
 
-    await perform_update(task_name, progress, user_id, send_reply_func)
+    await perform_update(task_name, progress, user_id, send_reply_func, images=images)
 
-async def handle_complete_task(entities, user_id, context, send_reply_func):
+async def handle_complete_task(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
     
     if not task_name and context.get("recent_task_name"):
@@ -44,9 +60,30 @@ async def handle_complete_task(entities, user_id, context, send_reply_func):
         await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
 
-    await perform_update(task_name, "100", user_id, send_reply_func)
+    # Check if task_name is actually a project name
+    projects = get_projects()
+    project_match = next((p for p in projects if p['name'].lower() == task_name.lower()), None)
+    if project_match:
+        from db import get_all_tasks
+        tasks = get_all_tasks()
+        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        if not p_tasks:
+            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            return
+        tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+        set_state(user_id, {"action": "complete_task", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
+        await send_reply_func(f"Which task in '{project_match['name']}' should I complete? (Type the number)\n\n{tasks_msg}")
+        return
 
-async def handle_add_blocker(entities, user_id, context, send_reply_func):
+    # Require proof for completion
+    if not images:
+        set_state(user_id, {"action": "complete_task", "step": "waiting_for_proof", "task_query": task_name})
+        await send_reply_func(f"Please upload an image proof to mark '{task_name}' as complete.")
+        return
+
+    await perform_update(task_name, "100", user_id, send_reply_func, images=images)
+
+async def handle_add_blocker(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
     blocker_text = entities.get("blocker_description") or entities.get("blocker_name")
 
@@ -59,13 +96,28 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func):
         p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
         await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
+
+    # Check if task_name is actually a project name
+    projects = get_projects()
+    project_match = next((p for p in projects if p['name'].lower() == task_name.lower()), None)
+    if project_match:
+        from db import get_all_tasks
+        tasks = get_all_tasks()
+        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        if not p_tasks:
+            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            return
+        tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
+        await send_reply_func(f"Which task in '{project_match['name']}' is blocked? (Type the number)\n\n{tasks_msg}")
+        return
     
     if not blocker_text:
         set_state(user_id, {"action": "add_blocker", "step": "waiting_for_description", "task_query": task_name})
         await send_reply_func(f"What is the issue holding up '{task_name}'?")
         return
 
-    await perform_add_blocker(task_name, blocker_text, user_id, send_reply_func)
+    await perform_add_blocker(task_name, blocker_text, user_id, send_reply_func, images=images)
 
 async def handle_remove_blocker(entities, user_id, context, send_reply_func):
     task_name = entities.get("task_name")
@@ -264,6 +316,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         return
         
     msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
+    update_context(user_id, last_task_list=[t['id'] for t in filtered])
     await send_reply_func(msg)
 
 async def handle_query_blockers(entities, user_id, context, send_reply_func):
@@ -299,13 +352,11 @@ async def handle_view_tickets(entities, user_id, context, send_reply_func):
         p_name = t['projects']['name'] if t.get('projects') else 'Unknown'
         t_name = t['tasks']['name'] if t.get('tasks') else 'Unknown'
         u_name = t['users']['name'] if t.get('users') else 'Unknown'
-        issue_text = "No messages"
-        if t.get("messages"):
-            issue_text = t["messages"][0]
+        issue_text = "\n     ".join(t["messages"]) if t.get("messages") else "No messages"
             
         msg += f"{idx + 1}. *Project: {p_name}*\n   Task: {t_name}\n   By: {u_name}\n   Issue: {issue_text}\n\n"
         
-    msg += "*To reply, type:* '1. Working on it'\n*To close type* 'close Ticket 1'"
+    msg += "*To reply, type:* 'Ticket 1. Working on it'\n*To close type* 'close Ticket 1'"
     await send_reply_func(msg)
 
 async def handle_reply_ticket(entities, user_id, context, send_reply_func):
@@ -320,7 +371,7 @@ async def handle_reply_ticket(entities, user_id, context, send_reply_func):
             add_ticket_message(target_ticket['id'], u_info['id'], reply_msg)
             await send_reply_func(f"✅ Reply added to Ticket {ticket_index}.")
         else:
-            await send_reply_func("User error.")
+            await send_reply_func(f"Employee/User with Telegram ID {user_id} not found in database. Please contact admin to register your device.")
     else:
         await send_reply_func(f"Ticket {ticket_index} not found.")
 
@@ -406,6 +457,36 @@ def generate_pdf_report():
     pdf.output(filepath)
     return filepath
 
+async def handle_ask_asif(entities, user_id, context, send_reply_func):
+    from db import supabase, get_all_tasks
+    
+    # Find Asif's data
+    asif_data = supabase.table("users").select("telegram_id, id").eq("name", "Asif").execute().data
+    if not asif_data or not asif_data[0].get('telegram_id'):
+        await send_reply_func("Could not find Asif in database.")
+        return
+        
+    asif_tid = asif_data[0]['telegram_id']
+    asif_uuid = asif_data[0]['id']
+    
+    # Get Asif's pending tasks
+    tasks = get_all_tasks()
+    asif_tasks = [t for t in tasks if (t.get('assigned_to') == asif_uuid or not t.get('assigned_to')) and t['status'] != 'completed']
+    
+    if not asif_tasks:
+        await send_reply_func("Asif has no pending tasks currently.")
+        return
+
+    # Build report-like task list
+    task_list_str = build_grouped_tasks_list_py(asif_tasks)
+    
+    # Send message to Asif
+    asif_msg = f"🔔 *Kanav is asking for your current update. Here are your tasks:*\n\n{task_list_str}\n\n/update_task"
+    await send_reply_func(text=asif_msg, target_user_id=asif_tid)
+    
+    # Confirm to Kanav
+    await send_reply_func("Update request sent to Asif. ✅")
+
 async def handle_request_report(entities, user_id, context, send_reply_func):
     filepath = generate_pdf_report()
     await send_reply_func(text="Here is your detailed daily report.", document=filepath)
@@ -467,7 +548,7 @@ async def handle_greeting(entities, user_id, context, send_reply_func):
     
     msg = f"Hi {name}, What can I help you with?\n\n🤖 Available Commands:\n"
     if role == 'director':
-        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /view_tickets\n• /help"
+        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /view_tickets\n• /ask_asif\n• /help"
     else:
         msg += "• /update_task\n• /raise_ticket\n• /view_tickets\n• /create_task\n• /create_project\n• /help"
     
@@ -491,9 +572,27 @@ async def handle_clarify(entities, user_id, context, send_reply_func):
 
 # --- Helper Performers ---
 
-async def perform_update(task_query, progress_str, user_id, send_reply_func):
+async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None):
+    from core.context_manager import get_context
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    
     tasks = get_all_tasks()
-    match = next((t for t in tasks if task_query.lower() in t['name'].lower()), None)
+    match = None
+    
+    # Try index matching if it looks like a number
+    import re
+    m = re.search(r'(\d+)', str(task_query))
+    if m and ("task" in str(task_query).lower() or str(task_query).isdigit()):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(last_list):
+            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
+
+    if not match:
+        # Resolve by name (stripping 'task ' prefix)
+        sq = str(task_query).lower()
+        if sq.startswith("task "): sq = sq[5:].strip()
+        match = next((t for t in tasks if sq in t['name'].lower()), None)
     
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
@@ -507,16 +606,33 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func):
     u_info = get_user_by_telegram_id(user_id)
     emp_uuid = u_info['id'] if u_info else None
     
-    save_update(match['id'], progress, "None", [], emp_uuid)
+    save_update(match['id'], progress, "None", images or [], emp_uuid)
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
     
-    await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%")
+    proof_msg = f"Proof: [Image]" if images else ""
+    await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}% {proof_msg}")
 
-async def perform_add_blocker(task_query, description, user_id, send_reply_func):
+async def perform_add_blocker(task_query, description, user_id, send_reply_func, images=None):
+    from core.context_manager import get_context
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    
     tasks = get_all_tasks()
-    match = next((t for t in tasks if task_query.lower() in t['name'].lower()), None)
+    match = None
+    
+    import re
+    m = re.search(r'(\d+)', str(task_query))
+    if m and ("task" in str(task_query).lower() or str(task_query).isdigit()):
+        idx = int(m.group(1)) - 1
+        if 0 <= idx < len(last_list):
+            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
+
+    if not match:
+        sq = str(task_query).lower()
+        if sq.startswith("task "): sq = sq[5:].strip()
+        match = next((t for t in tasks if sq in t['name'].lower()), None)
     
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
@@ -526,7 +642,7 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func)
     
     # Also log an update in history
     u_info = get_user_by_telegram_id(user_id)
-    save_update(match['id'], match.get('progress', 0), description, [], u_info['id'] if u_info else None)
+    save_update(match['id'], match.get('progress', 0), description, images or [], u_info['id'] if u_info else None)
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_blocker")
