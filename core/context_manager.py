@@ -12,11 +12,12 @@ def get_context(user_id):
             "recent_task_id": None,
             "recent_task_name": None,
             "messages": [],
-            "last_command": None
+            "last_command": None,
+            "last_task_list": []
         }
     return _contexts[user_id]
 
-def update_context(user_id, task_id=None, task_name=None, message=None, last_command=None):
+def update_context(user_id, task_id=None, task_name=None, message=None, last_command=None, **kwargs):
     """Update context with new data."""
     ctx = get_context(user_id)
     
@@ -26,6 +27,9 @@ def update_context(user_id, task_id=None, task_name=None, message=None, last_com
         ctx["recent_task_name"] = task_name
     if last_command:
         ctx["last_command"] = last_command
+        
+    for key, value in kwargs.items():
+        ctx[key] = value
         
     if message:
         ctx["messages"].append(message)
