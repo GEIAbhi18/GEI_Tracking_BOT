@@ -6,6 +6,7 @@ from core.context_manager import get_context, update_context
 from core.message_parser import parse_message as rule_based_parse_message
 import core.intent_handlers as handlers
 from db import get_all_tasks, get_projects, get_user_by_telegram_id, create_ticket
+from core.utils import parse_human_date, resolve_project, resolve_task_from_list
 
 logger = logging.getLogger(__name__)
 
@@ -210,18 +211,13 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             
             projects = get_projects()
-            match = None
-            pq = text.strip()
-            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
-                match = projects[int(pq) - 1]
-            else:
-                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+            match = resolve_project(text, projects)
                 
             tasks = get_all_tasks()
             if match:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -234,13 +230,12 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             await send_reply_func(f"Which task is blocked? (Type the number)\n\n{tasks_msg}")
         elif step == "waiting_for_task":
             t_map = state.get("_task_map", [])
-            tq = text.strip()
-            if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
-                tq = t_map[int(tq) - 1]
-            state["task_query"] = tq
+            tq = resolve_task_from_list(text, [{"name": n} for n in t_map])
+            t_name = tq['name'] if tq else text.strip()
+            state["task_query"] = t_name
             state["step"] = "waiting_for_description"
             set_state(user_id, state)
-            await send_reply_func(f"What is the issue holding up '{tq}'?")
+            await send_reply_func(f"What is the issue holding up '{t_name}'?")
         elif step == "waiting_for_description":
             task_query = state.get("task_query")
             await handlers.perform_add_blocker(task_query, text, user_id, send_reply_func)
@@ -277,18 +272,13 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             
             projects = get_projects()
-            match = None
-            pq = text.strip()
-            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
-                match = projects[int(pq) - 1]
-            else:
-                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+            match = resolve_project(text, projects)
                 
             tasks = get_all_tasks()
             if match:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -301,9 +291,8 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             await send_reply_func(f"Which task do you want to update? (Type the number)\n\n{tasks_msg}")
         elif step == "waiting_for_task":
             t_map = state.get("_task_map", [])
-            tq = text.strip()
-            if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
-                tq = t_map[int(tq) - 1]
+            tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
+            tq = tq_obj['name'] if tq_obj else text.strip()
             state["task_query"] = tq
             state["step"] = "waiting_for_progress"
             set_state(user_id, state)
@@ -321,18 +310,13 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             
             projects = get_projects()
-            match = None
-            pq = text.strip()
-            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
-                match = projects[int(pq) - 1]
-            else:
-                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+            match = resolve_project(text, projects)
                 
             tasks = get_all_tasks()
             if match:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and pq.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -347,9 +331,8 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
         elif step == "waiting_for_task":
             t_map = state.get("_task_map", [])
-            tq = text.strip()
-            if tq.isdigit() and 0 <= int(tq) - 1 < len(t_map):
-                tq = t_map[int(tq) - 1]
+            tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
+            tq = tq_obj['name'] if tq_obj else text.strip()
             
             # Now ask for proof instead of finishing
             state["task_query"] = tq
@@ -372,13 +355,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             await send_reply_func("What is the issue or concern?")
         elif step == "waiting_for_description":
-            project_query = state.get("project_query", "")
             pq = project_query.strip()
             projects = get_projects()
-            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
-                match = projects[int(pq) - 1]
-            else:
-                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+            match = resolve_project(pq, projects)
                 
             u_info = get_user_by_telegram_id(user_id)
             if not match:
@@ -416,34 +395,17 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             deadline = text
             pq = project_query.strip()
             projects = get_projects()
-            if pq.isdigit() and 0 <= int(pq) - 1 < len(projects):
-                match = projects[int(pq) - 1]
-            else:
-                match = next((p for p in projects if pq.lower() in p['name'].lower()), None)
+            match = resolve_project(pq, projects)
                 
             if match:
                 from db import add_task
-                from datetime import datetime, timedelta
                 
-                # Simple Natural Language Date Parser
-                parsed_deadline = deadline
-                dl_lower = deadline.lower()
-                today = datetime.now()
-                
-                if dl_lower == "today":
-                    parsed_deadline = today.strftime("%Y-%m-%d")
-                elif dl_lower == "tomorrow":
-                    parsed_deadline = (today + timedelta(days=1)).strftime("%Y-%m-%d")
-                elif "day" in dl_lower and ("from now" in dl_lower or "from today" in dl_lower):
-                    import re
-                    m = re.search(r'(\d+)', dl_lower)
-                    if m:
-                        days = int(m.group(1))
-                        parsed_deadline = (today + timedelta(days=days)).strftime("%Y-%m-%d")
+                # Use robust Human Date Parser
+                parsed_deadline = parse_human_date(deadline)
                 
                 result = add_task(match['id'], task_name, parsed_deadline)
                 if result:
-                    await send_reply_func(f"Task '{task_name}' created successfully for project '{match['name']}'! ✅")
+                    await send_reply_func(f"Task '{task_name}' created successfully for project '{match['name']}'! ✅\nDeadline: {parsed_deadline}")
                 else:
                     await send_reply_func(f"Sorry, I couldn't save the task '{task_name}'. Please check the format and try again.")
             else:

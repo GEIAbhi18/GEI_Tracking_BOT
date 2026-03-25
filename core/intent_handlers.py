@@ -8,6 +8,7 @@ from db import (
 )
 from core.conversation_state import set_state, clear_state
 from core.context_manager import update_context, get_context
+from core.utils import parse_human_date, resolve_project, resolve_task_from_list
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
 
     # Check if task_name is actually a project name
     projects = get_projects()
-    project_match = next((p for p in projects if p['name'].lower() == task_name.lower()), None)
+    project_match = resolve_project(task_name, projects)
     if project_match:
         from db import get_all_tasks
         tasks = get_all_tasks()
@@ -40,7 +41,8 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
         await send_reply_func(f"Which task in '{project_match['name']}' do you want to update? (Type the number)\n\n{tasks_msg}")
         return
     
-    deadline = entities.get("deadline")
+    deadline_raw = entities.get("deadline")
+    deadline = parse_human_date(deadline_raw) if deadline_raw else None
     
     # If deadline is provided but no progress, we still want to update the deadline
     if not progress and not deadline:
@@ -65,7 +67,7 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
 
     # Check if task_name is actually a project name
     projects = get_projects()
-    project_match = next((p for p in projects if p['name'].lower() == task_name.lower()), None)
+    project_match = resolve_project(task_name, projects)
     if project_match:
         from db import get_all_tasks
         tasks = get_all_tasks()
@@ -79,18 +81,11 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
         return
 
     # Resolve task_name if it's a number from a list
-    resolved_name = task_name
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
-    import re
-    m = re.search(r'(\d+)', str(task_name))
-    if m and ("task" in str(task_name).lower() or str(task_name).isdigit()):
-        idx = int(m.group(1)) - 1
-        if 0 <= idx < len(last_list):
-            tasks = get_all_tasks()
-            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
-            if match:
-                resolved_name = match['name']
+    tasks = get_all_tasks()
+    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list)
+    resolved_name = match['name'] if match else task_name
 
     # Require proof for completion
     if not images:
@@ -116,7 +111,7 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
 
     # Check if task_name is actually a project name
     projects = get_projects()
-    project_match = next((p for p in projects if p['name'].lower() == task_name.lower()), None)
+    project_match = resolve_project(task_name, projects)
     if project_match:
         from db import get_all_tasks
         tasks = get_all_tasks()
@@ -130,18 +125,11 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
         return
     
     # Resolve task_name if it's a number from a list
-    resolved_name = task_name
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
-    import re
-    m = re.search(r'(\d+)', str(task_name))
-    if m and ("task" in str(task_name).lower() or str(task_name).isdigit()):
-        idx = int(m.group(1)) - 1
-        if 0 <= idx < len(last_list):
-            tasks = get_all_tasks()
-            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
-            if match:
-                resolved_name = match['name']
+    tasks = get_all_tasks()
+    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list)
+    resolved_name = match['name'] if match else task_name
 
     if not blocker_text:
         set_state(user_id, {"action": "add_blocker", "step": "waiting_for_description", "task_query": resolved_name})
@@ -196,17 +184,15 @@ def filter_tasks(tasks, filters):
     inc_no_dl = filters.get("include_no_deadline")
     
     if rge:
-        def parse_date(date_str):
+        def parse_date_internal(date_str):
             if not date_str: return None
-            try:
-                # expecting something like ISO format or YYYY-MM-DD
-                return datetime.fromisoformat(date_str.split('T')[0]).date()
-            except:
+            parsed = parse_human_date(date_str)
+            if parsed:
                 try:
-                    from dateutil.parser import parse
-                    return parse(date_str).date()
+                    return datetime.strptime(parsed, "%Y-%m-%d").date()
                 except:
                     return None
+            return None
                     
         new_filtered = []
         for t in filtered:
@@ -215,7 +201,8 @@ def filter_tasks(tasks, filters):
                 if inc_no_dl: new_filtered.append(t)
                 continue
                 
-            dl_date = parse_date(dl_str)
+            # Use renamed internal function
+            dl_date = parse_date_internal(dl_str)
             if not dl_date:
                 continue
                 
@@ -232,8 +219,8 @@ def filter_tasks(tasks, filters):
                 if today <= dl_date <= today + timedelta(days=7):
                     new_filtered.append(t)
             elif rge == "custom_range":
-                sd = parse_date(filters.get("start_date"))
-                ed = parse_date(filters.get("end_date"))
+                sd = parse_date_internal(filters.get("start_date"))
+                ed = parse_date_internal(filters.get("end_date"))
                 if sd and ed and (sd <= dl_date <= ed):
                     new_filtered.append(t)
             else:
@@ -649,26 +636,10 @@ async def handle_clarify(entities, user_id, context, send_reply_func):
 # --- Helper Performers ---
 
 async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None, deadline=None):
-    from core.context_manager import get_context
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
-    
     tasks = get_all_tasks()
-    match = None
-    
-    # Try index matching if it looks like a number
-    import re
-    m = re.search(r'(\d+)', str(task_query))
-    if m and ("task" in str(task_query).lower() or str(task_query).isdigit()):
-        idx = int(m.group(1)) - 1
-        if 0 <= idx < len(last_list):
-            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
-
-    if not match:
-        # Resolve by name (stripping 'task ' prefix)
-        sq = str(task_query).lower()
-        if sq.startswith("task "): sq = sq[5:].strip()
-        match = next((t for t in tasks if sq in t['name'].lower()), None)
+    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list)
     
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
@@ -697,24 +668,10 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%{dl_msg}\n{proof_msg}")
 
 async def perform_add_blocker(task_query, description, user_id, send_reply_func, images=None):
-    from core.context_manager import get_context
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
-    
     tasks = get_all_tasks()
-    match = None
-    
-    import re
-    m = re.search(r'(\d+)', str(task_query))
-    if m and ("task" in str(task_query).lower() or str(task_query).isdigit()):
-        idx = int(m.group(1)) - 1
-        if 0 <= idx < len(last_list):
-            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
-
-    if not match:
-        sq = str(task_query).lower()
-        if sq.startswith("task "): sq = sq[5:].strip()
-        match = next((t for t in tasks if sq in t['name'].lower()), None)
+    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list)
     
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
@@ -736,22 +693,8 @@ async def perform_remove_blocker(task_query, user_id, send_reply_func):
     
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
-    
     tasks = get_all_tasks()
-    match = None
-    
-    # Numeric index matching
-    import re
-    m = re.search(r'(\d+)', str(task_query))
-    if m and ("task" in str(task_query).lower() or str(task_query).isdigit()):
-        idx = int(m.group(1)) - 1
-        if 0 <= idx < len(last_list):
-            match = next((t for t in tasks if t['id'] == last_list[idx]), None)
-            
-    if not match:
-        sq = str(task_query).lower()
-        if sq.startswith("task "): sq = sq[5:].strip()
-        match = next((t for t in tasks if sq in t['name'].lower()), None)
+    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list)
         
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
