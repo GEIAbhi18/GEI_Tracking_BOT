@@ -165,7 +165,10 @@ def filter_tasks(tasks, filters):
     from datetime import datetime, timedelta
     
     # Simple naive date for comparison matching JS
-    today = datetime.now().date()
+    import pytz
+    from config import TIMEZONE
+    tz = pytz.timezone(TIMEZONE)
+    today = datetime.now(tz).date()
     
     status = filters.get("status")
     if status == "completed":
@@ -186,12 +189,23 @@ def filter_tasks(tasks, filters):
     if rge:
         def parse_date_internal(date_str):
             if not date_str: return None
+            # If it's already an ISO string with T, extract the date part
+            if "T" in date_str:
+                date_str = date_str.split("T")[0]
+            elif " " in date_str and len(date_str) > 10:
+                date_str = date_str.split(" ")[0]
+                
             parsed = parse_human_date(date_str)
             if parsed:
                 try:
+                    # Try YYYY-MM-DD
                     return datetime.strptime(parsed, "%Y-%m-%d").date()
                 except:
-                    return None
+                    try:
+                        # Try ISO-like if needed
+                        return datetime.fromisoformat(parsed.replace('Z', '+00:00')).date()
+                    except:
+                        return None
             return None
                     
         new_filtered = []
@@ -201,13 +215,15 @@ def filter_tasks(tasks, filters):
                 if inc_no_dl: new_filtered.append(t)
                 continue
                 
-            # Use renamed internal function
             dl_date = parse_date_internal(dl_str)
             if not dl_date:
+                # If we can't parse it, skip for range filters
                 continue
                 
             if rge == "overdue":
-                if dl_date < today and t.get("status") != "completed":
+                # Overdue means deadline passed AND it's not completed
+                # Use today (local)
+                if dl_date < today and str(t.get("status")).lower() != "completed":
                     new_filtered.append(t)
             elif rge == "today":
                 if dl_date == today:
@@ -216,13 +232,23 @@ def filter_tasks(tasks, filters):
                 if dl_date == today + timedelta(days=1):
                     new_filtered.append(t)
             elif rge == "this_week":
-                if today <= dl_date <= today + timedelta(days=7):
+                # Next 7 days
+                if today <= dl_date <= (today + timedelta(days=7)):
                     new_filtered.append(t)
             elif rge == "custom_range":
-                sd = parse_date_internal(filters.get("start_date"))
-                ed = parse_date_internal(filters.get("end_date"))
-                if sd and ed and (sd <= dl_date <= ed):
-                    new_filtered.append(t)
+                sd_str = filters.get("start_date")
+                ed_str = filters.get("end_date")
+                sd = parse_date_internal(sd_str)
+                ed = parse_date_internal(ed_str)
+                if sd and ed:
+                    if sd <= dl_date <= ed:
+                        new_filtered.append(t)
+                elif sd: # Only start date
+                    if dl_date >= sd:
+                        new_filtered.append(t)
+                elif ed: # Only end date
+                    if dl_date <= ed:
+                        new_filtered.append(t)
             else:
                 new_filtered.append(t)
         filtered = new_filtered

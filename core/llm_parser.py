@@ -23,26 +23,22 @@ ALLOWED INTENTS:
 * complete_task: To mark a task as finished
 * add_blocker: To report a new blocker/issue
 * remove_blocker: To resolve an existing blocker
-* query_tasks: To list, find, or search tasks by date (e.g., "today", "this week", "overdue"), status (pending, finished), or blockers. Use this heavily instead of greeting.
+* query_tasks: To list, find, or search tasks. Use this for ALL task listing requests by date, status, or blockers.
 * query_blockers: To see current blockers
-* greeting: For simple greetings (e.g. "hi", "hello")
+* greeting: For simple greetings
 * create_task: For adding new tasks
-* create_ticket: For raising issues/concerns
-* reply_ticket: For responding to an existing ticket by number
-* close_ticket: For resolving/closing a ticket
-* assign_task: For assigning a task to someone
-* request_report: For daily summaries/PDFs
+* create_project: For adding new projects
+* create_ticket: For raising issues
 * view_projects: For listing projects
 * view_tickets: For showing open tickets
-* task_details: For full dates/details of a specific task
-* help: For assistance or commands
-* clarify: If the message is ambiguous (formerly unknown)
+* help: For assistance
 
-CONSTRAINTS:
-* Output must be valid JSON only
-* Do not include any explanation text
-* If uncertain, return intent = "clarify"
-* Always include a confidence score between 0 and 1
+FILTER RULES:
+* range: MUST be one of "overdue", "today", "tomorrow", "this_week", "custom_range", or "all" (default)
+* status: MUST be one of "pending", "completed", or "all" (default)
+* Use "pending" for: "ongoing", "in progress", "incomplete", "unfinished"
+* Use "completed" for: "finished", "done", "closed", "marked as complete"
+* Use "overdue" for: "delayed", "late", "behind schedule"
 
 FEW-SHOT EXAMPLES:
 Example 1:
@@ -54,35 +50,51 @@ User: "add blocker no material found"
 Output: {"intent": "add_blocker", "blocker_text": "no material found", "confidence": 0.9}
 
 Example 3:
-User: "show my tasks"
-Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": null, "status": "pending"}}
-
-Example 4:
 User: "Top Terrace waterproofing 60%"
 Output: {"intent": "task_update", "project_name": "Top Terrace", "progress": 60, "confidence": 0.92}
+
+Example 4:
+User: "show my tasks"
+Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": "all", "status": "pending"}}
 
 Example 5:
 User: "overdue tasks with blockers"
 Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "overdue", "has_blockers": true}}
 
+Example 6:
+User: "show completed tasks"
+Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "status": "completed"}}
+
+Example 7:
+User: "which tasks are in progress"
+Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "status": "pending"}}
+
+Example 8:
+User: "show tasks from 10 Mar to 25 Mar"
+Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": "custom_range", "start_date": "10 Mar", "end_date": "25 Mar"}}
+
+Example 9:
+User: "show tasks due today"
+Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "today"}}
+
+Example 10:
+User: "which tasks are blocked"
+Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "has_blockers": true}}
+
 OUTPUT FORMAT:
 {
-"intent": "",
-"task_reference": "",
-"project_name": "",
+"intent": "intent_here",
+"task_reference": "task name if any",
+"project_name": "project name if any",
 "progress": null,
-"blocker_text": "",
-"deadline": "",
-"confidence": 0.0,
+"blocker_text": "blocker text if any",
+"confidence": 1.0,
 "query_filters": {
-  "range": "overdue|today|tomorrow|this_week|custom_range",
-  "start_date": "",
-  "end_date": "",
-  "assignee": "",
+  "range": "overdue|today|tomorrow|this_week|custom_range|all",
+  "start_date": null,
+  "end_date": null,
   "status": "pending|completed|all",
-  "has_blockers": false,
-  "progress_lt": null,
-  "include_no_deadline": false
+  "has_blockers": false
 }
 }
 """

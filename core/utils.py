@@ -79,6 +79,32 @@ def parse_human_date(date_text: str) -> str:
             return f"{match_ddmm.group(3)}-{int(match_ddmm.group(2)):02d}-{int(match_ddmm.group(1)):02d}"
         except: pass
 
+    # Month Names Support
+    months_map = {
+        "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6,
+        "jul": 7, "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12,
+        "january": 1, "february": 2, "march": 3, "april": 4, "june": 6,
+        "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
+    }
+    
+    # DD Month (e.g. 11 Mar, 11 March)
+    match_dd_month = re.search(r'\b(\d{1,2})\s+([a-z]{3,})\b', text)
+    if match_dd_month:
+        d = int(match_dd_month.group(1))
+        m_str = match_dd_month.group(2)
+        if m_str in months_map:
+            m = months_map[m_str]
+            return f"{today.year}-{m:02d}-{d:02d}"
+
+    # Month DD (e.g. Mar 11, March 11)
+    match_month_dd = re.search(r'\b([a-z]{3,})\s+(\d{1,2})\b', text)
+    if match_month_dd:
+        m_str = match_month_dd.group(1)
+        d = int(match_month_dd.group(2))
+        if m_str in months_map:
+            m = months_map[m_str]
+            return f"{today.year}-{m:02d}-{d:02d}"
+
     # DD-MM (assumes current year)
     match_short = re.search(r'\b(\d{1,2})[-/](\d{1,2})\b', text)
     if match_short:
