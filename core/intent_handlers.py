@@ -4,7 +4,7 @@ import re
 from db import (
     get_all_tasks, save_update, create_ticket, get_user_by_telegram_id, 
     get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers,
-    get_open_tickets
+    get_open_tickets, get_user_by_name
 )
 from core.conversation_state import set_state, clear_state
 from core.context_manager import update_context, get_context
@@ -45,10 +45,26 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
     deadline = parse_human_date(deadline_raw) if deadline_raw else None
     
     # If deadline is provided but no progress, we still want to update the deadline
-    if not progress and not deadline:
+    if progress is None and not deadline:
         set_state(user_id, {"action": "update_task", "step": "waiting_for_progress", "task_query": task_name, "deadline": deadline})
         await send_reply_func(f"What is the progress % for '{task_name}'?")
         return
+
+    # Check for 100% completion - Require proof
+    try:
+        if progress is not None and int(str(progress).replace('%','')) >= 100 and not images:
+            # Resolve task_name if it's a number from a list
+            ctx = get_context(user_id)
+            last_list = ctx.get('last_task_list', [])
+            tasks = get_all_tasks()
+            match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list)
+            resolved_name = match['name'] if match else task_name
+            
+            set_state(user_id, {"action": "update_task", "step": "waiting_for_proof", "task_query": resolved_name, "progress": "100", "deadline": deadline})
+            await send_reply_func(f"Please upload an image proof to mark '{resolved_name}' as 100% complete.")
+            return
+    except:
+        pass
 
     await perform_update(task_name, progress, user_id, send_reply_func, images=images, deadline=deadline)
 
@@ -320,7 +336,9 @@ def build_grouped_tasks_list_py(tasks):
                     dl_str = t['deadline'][:10]
             try:
                 # Cast to int to ensure we handle strings/floats correctly
-                is_done = int(float(prog)) >= 100
+                current_prog = t.get('progress', 0)
+                if current_prog is None: current_prog = 0
+                is_done = int(float(current_prog)) >= 100
             except:
                 is_done = False
                 
@@ -537,44 +555,50 @@ def generate_pdf_report():
     pdf.output(filepath)
     return filepath
 
-async def handle_ask_asif(entities, user_id, context, send_reply_func):
-    from db import supabase, get_all_tasks
+async def handle_trigger_reminder_user(entities, user_id, context, send_reply_func):
+    target_name = entities.get("target_user") or "Asif"
     
     try:
-        # Check if caller is authorized (Kanav)
-        u_info = get_user_by_telegram_id(user_id)
-        if not u_info or u_info.get('role') != 'director':
-            # Optionally check by name if testing from a different ID but wanting to test Asif feature
-            if u_info and u_info['name'] != "Abhijeet": # allow Dev to test if they want
-                pass
-        
-        # Find Asif's data
-        asif_data = supabase.table("users").select("telegram_id, id").eq("name", "Asif").execute().data
-        if not asif_data or not asif_data[0].get('telegram_id'):
-            await send_reply_func("Could not find Asif in database or Asif has no telegram_id.")
+        # 1. Resolve user
+        user = get_user_by_name(target_name)
+        if not user or not user.get('telegram_id'):
+            await send_reply_func(f"User '{target_name}' not found or has no telegram_id.")
             return
             
-        asif_tid = asif_data[0]['telegram_id']
-        asif_uuid = asif_data[0]['id']
+        target_tid = user['telegram_id']
+        target_uuid = user['id']
         
-        tasks = get_all_tasks()
-        asif_tasks = [t for t in tasks if (t.get('assigned_to') == asif_uuid or t.get('assigned_to_user', {}).get('name') == "Asif") and t['status'] != 'completed']
+        # 2. Fetch tasks
+        tasks = get_tasks_for_user(target_uuid)
+        active_tasks = [t for t in tasks if t['status'] != 'completed']
         
-        if not asif_tasks:
-            await send_reply_func("Asif has no pending tasks currently.")
+        if not active_tasks:
+            await send_reply_func(f"'{target_name}' has no ongoing tasks.")
             return
 
-        task_list_str = build_grouped_tasks_list_py(asif_tasks)
+        # 3. Format message
+        msg = f"Hi {user['name']} 👋\nPlease share updates on your ongoing tasks:\n\n"
+        for i, t in enumerate(active_tasks, 1):
+            p_name = t['projects']['name'] if t.get('projects') else "Unknown Project"
+            msg += f"{i}. {t['name']} - {p_name}\n"
+        msg += "\nReply with updates in natural language."
+
+        # 4. Send message to target (Asif) via Telegram
+        await send_reply_func(msg, target_user_id=target_tid)
         
-        # Cross-user message
-        notification = f"🔔 *Kanav is asking for your current update.*\n\n{task_list_str}\n\n/update_task"
-        await send_reply_func(notification, target_user_id=asif_tid)
+        # 5. Context Integration
+        update_context(target_tid, last_prompt="awaiting_updates")
         
-        # Confirm to Kanav
-        await send_reply_func("Sent a reminder to Asif for updates. ✅")
+        # 6. Send confirmation to requester
+        await send_reply_func(f"✅ Reminder sent to {user['name']}")
     except Exception as e:
-        logger.error(f"Error in handle_ask_asif: {e}")
-        await send_reply_func(f"Error processing your request: {e}")
+        logger.error(f"Error in handle_trigger_reminder_user: {e}")
+        await send_reply_func(f"Error: {str(e)}")
+
+async def handle_ask_asif(entities, user_id, context, send_reply_func):
+    # Backward compatibility for direct calls or old routing
+    entities["target_user"] = "Asif"
+    await handle_trigger_reminder_user(entities, user_id, context, send_reply_func)
 
 async def handle_request_report(entities, user_id, context, send_reply_func):
     filepath = generate_pdf_report()

@@ -22,11 +22,20 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
     task_response = supabase.table("tasks").select("created_at, deadline").eq("id", task_id).execute()
     task_data = task_response.data[0] if task_response.data else {}
     
-    task_created_at = datetime.fromisoformat(task_data.get("created_at")) if task_data.get("created_at") else None
+    # Robust date parsing to prevent crashes
+    try:
+        task_created_at = datetime.fromisoformat(task_data.get("created_at").replace('Z', '+00:00')) if task_data.get("created_at") else None
+    except:
+        task_created_at = None
     
     # Use new deadline if provided, else use existing
     final_deadline_str = new_deadline if new_deadline else task_data.get("deadline")
-    task_deadline = datetime.fromisoformat(final_deadline_str) if final_deadline_str else None
+    try:
+        if final_deadline_str and " " in final_deadline_str and len(final_deadline_str) > 10:
+            final_deadline_str = final_deadline_str.split(" ")[0]
+        task_deadline = datetime.fromisoformat(final_deadline_str.replace('Z', '+00:00')) if final_deadline_str and len(str(final_deadline_str)) >= 10 else None
+    except:
+        task_deadline = None
     
     rag_color, _ = calculate_rag(progress, task_created_at, task_deadline, blockers, 0)
     
@@ -40,6 +49,8 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
     }
     if employee_id:
         data["employee_id"] = employee_id
+        # Update last_activity_at for the user even if they are using the simulator
+        supabase.table("users").update({"last_activity_at": datetime.now().isoformat()}).eq("id", employee_id).execute()
         
     response = supabase.table("updates").insert(data).execute()
     
@@ -134,9 +145,31 @@ def get_user_by_telegram_id(tid):
     r = supabase.table("users").select("*").eq("telegram_id", tid).execute()
     return r.data[0] if r.data else None
 
+def update_user_activity(tid):
+    curr = datetime.now().isoformat()
+    # Try updating last_activity_at; if column missing, this will fail gracefully or ignore
+    try:
+        supabase.table("users").update({"last_activity_at": curr}).eq("telegram_id", tid).execute()
+    except Exception as e:
+        import logging
+        logging.warning(f"Could not update last_activity_at: {e}")
+
+def get_user_by_name(name):
+    r = supabase.table("users").select("*").ilike("name", f"%{name}%").execute()
+    return r.data[0] if r.data else None
+
 def get_tasks_for_user(user_uuid):
     response = supabase.table("tasks").select("*, projects(name)").eq("assigned_to", user_uuid).execute()
     return response.data
+
+def get_active_users_with_tasks():
+    # Get users who have pending tasks
+    tasks = supabase.table("tasks").select("assigned_to").neq("status", "completed").execute()
+    uids = list(set([t['assigned_to'] for t in tasks.data if t.get('assigned_to')]))
+    if not uids: return []
+    
+    users = supabase.table("users").select("*").in_("id", uids).execute()
+    return users.data
 
 def complete_task(task_id):
     data = {

@@ -31,6 +31,7 @@ ALLOWED INTENTS:
 * create_ticket: For raising issues
 * view_projects: For listing projects
 * view_tickets: For showing open tickets
+* trigger_reminder_user: To manually ping a user for updates (e.g., "ask asif", "send updates to asif")
 * help: For assistance
 
 FILTER RULES:
@@ -81,11 +82,25 @@ Example 10:
 User: "which tasks are blocked"
 Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "has_blockers": true}}
 
+Example 11:
+User: "ask asif"
+Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
+
+Example 12:
+User: "ask asif for updates"
+Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
+
+Example 13:
+User: "send updates to asif"
+Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
+
 OUTPUT FORMAT:
 {
 "intent": "intent_here",
 "task_reference": "task name if any",
 "project_name": "project name if any",
+"target_user": "user name if any",
+"message_type": "task_update_reminder if applicable",
 "progress": null,
 "blocker_text": "blocker text if any",
 "confidence": 1.0,

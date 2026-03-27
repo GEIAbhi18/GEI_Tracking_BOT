@@ -19,6 +19,10 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     # Update context with raw message
     update_context(user_id, message=text)
     context = get_context(user_id)
+    
+    # Track activity (Feature 2)
+    from db import update_user_activity
+    update_user_activity(user_id)
 
     # 1. Check for command mode (bypass LLM/State)
     if text.startswith('/'):
@@ -57,7 +61,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     
     # 2.6 Kanav specific notification ping request
     if "ask asif" in stripped_lower or "ask for update" in stripped_lower or stripped_lower == "/ask_asif":
-        await handlers.handle_ask_asif({}, user_id, context, send_reply_func)
+        await handlers.handle_trigger_reminder_user({"intent": "trigger_reminder_user", "target_user": "Asif"}, user_id, context, send_reply_func)
         return
 
     # Check for "no blocker" or "remove blocker" before progress updates
@@ -114,7 +118,9 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
             "progress": parsed_obj.get("progress"),
             "blocker_description": parsed_obj.get("blocker_text"),
             "confidence": confidence,
-            "query_filters": parsed_obj.get("query_filters")
+            "query_filters": parsed_obj.get("query_filters"),
+            "target_user": parsed_obj.get("target_user"),
+            "message_type": parsed_obj.get("message_type")
         }
 
         # Step 7: Fallback if confidence is low
@@ -192,6 +198,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_create_task(parsed, user_id, context, send_reply_func)
     elif intent == "create_ticket":
         await handlers.handle_create_ticket(parsed, user_id, context, send_reply_func)
+    elif intent == "trigger_reminder_user":
+        await handlers.handle_trigger_reminder_user(parsed, user_id, context, send_reply_func)
     elif intent == "clarify":
         await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
     else:
@@ -301,6 +309,15 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             task_query = state.get("task_query")
             deadline = state.get("deadline")
             await handlers.perform_update(task_query, text, user_id, send_reply_func, deadline=deadline)
+            clear_state(user_id)
+        elif step == "waiting_for_proof":
+            if not images:
+                await send_reply_func("Please upload an actual image as proof.")
+                return
+            tq = state.get("task_query")
+            pr = state.get("progress", "100")
+            dl = state.get("deadline")
+            await handlers.perform_update(tq, pr, user_id, send_reply_func, images=images, deadline=dl)
             clear_state(user_id)
     
     elif action == "complete_task":

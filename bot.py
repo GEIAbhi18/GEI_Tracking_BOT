@@ -111,4 +111,9 @@ if __name__ == '__main__':
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
+
+    # Hybrid Reminder System (11AM, 4PM, Inactivity)
+    from core.reminder_scheduler import setup_reminder_scheduler
+    setup_reminder_scheduler(application)
+    
     application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
