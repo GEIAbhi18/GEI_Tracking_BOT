@@ -6,6 +6,11 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN
 from core.update_engine import process_update_message
+from db import get_user_by_telegram_id, supabase
+from core.reminder_scheduler import setup_reminder_scheduler
+from core.intent_handlers import generate_pdf_report
+import datetime
+import pytz
 
 # Configure logging
 logging.basicConfig(
@@ -20,7 +25,6 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command to welcome the user."""
-    from db import get_user_by_telegram_id
     user_id = update.effective_user.id
     u_info = get_user_by_telegram_id(user_id)
     name = u_info['name'] if u_info else "there"
@@ -70,13 +74,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if isinstance(e, telegram.error.TimedOut):
             logging.warning(f"Timeout occurred sending message to {user_id}, message might have still reached user.")
             return # Don't send double error message if it timed out but potentially succeeded
-        logging.error(f"Error processing message for user {user_id}: {e}", exc_info=True)
-        await update.message.reply_text("Sorry, an error occurred while processing your request.")
+        logging.exception(f"CRITICAL ERROR processing message for user {user_id}: {e}")
+        await update.message.reply_text("Sorry, an error occurred while processing your request. Our developers have been notified.")
 
 async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
     """Sends the daily PDF report to Kanav at 6 PM."""
-    from core.intent_handlers import generate_pdf_report
-    from db import supabase
     
     # Get Kanav's true telegram_id dynamically
     try:
@@ -107,9 +109,6 @@ application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
 
 if __name__ == '__main__':
-    import datetime
-    import pytz
-    
     logging.info("Starting GEI Telegram Bot in polling mode...")
     # Schedule the 6 PM daily report for Kanav
     tz = pytz.timezone('Asia/Kolkata')
@@ -117,7 +116,6 @@ if __name__ == '__main__':
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
 
     # Hybrid Reminder System (11AM, 4PM, Inactivity)
-    from core.reminder_scheduler import setup_reminder_scheduler
     setup_reminder_scheduler(application)
     
     application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)

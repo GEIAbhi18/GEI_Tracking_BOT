@@ -6,7 +6,10 @@ from core.conversation_state import get_state, set_state, clear_state
 from core.context_manager import get_context, update_context
 from core.message_parser import parse_message as rule_based_parse_message
 import core.intent_handlers as handlers
-from db import get_all_tasks, get_projects, get_user_by_telegram_id, create_ticket
+from db import (
+    get_all_tasks, get_projects, get_user_by_telegram_id, create_ticket,
+    update_user_activity, remove_blocker, create_project_db, add_task, save_note
+)
 from core.utils import parse_human_date, resolve_project, resolve_task_from_list
 
 logger = logging.getLogger(__name__)
@@ -22,7 +25,6 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     context = get_context(user_id)
     
     # Track activity (Feature 2)
-    from db import update_user_activity
     update_user_activity(user_id)
 
     # 1. Check for command mode (bypass LLM/State)
@@ -268,7 +270,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
         elif step == "waiting_for_resolve_choice":
             choice = text.strip().lower()
             if choice in ["all", "yes", "all resolved"]:
-                from db import remove_blocker
                 remove_blocker(state['task_id'])
                 await send_reply_func(f"All blockers resolved for '{state['task_name']}' 🟢")
                 clear_state(user_id)
@@ -276,7 +277,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 idx = int(choice) - 1
                 blockers = state.get('blockers', [])
                 if 0 <= idx < len(blockers):
-                    from db import remove_blocker
                     remove_blocker(state['task_id'])
                     await send_reply_func(f"Blocker '{blockers[idx]}' resolved. 🟢 (Task status set to unblocked)")
                     clear_state(user_id)
@@ -384,6 +384,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             await send_reply_func("What is the issue or concern?")
         elif step == "waiting_for_description":
+            project_query = state.get("project_query", "")
             pq = project_query.strip()
             projects = get_projects()
             match = resolve_project(pq, projects)
@@ -394,13 +395,16 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             elif not u_info:
                 await send_reply_func(f"Employee/User with Telegram ID {user_id} not found in database. Please contact admin to register your device before raising tickets.")
             else:
-                create_ticket(u_info['id'], match['id'], message=text)
-                await send_reply_func(f"✅ Ticket raised for project '{match['name']}'.")
+                try:
+                    create_ticket(u_info['id'], match['id'], message=text)
+                    await send_reply_func(f"✅ Ticket raised for project '{match['name']}'.")
+                except Exception as e:
+                    logging.error(f"Error creating ticket: {e}")
+                    await send_reply_func("Failed to raise ticket due to a system error. Please try again.")
             clear_state(user_id)
 
     elif action == "create_project":
         if step == "waiting_for_name":
-            from db import create_project_db
             u_info = get_user_by_telegram_id(user_id)
             uid = u_info['id'] if u_info else None
             create_project_db(text, created_by=uid)
@@ -427,12 +431,19 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             match = resolve_project(pq, projects)
                 
             if match:
-                from db import add_task
+                # Robust Human Date Parser
+                try:
+                    parsed_deadline = parse_human_date(deadline)
+                except Exception as de:
+                    logging.warning(f"Date parsing failed for '{deadline}': {de}")
+                    parsed_deadline = deadline 
                 
-                # Use robust Human Date Parser
-                parsed_deadline = parse_human_date(deadline)
+                try:
+                    result = add_task(match['id'], task_name, parsed_deadline)
+                except Exception as ae:
+                    logging.error(f"Database error in add_task: {ae}")
+                    result = None
                 
-                result = add_task(match['id'], task_name, parsed_deadline)
                 if result:
                     await send_reply_func(f"Task '{task_name}' created successfully for project '{match['name']}'! ✅\nDeadline: {parsed_deadline}")
                 else:
@@ -463,8 +474,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             msg_lower = text.lower()
             COMMAND_KEYWORDS = ["show", "list", "view", "projects", "/", "update", "complete", "blocker", "ticket", "task"]
             
-            from core.utils import resolve_project
-            from db import get_projects
             proj_match = resolve_project(text, get_projects())
             
             # Step 8 check: If mentions "task 1" or similar, it's not a note
@@ -493,7 +502,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
             if choice in ["yes", "yep", "sure", "ok", "y"]:
                 # Save note to DB
-                from db import save_note
                 save_note(task_id, note_content)
                 await send_reply_func(f"📝 Note successfully added to *{task_name}*")
                 clear_state(user_id)
