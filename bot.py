@@ -1,5 +1,6 @@
 import logging
 import time
+import os
 import html, re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
@@ -19,6 +20,7 @@ logging.basicConfig(
 )
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("telegram").setLevel(logging.WARNING)
+logging.info(f"BOOTING PROCESS: {os.getpid()}")
 # You can switch these comments out while testing locally
 # TEST_USER_ID = 123456789 # Asif Temp ID
 # TEST_USER_ID = 987654321 # Kanav Temp ID
@@ -100,22 +102,32 @@ async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
             caption="📊 Automated Daily Project Report (6:00 PM)"
         )
 
-# Initialize the application with increased timeout for production stability
-application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
-
-# Add handlers
-application.add_handler(CommandHandler("start", start))
-# Use MessageHandler for everything else, including commands we manually route in update_engine
-application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
-
-if __name__ == '__main__':
+def main():
+    logging.info(f"PROCESS ID: {os.getpid()}")
     logging.info("Starting GEI Telegram Bot in polling mode...")
-    # Schedule the 6 PM daily report for Kanav
+    # Initialize the application with increased timeout for production stability
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    # Use MessageHandler for everything else, including commands we manually route in update_engine
+    application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+    async def error_handler(update, context):
+        logging.error(f"Update {update} caused error: {context.error}")
+    application.add_error_handler(error_handler)
+    # Schedule the 6 PM daily report
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
 
-    # Hybrid Reminder System (11AM, 4PM, Inactivity)
-    setup_reminder_scheduler(application)
-    
-    application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    # Prevent duplicate scheduler initialization
+    if not hasattr(application, "_scheduler_started"):
+        setup_reminder_scheduler(application)
+        application._scheduler_started = True
+
+    # Start polling (ONLY ONCE)
+    application.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES
+    )
+if __name__ == '__main__':
+    main()
