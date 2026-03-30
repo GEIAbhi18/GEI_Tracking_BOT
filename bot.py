@@ -105,26 +105,33 @@ async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
 def main():
     logging.info(f"PROCESS ID: {os.getpid()}")
     logging.info("Starting GEI Telegram Bot in polling mode...")
-    # Initialize the application with increased timeout for production stability
-    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
-    # Add handlers
+
+    application = (
+        ApplicationBuilder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(30)
+        .write_timeout(30)
+        .build()
+    )
+
     application.add_handler(CommandHandler("start", start))
-    # Use MessageHandler for everything else, including commands we manually route in update_engine
     application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+
     async def error_handler(update, context):
         logging.error(f"Update {update} caused error: {context.error}")
+
     application.add_error_handler(error_handler)
-    # Schedule the 6 PM daily report
+
+    # Daily report
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
 
-    # Prevent duplicate scheduler initialization
-    if not hasattr(application, "_scheduler_started"):
-        setup_reminder_scheduler(application)
-        application._scheduler_started = True
+    # Scheduler (no guard needed)
+    setup_reminder_scheduler(application)
 
-    # Start polling (ONLY ONCE)
+    # Start polling
     application.run_polling(
         drop_pending_updates=True,
         allowed_updates=Update.ALL_TYPES
