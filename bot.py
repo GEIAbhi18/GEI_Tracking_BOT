@@ -1,7 +1,9 @@
 import logging
 import time
+import html, re
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN
 from core.update_engine import process_update_message
 
@@ -42,7 +44,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Safe HTML escaping for Telegram
         if text:
-            import html, re
             text_html = html.escape(text)
             text_html = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', text_html)
             text_html = re.sub(r'\*(.+?)\*', r'<b>\1</b>', text_html)
@@ -65,6 +66,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             send_reply_func=reply_function
         )
     except Exception as e:
+        import telegram
+        if isinstance(e, telegram.error.TimedOut):
+            logging.warning(f"Timeout occurred sending message to {user_id}, message might have still reached user.")
+            return # Don't send double error message if it timed out but potentially succeeded
         logging.error(f"Error processing message for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text("Sorry, an error occurred while processing your request.")
 
@@ -93,20 +98,19 @@ async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
             caption="📊 Automated Daily Project Report (6:00 PM)"
         )
 
-# Initialize the application
-application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+# Initialize the application with increased timeout for production stability
+application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).connect_timeout(30).read_timeout(30).write_timeout(30).build()
 
 # Add handlers
 application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-application.add_handler(MessageHandler(filters.PHOTO, handle_message))
+# Use MessageHandler for everything else, including commands we manually route in update_engine
+application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
 
 if __name__ == '__main__':
     import datetime
     import pytz
     
     logging.info("Starting GEI Telegram Bot in polling mode...")
-    time.sleep(10)
     # Schedule the 6 PM daily report for Kanav
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)

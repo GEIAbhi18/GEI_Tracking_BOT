@@ -1,4 +1,5 @@
 import logging
+import re
 import json
 from core.llm_parser import parse_with_llm
 from core.conversation_state import get_state, set_state, clear_state
@@ -71,35 +72,41 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_remove_blocker({"intent": "remove_blocker", "task_name": t_ref}, user_id, context, send_reply_func)
         return
 
-    if stripped_lower in ["complete task", "/complete_task"]:
+    if stripped_lower in ["complete task", "complete_task"]:
         await handlers.handle_complete_task({"intent": "complete_task"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["show tasks", "/show_tasks", "show my tasks", "list tasks", "/list_tasks", "view tasks"]:
+    elif stripped_lower in ["show tasks", "view tasks", "list tasks", "show_tasks", "list_tasks"]:
         await handlers.handle_query_tasks({"intent": "query_tasks"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["show blockers", "/show_blockers", "show me blockers"]:
+    elif stripped_lower in ["show blockers", "view blockers", "list blockers", "show_blockers", "view_blockers"]:
         await handlers.handle_query_blockers({"intent": "query_blockers"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["create project", "/create_project"]:
+    elif stripped_lower in ["create project", "new project", "create_project", "new_project"]:
         await handlers.handle_create_project({"intent": "create_project"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["create task", "/create_task"]:
+    elif stripped_lower in ["create task", "new task", "create_task", "new_task"]:
         await handlers.handle_create_task({"intent": "create_task"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["update task", "/update_task"]:
+    elif stripped_lower in ["update task", "task update", "update_task", "task_update"]:
         await handlers.handle_task_update({"intent": "task_update"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["raise ticket", "/raise_ticket", "create ticket", "/create_ticket"]:
+    elif stripped_lower in ["raise ticket", "create ticket", "raise_ticket", "create_ticket"]:
         await handlers.handle_create_ticket({"intent": "create_ticket"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["view tickets", "/view_tickets", "show tickets", "/show_tickets"]:
+    elif stripped_lower in ["view tickets", "show tickets", "view_tickets", "show_tickets"]:
         await handlers.handle_view_tickets({"intent": "view_tickets"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["get report", "/get_report", "request report", "/request_report"]:
+    elif stripped_lower in ["get report", "request report", "get_report", "request_report"]:
         await handlers.handle_request_report({"intent": "request_report"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["hello", "hi", "hey", "greetings", "start", "/start", "help", "/help"]:
+    elif stripped_lower in ["hello", "hi", "hey", "greetings", "start", "help"]:
         await handlers.handle_greeting({"intent": "greeting"}, user_id, context, send_reply_func)
+        return
+        
+    # High-priority: task detail detection (Step 1/6)
+    match_detail = re.match(r'^(show\s*)?task\s*(\d+)(\s*info|\s*details)?$', stripped_lower)
+    if match_detail:
+        await handlers.handle_get_task_detail({"intent": "get_task_detail", "task_reference": f"task {match_detail.group(2)}"}, user_id, context, send_reply_func)
         return
         
     # 3. LLM Intent Parser
@@ -154,6 +161,9 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         elif "task" in text.lower() and "create" in text.lower():
             intent = "create_task"
             parsed = {"intent": "create_task", "confidence": 0.8}
+        elif "task" in text.lower() and re.search(r'task\s*\d+', text.lower()):
+            intent = "get_task_detail"
+            parsed = {"intent": "get_task_detail", "task_reference": re.search(r'task\s*(\d+)', text.lower()).group(0), "confidence": 0.9}
         else:
             rule_parsed = rule_based_parse_message(text)
             if rule_parsed["confidence"] != "low":
@@ -180,6 +190,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_remove_blocker(parsed, user_id, context, send_reply_func)
     elif intent == "list_tasks" or intent == "query_tasks":
         await handlers.handle_query_tasks(parsed, user_id, context, send_reply_func)
+    elif intent == "get_task_detail":
+        await handlers.handle_get_task_detail(parsed, user_id, context, send_reply_func)
     elif intent == "query_blockers":
         await handlers.handle_query_blockers(parsed, user_id, context, send_reply_func)
     elif intent == "help" or intent == "greeting":
@@ -443,6 +455,53 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 await handlers.handle_query_tasks({}, user_id, context, send_reply_func)
             else:
                 await send_reply_func("Invalid choice. Please try again or rephrase your request.")
+
+    elif action == "task_update":
+        # Follow-up detection (Step 2)
+        if not state.get("awaiting_note_confirmation"):
+            # Check for command or project mention (Step 8: Safety)
+            msg_lower = text.lower()
+            COMMAND_KEYWORDS = ["show", "list", "view", "projects", "/", "update", "complete", "blocker", "ticket", "task"]
+            
+            from core.utils import resolve_project
+            from db import get_projects
+            proj_match = resolve_project(text, get_projects())
+            
+            # Step 8 check: If mentions "task 1" or similar, it's not a note
+            is_task_reference = re.search(r'task\s*\d+', msg_lower)
+            
+            if any(cmd in msg_lower for cmd in COMMAND_KEYWORDS) or is_task_reference or (proj_match and proj_match['name'].lower() != state.get('task_name', '').lower()):
+                clear_state(user_id)
+                # Re-handle this as a base message
+                await handle_message(text, user_id, images, send_reply_func)
+                return
+            
+            # Treat as potential note
+            state["pending_note"] = text
+            state["awaiting_note_confirmation"] = True
+            set_state(user_id, state)
+            
+            # Ask for confirmation (Step 3)
+            task_name = state.get("task_name", "the recently updated task")
+            await send_reply_func(f"Do you want to add this as a note for task: *{task_name}*?\n(Reply **Yes** or **No**)")
+        else:
+            # Handle confirmation (Step 4)
+            choice = text.strip().lower()
+            task_id = state.get("task_id")
+            task_name = state.get("task_name", "task")
+            note_content = state.get("pending_note")
+            
+            if choice in ["yes", "yep", "sure", "ok", "y"]:
+                # Save note to DB
+                from db import save_note
+                save_note(task_id, note_content)
+                await send_reply_func(f"📝 Note successfully added to *{task_name}*")
+                clear_state(user_id)
+            elif choice in ["no", "n", "cancel", "don't"]:
+                await send_reply_func("❌ Note was not added")
+                clear_state(user_id)
+            else:
+                await send_reply_func("Please reply with **Yes** or **No** to confirm the note.")
 
 # Legacy support for process_update_message (if still needed by some parts)
 async def process_update_message(text: str, user_id: int, images: list, send_reply_func):

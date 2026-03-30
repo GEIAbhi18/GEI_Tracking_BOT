@@ -43,6 +43,7 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
         "task_id": task_id,
         "progress": progress,
         "blockers": blockers,
+        "note": None,
         "images": images,
         "rag": rag_color,
         "timestamp": datetime.now().isoformat()
@@ -211,6 +212,15 @@ def get_task_blockers(task_id):
             reasons.append(u['blockers'])
             
     return reasons
+
+def save_note(task_id, note_text):
+    """Updates the most recent task update with a confirmed user note."""
+    response = supabase.table("updates").select("id").eq("task_id", task_id).order("timestamp", desc=True).limit(1).execute()
+    if response.data:
+        update_id = response.data[0]['id']
+        supabase.table("updates").update({"note": note_text}).eq("id", update_id).execute()
+        return True
+    return False
 
 def get_task_by_name(task_name):
     # Basic partial match

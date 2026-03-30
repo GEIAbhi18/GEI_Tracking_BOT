@@ -17,6 +17,7 @@ INSTRUCTIONS:
 * Identify the user intent
 * Extract all relevant entities
 * Return structured JSON only
+* If a message follows a task update and provides context (e.g., "reason for delay", "additional details"), it should be treated as a potential note.
 
 ALLOWED INTENTS:
 * task_update: For progress updates (e.g., "60% done")
@@ -32,6 +33,7 @@ ALLOWED INTENTS:
 * view_projects: For listing projects
 * view_tickets: For showing open tickets
 * trigger_reminder_user: To manually ping a user for updates (e.g., "ask asif", "send updates to asif")
+* get_task_detail: To see full information about a specific task (e.g., "show task 1", "task 1 info", "details for task waterproofing")
 * help: For assistance
 
 FILTER RULES:

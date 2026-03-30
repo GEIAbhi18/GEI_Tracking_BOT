@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS updates (
     employee_id UUID REFERENCES users(id) ON DELETE SET NULL,
     progress INT NOT NULL CHECK (progress >= 0 AND progress <= 100),
     blockers TEXT,
+    note TEXT,
     images TEXT[], 
     rag VARCHAR(5) NOT NULL CHECK (rag IN ('RED', 'AMBER', 'GREEN')),
     timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP

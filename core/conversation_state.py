@@ -1,7 +1,7 @@
 import time
 
 _states = {}
-TIMEOUT_SECONDS = 600 # 10 minutes
+TIMEOUT_SECONDS = 300 # 5 minutes
 
 def get_state(user_id):
     """Retrieve the current state for a user, checking for timeout."""

@@ -375,6 +375,9 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         a_tasks = filter_tasks(a_tasks, filters)
         msg += build_grouped_tasks_list_py(a_tasks) if a_tasks else "No tasks match criteria"
         
+        # Store context for index matching
+        update_context(user_id, last_task_list=[t['id'] for t in k_tasks] + [t['id'] for t in a_tasks])
+        
         await send_reply_func(msg)
         return
         
@@ -406,6 +409,64 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         
     msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
     update_context(user_id, last_task_list=[t['id'] for t in filtered])
+    await send_reply_func(msg)
+
+async def handle_get_task_detail(entities, user_id, context, send_reply_func):
+    task_reference = entities.get("task_reference") or entities.get("task_name")
+    
+    if not task_reference:
+        await send_reply_func("Which task do you want to see details for? (e.g., 'task 1')")
+        return
+        
+    # Resolve task using context
+    from db import get_all_tasks
+    last_list = context.get('last_task_list', [])
+    all_tasks = get_all_tasks()
+    match = resolve_task_from_list(task_reference, all_tasks, last_list_ids=last_list)
+    
+    if not match:
+        if not last_list:
+            await send_reply_func("I don't have a recent task list for you. Please first request the task list (e.g., 'show tasks').")
+        else:
+            await send_reply_func(f"Could not find task matching '{task_reference}'. Please select a valid number from the list.")
+        return
+
+    # Fetch full details
+    from db import supabase
+    t_id = match['id']
+    
+    # Latest Update (Progress, Blocker, Note)
+    update_res = supabase.table("updates").select("*").eq("task_id", t_id).order("timestamp", desc=True).limit(1).execute()
+    latest_update = update_res.data[0] if update_res.data else {}
+    
+    # Project Detail
+    p_name = match.get('projects', {}).get('name', 'Unknown Project')
+    
+    # Deadline
+    dl = match.get('deadline') or 'No deadline'
+    if dl and 'T' in str(dl):
+        from datetime import datetime
+        try:
+            d = datetime.fromisoformat(dl.replace('Z', '+00:00'))
+            dl = d.strftime("%d %b %Y")
+        except:
+            dl = str(dl)[:10]
+
+    # Format Message (Step 5)
+    msg = f"📋 **Task Details:**\n\n"
+    msg += f"**Project:** {p_name}\n"
+    msg += f"**Task:** {match['name']}\n"
+    msg += f"**Deadline:** {dl}\n\n"
+    
+    prog = latest_update.get('progress', match.get('progress', 0))
+    msg += f"**Progress:** {prog}%\n\n"
+    
+    blocker = latest_update.get('blockers') or match.get('blocker_reason') or "None"
+    msg += f"**Blocker:**\n{blocker}\n\n"
+    
+    note = latest_update.get('note') or "None"
+    msg += f"**Note:**\n{note}"
+    
     await send_reply_func(msg)
 
 async def handle_query_blockers(entities, user_id, context, send_reply_func):
@@ -535,8 +596,13 @@ def generate_pdf_report():
                 pdf.cell(0, 6, txt="Amber", ln=1)
             pdf.set_text_color(0, 0, 0) # reset black
             
-            blocker = t.get('blocker_reason') if t.get('is_blocked') else "None"
+            # Fetch the latest confirmed note if any
+            from db import supabase
+            note_res = supabase.table("updates").select("note").eq("task_id", t['id']).neq("note", None).order("timestamp", desc=True).limit(1).execute()
+            latest_note = note_res.data[0]['note'] if note_res.data else "None"
+            
             pdf.cell(0, 6, txt=f"Blocker: {blocker}", ln=1)
+            pdf.cell(0, 6, txt=f"Note: {latest_note}", ln=1)
             
             atts = t.get('attachments')
             if atts and isinstance(atts, list) and len(atts) > 0:
@@ -712,6 +778,13 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
+    
+    # NEW: Set state for potential follow-up note (Step 1)
+    set_state(user_id, {
+        "action": "task_update", 
+        "task_id": match['id'], 
+        "task_name": match['name']
+    })
     
     dl_msg = f"\nDeadline: {deadline}" if deadline else ""
     proof_msg = f"Proof: [Image]" if images else ""
