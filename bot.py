@@ -127,14 +127,9 @@ def main():
     tz = pytz.timezone('Asia/Kolkata')
     job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
     application.job_queue.run_daily(send_daily_report_job, time=job_time)
-
-    # Scheduler (no guard needed)
-    setup_reminder_scheduler(application)
-
     # Start polling
     application.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
+        drop_pending_updates=True
     )
 if __name__ == '__main__':
     main()
