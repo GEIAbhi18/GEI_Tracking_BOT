@@ -4,25 +4,41 @@ export async function getUserAndTasks(targetUser = 'Asif') {
     const { data: users } = await supabase.from('users').select('id, name').ilike('name', `%${targetUser}%`);
     if (!users || users.length === 0) return { error: 'User not found in database: ' + targetUser };
     
-    // If multiple users match (e.g. duplicate Asifs), find the one who actually has tasks
+    let allTasks = [];
+    let primaryUserId = users[0].id;
+
+    // Collect tasks from all users matching the name (in case of duplicate user entries)
     for (const user of users) {
         const { data: tasks, error } = await supabase
             .from('tasks')
             .select('*, projects(name), updates(progress, blockers)')
-            .eq('assigned_to', user.id)
+            .or(`assigned_to.eq.${user.id},assigned_to.is.null`)
             .order('created_at', { ascending: true });
             
         if (tasks && tasks.length > 0) {
-            return { userId: user.id, tasks };
+            allTasks = allTasks.concat(tasks);
         }
     }
 
-    // Fallback: Use the first one found if none have tasks
-    return { userId: users[0].id, tasks: [] };
+    // Deduplicate tasks by id (since unassigned tasks might be fetched multiple times if multiple user records exist)
+    allTasks = allTasks.filter((task, index, self) =>
+        index === self.findIndex((t) => t.id === task.id)
+    );
+
+    return { userId: primaryUserId, tasks: allTasks };
 }
 
 export function findTaskByEntities(tasks, entities) {
     if (!tasks || tasks.length === 0) return null;
+
+    let searchTasks = tasks;
+    
+    // Filter by active project context if available
+    const projName = entities.project_name || entities.active_project;
+    if (projName) {
+        const projLower = projName.toLowerCase().trim();
+        searchTasks = tasks.filter(t => (t.projects?.name || 'No Project').toLowerCase().includes(projLower));
+    }
 
     // 1. Try task_id/task_number which are often pure numbers
     const idVal = entities.task_id || entities.task_number;
@@ -30,7 +46,7 @@ export function findTaskByEntities(tasks, entities) {
         const match = idVal.toString().match(/\d+/);
         if (match) {
             const idx = parseInt(match[0], 10) - 1;
-            if (idx >= 0 && idx < tasks.length) return tasks[idx];
+            if (idx >= 0 && idx < searchTasks.length) return searchTasks[idx];
         }
     }
     
@@ -42,17 +58,17 @@ export function findTaskByEntities(tasks, entities) {
         const taskRefMatch = lowerName.match(/^task\s*#?(\d+)$/);
         if (taskRefMatch) {
             const idx = parseInt(taskRefMatch[1], 10) - 1;
-            if (idx >= 0 && idx < tasks.length) return tasks[idx];
+            if (idx >= 0 && idx < searchTasks.length) return searchTasks[idx];
         }
 
         // Handle pure number strings
         if (/^\d+$/.test(lowerName)) {
             const idx = parseInt(lowerName, 10) - 1;
-            if (idx >= 0 && idx < tasks.length) return tasks[idx];
+            if (idx >= 0 && idx < searchTasks.length) return searchTasks[idx];
         }
 
         // Fuzzy inclusion match
-        const found = tasks.find(t => t.name.toLowerCase().includes(lowerName));
+        const found = searchTasks.find(t => t.name.toLowerCase().includes(lowerName));
         if (found) return found;
     }
     
@@ -61,7 +77,7 @@ export function findTaskByEntities(tasks, entities) {
         const match = entities.raw_message.match(/^(\d+)/);
         if (match) {
             const idx = parseInt(match[1], 10) - 1;
-            if (idx >= 0 && idx < tasks.length) return tasks[idx];
+            if (idx >= 0 && idx < searchTasks.length) return searchTasks[idx];
         }
     }
 
@@ -102,8 +118,7 @@ export function buildGroupedTasksList(tasks) {
     let msg = '';
     const groupedTasks = {};
 
-    tasks.forEach((t, idx) => {
-        const number = idx + 1;
+    tasks.forEach((t) => {
         const projName = t.projects?.name || 'No Project';
 
         if (!groupedTasks[projName]) groupedTasks[projName] = [];
@@ -117,7 +132,6 @@ export function buildGroupedTasksList(tasks) {
         }
 
         groupedTasks[projName].push({
-            number,
             name: t.name,
             deadline: t.deadline,
             progress,
@@ -128,10 +142,11 @@ export function buildGroupedTasksList(tasks) {
 
     for (const [projName, projTasks] of Object.entries(groupedTasks)) {
         msg += `**${projName}**\n`;
-        projTasks.forEach(t => {
+        projTasks.forEach((t, idx) => {
+            const number = idx + 1; // Dynamically assign project-wise numbers starting from 1
             const dlDate = t.deadline ? new Date(t.deadline) : null;
             const deadlineStr = dlDate ? `${dlDate.getDate()} ${dlDate.toLocaleString('default', { month: 'short' })}` : 'No deadline';
-            msg += `${t.number}. ${t.name} – Deadline: ${deadlineStr} | ${t.progress}% done | ${t.blockerCount} blocker(s)\n`;
+            msg += `${number}. ${t.name} – Deadline: ${deadlineStr} | ${t.progress}% done | ${t.blockerCount} blocker(s)\n`;
         });
         msg += `\n`;
     }

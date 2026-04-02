@@ -37,9 +37,10 @@ export function ruleBasedNLP(text) {
 
     const closeTicketMatch = /close\s+ticket\s+(\d+)/i.exec(text.trim());
     const completeTaskMatch = /^complete\s+(?:task\s+)?(\d+)/i.exec(text.trim());
-    const updateTaskMatch = /^(?:update\s+(?:task\s+)?)?(\d+)[\.\:]?\s+(.*)/i.exec(text.trim());
+    const updateTaskMatch = /^(?:update\s+(?:task\s+)?)?(\d+)(?:[\.\:]?\s+(.*))?/i.exec(text.trim());
     const traditionalMatch = /^(\d+)\.\s+(.*)/i.exec(text.trim());
     const justNumberMatch = /^\s*(\d+)\s*$/i.exec(text.trim());
+    const namedProjectTaskMatch = /^update\s+(.+)\s+task\s+(\d+)/i.exec(text.trim());
 
     if (closeTicketMatch) {
         bestIntent = 'close_ticket';
@@ -55,9 +56,15 @@ export function ruleBasedNLP(text) {
         upText = "100% done";
     } else {
         const numMatch = updateTaskMatch || traditionalMatch;
-        if (numMatch && !closeTicketMatch && !completeTaskMatch && !justNumberMatch) {
+        if (namedProjectTaskMatch) {
+            isNumberedUpdate = true;
+            bestIntent = 'update_task';
+            bestScore = 1;
+            upNum = namedProjectTaskMatch[2];
+            upText = "update"; // simple filler
+        } else if (numMatch && !closeTicketMatch && !completeTaskMatch && !justNumberMatch) {
             const num = numMatch[1];
-            const content = numMatch[2];
+            const content = numMatch[2] || '';
             const lowerContent = content.toLowerCase();
 
             // Priority Check: Is it a ticket reply?
@@ -141,6 +148,7 @@ export function ruleBasedNLP(text) {
             task_id: upNum ? parseInt(upNum) : null,
             ticket_id: upNum ? parseInt(upNum) : null,
             task_number: upNum ? parseInt(upNum) : null,
+            project_name: namedProjectTaskMatch ? namedProjectTaskMatch[1].trim() : null,
             ticket_name: bestIntent === 'reply_ticket' ? upText : null,
             ticket_message: bestIntent === 'reply_ticket' ? upText : null
         }

@@ -159,9 +159,10 @@ def resolve_project(query, projects):
             
     return None
 
-def resolve_task_from_list(query, tasks, last_list_ids=None):
+def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=None):
     """
     Resolves a task from a query and a list of tasks.
+    Supports active_project_id mapping to project_task_number.
     """
     if not query:
         return None
@@ -170,6 +171,14 @@ def resolve_task_from_list(query, tasks, last_list_ids=None):
     if q.startswith("task "): q = q[5:].strip()
     q_numeric = re.search(r'(\d+)', q)
     
+    # 0. Try active project mapping using project_task_number
+    if q_numeric and active_project_id:
+        target_number = int(q_numeric.group(1))
+        # Find task with this project_task_number natively assigned
+        for t in tasks:
+            if t.get('project_id') == active_project_id and t.get('project_task_number') == target_number:
+                return t
+                
     # 1. Try list index matching
     if q_numeric and last_list_ids:
         idx = int(q_numeric.group(1)) - 1
@@ -186,17 +195,17 @@ def resolve_task_from_list(query, tasks, last_list_ids=None):
     # 3. Try name matching
     # Priority 1: Exact match
     for t in tasks:
-        if t['name'].lower() == q:
+        if t.get('name', '').lower() == q:
             return t
     
     # Priority 2: Starts with
     for t in tasks:
-        if t['name'].lower().startswith(q):
+        if t.get('name', '').lower().startswith(q):
             return t
             
     # Priority 3: Contains
     for t in tasks:
-        if q in t['name'].lower():
+        if q in t.get('name', '').lower():
             return t
             
     return None

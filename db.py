@@ -4,17 +4,33 @@ from datetime import datetime, timedelta
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+def _apply_project_task_numbers(tasks):
+    if not tasks:
+        return tasks
+    from collections import defaultdict
+    by_proj = defaultdict(list)
+    for t in tasks:
+        by_proj[t.get("project_id")].append(t)
+    
+    for pid, p_tasks in by_proj.items():
+        # Sort by creation time or id (consistent ordering)
+        p_tasks.sort(key=lambda x: x.get('created_at') or str(x.get('id')))
+        for idx, t in enumerate(p_tasks):
+            t['project_task_number'] = idx + 1
+            
+    return tasks
+
 def get_projects():
     response = supabase.table("projects").select("*").order("created_at").execute()
     return response.data
 
 def get_tasks_for_project(project_id):
     response = supabase.table("tasks").select("*").eq("project_id", project_id).execute()
-    return response.data
+    return _apply_project_task_numbers(response.data)
 
 def get_all_tasks():
     response = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").execute()
-    return response.data
+    return _apply_project_task_numbers(response.data)
 
 def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None):
     from rag import calculate_rag
@@ -161,7 +177,13 @@ def get_user_by_name(name):
 
 def get_tasks_for_user(user_uuid):
     response = supabase.table("tasks").select("*, projects(name)").eq("assigned_to", user_uuid).execute()
-    return response.data
+    # We apply project task numbering globally first to be safe, but since this is filtered,
+    # it might only number the returned subset. To truly get correct project block numbers,
+    # we would need to fetch all tasks. The instruction says "When fetching tasks for a project... assign numbers".
+    # For now, we fetch ALL tasks to assign numbers properly, then filter.
+    all_tasks = get_all_tasks()
+    user_tasks = [t for t in all_tasks if t.get('assigned_to') == user_uuid]
+    return user_tasks
 
 def get_active_users_with_tasks():
     # Get users who have pending tasks

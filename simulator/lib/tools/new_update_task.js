@@ -8,6 +8,14 @@ export async function updateTaskTool(entities) {
 
     const task = findTaskByEntities(result.tasks, entities);
     if (!task) {
+        const projName = entities.project_name || entities.active_project;
+        if (projName) {
+            const projLower = projName.toLowerCase().trim();
+            const projTasks = result.tasks.filter(t => (t.projects?.name || '').toLowerCase().includes(projLower));
+            if (projTasks.length > 0) {
+               return `I couldn't find that task in "${projName}". Here are its tasks:\n\n${buildGroupedTasksList(projTasks)}`;
+            }
+        }
         return `Please specify which task to update:\n\n${buildGroupedTasksList(result.tasks)}`;
     }
 
@@ -114,6 +122,14 @@ export async function markDoneTool(entities) {
 
     const task = findTaskByEntities(openTasks, entities);
     if (!task) {
+        const projName = entities.project_name || entities.active_project;
+        if (projName) {
+            const projLower = projName.toLowerCase().trim();
+            const projTasks = openTasks.filter(t => (t.projects?.name || '').toLowerCase().includes(projLower));
+            if (projTasks.length > 0) {
+               return `I couldn't find that active task in "${projName}". Here are its pending tasks:\n\n${buildGroupedTasksList(projTasks)}`;
+            }
+        }
         return `Please provide the project and task name (or select by number) to mark it complete. Also upload an image proof (photo of the work) to finalize. 📸\n\n${buildGroupedTasksList(openTasks)}`;
     }
 

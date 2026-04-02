@@ -229,12 +229,28 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
     if action == "add_blocker":
         if step == "waiting_for_project":
             state["project_query"] = text
-            state["step"] = "waiting_for_task"
-            set_state(user_id, state)
             
             projects = get_projects()
             match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
                 
+            if state.get("task_query_pending"):
+                t_name = state.get("task_query_pending")
+                b_desc = state.get("blocker_description")
+                if not b_desc:
+                    state["step"] = "waiting_for_description"
+                    state["task_query"] = t_name
+                    set_state(user_id, state)
+                    await send_reply_func(f"What is the issue holding up '{t_name}'?")
+                else:
+                    await handlers.perform_add_blocker(t_name, b_desc, user_id, send_reply_func)
+                    clear_state(user_id)
+                return
+
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
             tasks = get_all_tasks()
             if match:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
@@ -288,12 +304,29 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
     elif action == "update_task":
         if step == "waiting_for_project":
             state["project_query"] = text
-            state["step"] = "waiting_for_task"
-            set_state(user_id, state)
             
             projects = get_projects()
             match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
                 
+            if state.get("task_query_pending"):
+                t_name = state.get("task_query_pending")
+                pr = state.get("progress")
+                dl = state.get("deadline")
+                if pr is None and not dl:
+                    state["step"] = "waiting_for_progress"
+                    state["task_query"] = t_name
+                    set_state(user_id, state)
+                    await send_reply_func(f"What is the progress % for '{t_name}'?")
+                else:
+                    await handlers.perform_update(t_name, pr, user_id, send_reply_func, deadline=dl)
+                    clear_state(user_id)
+                return
+
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
             tasks = get_all_tasks()
             if match:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
@@ -335,12 +368,23 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
     elif action == "complete_task":
         if step == "waiting_for_project":
             state["project_query"] = text
-            state["step"] = "waiting_for_task"
-            set_state(user_id, state)
             
             projects = get_projects()
             match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
                 
+            if state.get("task_query_pending"):
+                t_name = state.get("task_query_pending")
+                state["step"] = "waiting_for_proof"
+                state["task_query"] = t_name
+                set_state(user_id, state)
+                await send_reply_func(f"Please upload an image proof to mark '{t_name}' as complete.")
+                return
+
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
             tasks = get_all_tasks()
             if match:
                 p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
@@ -375,6 +419,21 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 return
             tq = state.get("task_query")
             await handlers.perform_update(tq, "100", user_id, send_reply_func, images=images)
+            clear_state(user_id)
+            
+    elif action == "get_task_detail":
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            projects = get_projects()
+            match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
+                
+            if state.get("task_query_pending"):
+                t_name = state.get("task_query_pending")
+                clear_state(user_id)
+                await handlers.handle_get_task_detail({"task_reference": t_name}, user_id, context, send_reply_func)
+                return
             clear_state(user_id)
 
     elif action == "create_ticket":

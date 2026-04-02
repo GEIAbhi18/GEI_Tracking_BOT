@@ -32,6 +32,8 @@ export async function POST(req) {
         const rawText = message.trim();
         const lowerText = rawText.toLowerCase();
 
+        let finalIntent = null;
+
         // 1. Conversation State Manager (HIGHEST PRIORITY)
         const state = getState(userName);
         if (state) {
@@ -45,7 +47,16 @@ export async function POST(req) {
                 }
             }
             
-            if (state.action === 'add_blocker') {
+            if (state.action === 'select_project_for_context') {
+                const restoredIntent = state.pending_intent;
+                restoredIntent.entities.project_name = pText;
+                restoredIntent.entities.active_project = pText;
+                state.active_project = pText;
+                state.action = null; // clear it
+                setState(userName, state);
+                
+                finalIntent = restoredIntent;
+            } else if (state.action === 'add_blocker') {
                 if (state.step === 'waiting_for_task') {
                     state.task_query = pText;
                     state.step = 'waiting_for_description';
@@ -158,10 +169,8 @@ export async function POST(req) {
             }
         }
 
-        let finalIntent = null;
-
         // 2. Command Mode Bypass
-        if (rawText.startsWith('/')) {
+        if (!finalIntent && rawText.startsWith('/')) {
             const parts = rawText.slice(1).split(' ');
             const cmd = parts[0].toLowerCase();
             const rest = parts.slice(1).join(' ');
@@ -234,13 +243,41 @@ export async function POST(req) {
 
         // 5. Final Intent Router & State Initiation
         if (finalIntent) {
+            // Apply Project Context BEFORE anything else
+            let cState = getState(userName) || {};
+            let projName = finalIntent.entities.project_name || cState.active_project;
+            if (finalIntent.entities.project_name && finalIntent.entities.project_name !== cState.active_project) {
+                cState.active_project = finalIntent.entities.project_name;
+                setState(userName, cState);
+            } else if (cState.active_project) {
+                finalIntent.entities.project_name = cState.active_project;
+                finalIntent.entities.active_project = cState.active_project;
+            }
+
+            // If we need a task but don't have a project context, ask for project first.
+            const needsTaskAction = ['add_blocker', 'update_task', 'complete_task', 'mark_done', 'task_details'].includes(finalIntent.intent);
+            const lacksTask = !finalIntent.entities.task_name && !finalIntent.entities.task_id;
+            const isNumericTask = finalIntent.entities.task_id || finalIntent.entities.task_number || /^task\s*#?\d+$/i.test(finalIntent.entities.task_name || '') || /^\d+$/.test(finalIntent.entities.task_name || '') || /^\d+$/.test(finalIntent.entities.raw_message || '');
+
+            if (needsTaskAction && !projName && (lacksTask || isNumericTask)) {
+                const { data: projects } = await supabase.from('projects').select('name').order('created_at');
+                const projectList = (projects || []).map((p, idx) => `${idx + 1}. ${p.name}`).join('\n');
+                
+                cState.action = 'select_project_for_context';
+                cState.pending_intent = finalIntent;
+                cState._proj_map = (projects || []).map(p => p.name);
+                setState(userName, cState);
+                
+                return NextResponse.json({ reply: `Please select a project first to give me context:\n\n${projectList}`, nlpData: finalIntent });
+            }
+
             // Check for missing slots to initiate state
             if (finalIntent.intent === 'add_blocker') {
                 if (!finalIntent.entities.task_name && !finalIntent.entities.task_id) {
-                    const { data: tasks } = await supabase.from('tasks').select('name, projects(name)').neq('status', 'completed');
-                    const taskList = tasks.map((t, idx) => `${idx + 1}. ${t.name} (${t.projects?.name})`).join('\n');
+                    const { data: tasks } = await supabase.from('tasks').select('name, projects!inner(name)').ilike('projects.name', `%${projName}%`).neq('status', 'completed').order('created_at');
+                    const taskList = (tasks || []).map((t, idx) => `${idx + 1}. ${t.name}`).join('\n');
                     setState(userName, { action: 'add_blocker', step: 'waiting_for_task', _task_map: tasks.map(t => t.name) });
-                    return NextResponse.json({ reply: `Which task is blocked? (Type the number)\n\n${taskList}`, nlpData: finalIntent });
+                    return NextResponse.json({ reply: `Which task is blocked in ${projName}? (Type the number)\n\n${taskList}`, nlpData: finalIntent });
                 }
                 if (!finalIntent.entities.blocker_name) {
                     setState(userName, { action: 'add_blocker', step: 'waiting_for_description', task_query: finalIntent.entities.task_name });
@@ -248,15 +285,15 @@ export async function POST(req) {
                 }
             } else if (finalIntent.intent === 'update_task') {
                 if (!finalIntent.entities.task_name && !finalIntent.entities.task_id) {
-                    const { data: tasks } = await supabase.from('tasks').select('name, projects(name)').neq('status', 'completed');
-                    const taskList = tasks.map((t, idx) => `${idx + 1}. ${t.name} (${t.projects?.name})`).join('\n');
+                    const { data: tasks } = await supabase.from('tasks').select('name, projects!inner(name)').ilike('projects.name', `%${projName}%`).neq('status', 'completed').order('created_at');
+                    const taskList = (tasks || []).map((t, idx) => `${idx + 1}. ${t.name}`).join('\n');
                     setState(userName, { action: 'update_task', step: 'waiting_for_task', _task_map: tasks.map(t => t.name) });
-                    return NextResponse.json({ reply: `Which task do you want to update? (Type the number)\n\n${taskList}`, nlpData: finalIntent });
+                    return NextResponse.json({ reply: `Which task do you want to update in ${projName}? (Type the number)\n\n${taskList}`, nlpData: finalIntent });
                 }
             } else if (finalIntent.intent === 'create_task') {
                 if (!finalIntent.entities.project_name) {
                     const { data: projects } = await supabase.from('projects').select('name').order('created_at');
-                    const projectList = projects.map((p, idx) => `${idx + 1}. ${p.name}`).join('\n');
+                    const projectList = (projects || []).map((p, idx) => `${idx + 1}. ${p.name}`).join('\n');
                     setState(userName, { action: 'create_task', step: 'waiting_for_project', _proj_map: projects.map(p => p.name) });
                     return NextResponse.json({ reply: `Which project should this task be added to? (Type the number)\n\n${projectList}`, nlpData: finalIntent });
                 }

@@ -19,6 +19,20 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
     if not task_name and context.get("recent_task_name"):
         task_name = context["recent_task_name"]
 
+    
+    # Context Management: Prompt user to select project first if active_project_id is missing and task_name is a pure number
+    import re
+    is_numeric_task = task_name and re.match(r'^(task\s*)?\d+$', str(task_name).lower().strip())
+    ctx = get_context(user_id)
+    active_project_id = ctx.get("active_project_id")
+    
+    if is_numeric_task and not active_project_id:
+        set_state(user_id, {"action": "update_task", "step": "waiting_for_project", "task_query_pending": task_name, "progress": progress, "deadline": entities.get("deadline")})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+        return
+
     if not task_name:
         set_state(user_id, {"action": "update_task", "step": "waiting_for_project"})
         projects = get_projects()
@@ -56,8 +70,9 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
             # Resolve task_name if it's a number from a list
             ctx = get_context(user_id)
             last_list = ctx.get('last_task_list', [])
+            active_project_id = ctx.get('active_project_id')
             tasks = get_all_tasks()
-            match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list)
+            match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
             resolved_name = match['name'] if match else task_name
             
             set_state(user_id, {"action": "update_task", "step": "waiting_for_proof", "task_query": resolved_name, "progress": "100", "deadline": deadline})
@@ -73,6 +88,19 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
     
     if not task_name and context.get("recent_task_name"):
         task_name = context["recent_task_name"]
+
+    # Context Management check
+    import re
+    is_numeric_task = task_name and re.match(r'^(task\s*)?\d+$', str(task_name).lower().strip())
+    ctx = get_context(user_id)
+    active_project_id = ctx.get("active_project_id")
+    
+    if is_numeric_task and not active_project_id:
+        set_state(user_id, {"action": "complete_task", "step": "waiting_for_project", "task_query_pending": task_name})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+        return
 
     if not task_name:
         set_state(user_id, {"action": "complete_task", "step": "waiting_for_project"})
@@ -99,8 +127,9 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
     # Resolve task_name if it's a number from a list
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
     tasks = get_all_tasks()
-    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list)
+    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     resolved_name = match['name'] if match else task_name
 
     # Require proof for completion
@@ -117,6 +146,19 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
 
     if not task_name and context.get("recent_task_name"):
         task_name = context["recent_task_name"]
+
+    # Context Management check
+    import re
+    is_numeric_task = task_name and re.match(r'^(task\s*)?\d+$', str(task_name).lower().strip())
+    ctx = get_context(user_id)
+    active_project_id = ctx.get("active_project_id")
+    
+    if is_numeric_task and not active_project_id:
+        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_project", "task_query_pending": task_name, "blocker_description": blocker_text})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+        return
 
     if not task_name:
         set_state(user_id, {"action": "add_blocker", "step": "waiting_for_project"})
@@ -143,8 +185,9 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
     # Resolve task_name if it's a number from a list
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
     tasks = get_all_tasks()
-    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list)
+    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     resolved_name = match['name'] if match else task_name
 
     if not blocker_text:
@@ -282,7 +325,7 @@ def build_grouped_tasks_list_py(tasks):
     grouped = defaultdict(list)
     for idx, t in enumerate(tasks):
         try:
-            number = idx + 1
+            number = t.get('project_task_number', idx + 1)
             # Safer project name lookup
             p_obj = t.get('projects')
             if isinstance(p_obj, list) and p_obj:
@@ -376,7 +419,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         msg += build_grouped_tasks_list_py(a_tasks) if a_tasks else "No tasks match criteria"
         
         # Store context for index matching
-        update_context(user_id, last_task_list=[t['id'] for t in k_tasks] + [t['id'] for t in a_tasks])
+        update_context(user_id, last_task_list=[t['id'] for t in k_tasks] + [t['id'] for t in a_tasks], active_project_id=None)
         
         await send_reply_func(msg)
         return
@@ -408,7 +451,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         return
         
     msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
-    update_context(user_id, last_task_list=[t['id'] for t in filtered])
+    update_context(user_id, last_task_list=[t['id'] for t in filtered], active_project_id=None)
     await send_reply_func(msg)
 
 async def handle_get_task_detail(entities, user_id, context, send_reply_func):
@@ -418,14 +461,30 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
         await send_reply_func("Which task do you want to see details for? (e.g., 'task 1')")
         return
         
+    import re
+    is_numeric_task = task_reference and re.match(r'^(task\s*)?\d+$', str(task_reference).lower().strip())
+    ctx = get_context(user_id)
+    active_project_id = ctx.get("active_project_id")
+    
+    if is_numeric_task and not active_project_id:
+        # Ask for project context to show info
+        set_state(user_id, {"action": "get_task_detail", "step": "waiting_for_project", "task_query_pending": task_reference})
+        from db import get_projects
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+        return
+        
     # Resolve task using context
     from db import get_all_tasks
     last_list = context.get('last_task_list', [])
     all_tasks = get_all_tasks()
-    match = resolve_task_from_list(task_reference, all_tasks, last_list_ids=last_list)
+    match = resolve_task_from_list(task_reference, all_tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     if not match:
-        if not last_list:
+        if active_project_id:
+            await send_reply_func(f"Could not find '{task_reference}' in the active project.")
+        elif not last_list:
             await send_reply_func("I don't have a recent task list for you. Please first request the task list (e.g., 'show tasks').")
         else:
             await send_reply_func(f"Could not find task matching '{task_reference}'. Please select a valid number from the list.")
@@ -754,8 +813,9 @@ async def handle_clarify(entities, user_id, context, send_reply_func):
 async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None, deadline=None):
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
     tasks = get_all_tasks()
-    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list)
+    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
@@ -793,8 +853,9 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
 async def perform_add_blocker(task_query, description, user_id, send_reply_func, images=None):
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
     tasks = get_all_tasks()
-    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list)
+    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     if not match:
         await send_reply_func(f"Could not find task matching '{task_query}'.")
