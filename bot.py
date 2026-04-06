@@ -166,7 +166,15 @@ application.job_queue.run_daily(send_daily_report_job, time=job_time, days=(0, 1
 application.job_queue.run_daily(send_multiline_updates_report_job, time=job_time, days=(0, 1, 2, 3, 4, 5))
 
 def main():
-    logging.info(f"PROCESS ID: {os.getpid()}")
+    # Start both scheduler systems inside main to prevent duplicate instances
+    from core.reminder_scheduler import setup_reminder_scheduler
+    from scheduler import start_scheduler
+    
+    logging.info(f"BOOTING PROCESS: {os.getpid()}")
+    logging.info("Starting GEI Tracking Bot Schedulers...")
+    start_scheduler(application)
+    setup_reminder_scheduler(application)
+    
     logging.info("Starting GEI Telegram Bot in polling mode from bot.py...")
     application.run_polling(
         drop_pending_updates=True,

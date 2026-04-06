@@ -667,10 +667,14 @@ def generate_pdf_report():
             pdf.set_text_color(0, 0, 0) # reset black
             
             # Fetch the latest confirmed note if any
+            latest_note = "None"
+            blocker = t.get('blocker_reason') or "None"
+            
             from db import supabase
             update_res = supabase.table("updates").select("note, blockers").eq("task_id", t['id']).neq("note", None).order("timestamp", desc=True).limit(1).execute()
-            latest_note = update_res.data[0]['note'] if update_res.data else "None"
-            blocker = update_res.data[0]['blockers'] if update_res.data and update_res.data[0].get('blockers') else t.get('blocker_reason') or "None"
+            if update_res.data:
+                latest_note = update_res.data[0].get('note') or "None"
+                blocker = update_res.data[0].get('blockers') or blocker
             
             pdf.cell(0, 6, txt=f"Blocker: {blocker}", ln=1)
             pdf.cell(0, 6, txt=f"Note: {latest_note}", ln=1)
