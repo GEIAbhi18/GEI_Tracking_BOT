@@ -42,6 +42,22 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         clear_state(user_id)
         state = None # Fall through to LLM/Router
 
+    # MULTILINE UPDATE INTERCEPT 1: "YES/EDIT" Confirmation
+    if state and state.get("action") == "awaiting_multi_update_confirmation":
+        from core.multi_line_update import handle_multi_update_confirmation
+        handled = await handle_multi_update_confirmation(text, user_id, state, send_reply_func, clear_state)
+        if handled:
+            return
+
+    # MULTILINE UPDATE INTERCEPT 2: Ending with 'done'
+    # text might end with done, or the word 'done' is the last line.
+    lines = [l.strip() for l in text.split('\n') if l.strip()]
+    if lines and lines[-1].lower() == "done":
+        from core.multi_line_update import process_multi_line_trigger
+        handled = await process_multi_line_trigger(text, user_id, send_reply_func, set_state)
+        if handled:
+            return
+
     if state:
         await continue_conversation(text, user_id, state, images, send_reply_func)
         return

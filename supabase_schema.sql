@@ -101,3 +101,15 @@ BEGIN
     (proj2_id, asif_id, 'Tile removal + malba shifting + slope checking + corrections', '2026-02-27 23:59:59+00T'),
     (proj2_id, asif_id, 'Waterproofing + ponding test', '2026-02-28 23:59:59+00T');
 END $$;
+
+-- 7. Create Daily Updates Table (Multi-line updates feature)
+CREATE TABLE IF NOT EXISTS daily_updates (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+    project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+    task_id UUID REFERENCES tasks(id) ON DELETE CASCADE,
+    progress INT NOT NULL CHECK (progress >= 0 AND progress <= 100),
+    blocker TEXT,
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+

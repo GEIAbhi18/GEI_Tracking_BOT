@@ -106,7 +106,7 @@ async def send_daily_report(application):
 
 def start_scheduler(application):
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(send_deadline_alerts, CronTrigger(hour=9, minute=0), args=[application])
-    scheduler.add_job(send_reminder, CronTrigger(hour=17, minute=0), args=[application])
-    scheduler.add_job(send_daily_report, CronTrigger(hour=18, minute=0), args=[application])
+    scheduler.add_job(send_deadline_alerts, CronTrigger(day_of_week='mon-sat', hour=9, minute=0), args=[application])
+    scheduler.add_job(send_reminder, CronTrigger(day_of_week='mon-sat', hour=17, minute=0), args=[application])
+    scheduler.add_job(send_daily_report, CronTrigger(day_of_week='mon-sat', hour=18, minute=0), args=[application])
     scheduler.start()

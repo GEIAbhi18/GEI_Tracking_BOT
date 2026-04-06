@@ -101,6 +101,47 @@ async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
             caption="📊 Automated Daily Project Report (6:00 PM)"
         )
 
+async def send_multiline_updates_report_job(context: ContextTypes.DEFAULT_TYPE):
+    """Sends the multi-line daily updates summary to Kanav at 6 PM."""
+    from db import supabase # Ensure we use the shared instance
+    try:
+        response = supabase.table("users").select("telegram_id").eq("name", "Kanav").execute()
+        if not response.data or not response.data[0].get("telegram_id"):
+            return
+        target_user_id = response.data[0]["telegram_id"]
+    except Exception:
+        return
+        
+    try:
+        from datetime import datetime
+        today_iso = datetime.now().date().isoformat()
+        updates_res = supabase.table("daily_updates").select("*, projects(name), tasks(name), users(name)").gte("timestamp", today_iso).execute()
+        
+        updates = updates_res.data
+        if not updates:
+            return
+            
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for u in updates:
+            p_name = u.get("projects", {}).get("name", "Unknown Project") if u.get("projects") else "Unknown Project"
+            grouped[p_name].append(u)
+            
+        report_text = "📝 *Daily Updates Summary*\n\n"
+        for p_name, p_updates in grouped.items():
+            report_text += f"*{p_name}*\n"
+            for u in p_updates:
+                t_name = u.get("tasks", {}).get("name", "Unknown Task") if u.get("tasks") else "Unknown Task"
+                user_n = u.get("users", {}).get("name", "Unknown User") if u.get("users") else "Unknown User"
+                report_text += f"- {t_name} ({u['progress']}%) by {user_n}\n"
+                if u.get('blocker') and str(u['blocker']).lower() not in ["no blocker", "none"]:
+                    report_text += f"  🛑 Blocker: {u['blocker']}\n"
+            report_text += "\n"
+        
+        await context.bot.send_message(chat_id=target_user_id, text=report_text, parse_mode='Markdown')
+    except Exception as e:
+        logging.error(f"Failed to generate multiline daily report: {e}")
+
 application = (
     ApplicationBuilder()
     .token(TELEGRAM_BOT_TOKEN)
@@ -121,7 +162,8 @@ application.add_error_handler(error_handler)
 # Daily report from bot.py
 tz = pytz.timezone('Asia/Kolkata')
 job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
-application.job_queue.run_daily(send_daily_report_job, time=job_time)
+application.job_queue.run_daily(send_daily_report_job, time=job_time, days=(0, 1, 2, 3, 4, 5))
+application.job_queue.run_daily(send_multiline_updates_report_job, time=job_time, days=(0, 1, 2, 3, 4, 5))
 
 def main():
     logging.info(f"PROCESS ID: {os.getpid()}")

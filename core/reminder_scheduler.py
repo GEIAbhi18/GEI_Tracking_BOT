@@ -105,9 +105,8 @@ def setup_reminder_scheduler(application):
     from config import TIMEZONE
     scheduler = AsyncIOScheduler(timezone=TIMEZONE)
     
-    # 1. Scheduled Reminders (11:00 AM and 4:00 PM)
-    scheduler.add_job(send_scheduled_reminders, CronTrigger(hour=11, minute=0), args=[application])
-    scheduler.add_job(send_scheduled_reminders, CronTrigger(hour=16, minute=0), args=[application])
+    # 1. Scheduled Reminders (5:00 PM Mon-Sat)
+    scheduler.add_job(send_scheduled_reminders, CronTrigger(day_of_week='mon-sat', hour=17, minute=0), args=[application])
     
     # 2. Inactivity Check (Every hour)
     scheduler.add_job(check_inactivity_and_notify, 'interval', minutes=60, args=[application])
