@@ -8,7 +8,6 @@ from telegram.constants import ParseMode
 from config import TELEGRAM_BOT_TOKEN
 from core.update_engine import process_update_message
 from db import get_user_by_telegram_id, supabase
-from core.reminder_scheduler import setup_reminder_scheduler
 from core.intent_handlers import generate_pdf_report
 import datetime
 import pytz
@@ -102,34 +101,35 @@ async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
             caption="📊 Automated Daily Project Report (6:00 PM)"
         )
 
+application = (
+    ApplicationBuilder()
+    .token(TELEGRAM_BOT_TOKEN)
+    .connect_timeout(30)
+    .read_timeout(30)
+    .write_timeout(30)
+    .build()
+)
+
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+
+async def error_handler(update, context):
+    logging.error(f"Update {update} caused error: {context.error}")
+
+application.add_error_handler(error_handler)
+
+# Daily report from bot.py
+tz = pytz.timezone('Asia/Kolkata')
+job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
+application.job_queue.run_daily(send_daily_report_job, time=job_time)
+
 def main():
     logging.info(f"PROCESS ID: {os.getpid()}")
-    logging.info("Starting GEI Telegram Bot in polling mode...")
-
-    application = (
-        ApplicationBuilder()
-        .token(TELEGRAM_BOT_TOKEN)
-        .connect_timeout(30)
-        .read_timeout(30)
-        .write_timeout(30)
-        .build()
-    )
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
-
-    async def error_handler(update, context):
-        logging.error(f"Update {update} caused error: {context.error}")
-
-    application.add_error_handler(error_handler)
-
-    # Daily report
-    tz = pytz.timezone('Asia/Kolkata')
-    job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
-    application.job_queue.run_daily(send_daily_report_job, time=job_time)
-    # Start polling
+    logging.info("Starting GEI Telegram Bot in polling mode from bot.py...")
     application.run_polling(
-        drop_pending_updates=True
+        drop_pending_updates=True,
+        close_loop=False
     )
+
 if __name__ == '__main__':
     main()

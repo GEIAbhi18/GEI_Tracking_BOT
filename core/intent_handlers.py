@@ -358,6 +358,7 @@ def build_grouped_tasks_list_py(tasks):
             'number': number,
             'name': t.get('name', 'Unknown Task'),
             'deadline': t.get('deadline'),
+            'created_at': t.get('created_at'),
             'progress': prog,
             'blockerCount': blocker_count
             })
@@ -368,15 +369,25 @@ def build_grouped_tasks_list_py(tasks):
     msg = ""
     for p_name, t_list in grouped.items():
         msg += f"**{p_name}**\n"
+        # Sort tasks by their number before displaying
+        t_list = sorted(t_list, key=lambda x: float(x['number']) if str(x['number']).replace('.','').isdigit() else 999)
         for t in t_list:
+            start_str = "Unknown"
+            if t.get('created_at'):
+                try:
+                    sd = datetime.fromisoformat(t['created_at'].replace('Z', '+00:00'))
+                    start_str = sd.strftime("%d %b")
+                except:
+                    start_str = str(t['created_at'])[:10]
+                    
             dl_str = "No deadline"
-            if t['deadline']:
+            if t.get('deadline'):
                 try:
                     d = datetime.fromisoformat(t['deadline'].replace('Z', '+00:00'))
                     dl_str = d.strftime("%d %b")
                 except:
                     # fallback date parser
-                    dl_str = t['deadline'][:10]
+                    dl_str = str(t['deadline'])[:10]
             try:
                 # Cast to int to ensure we handle strings/floats correctly
                 current_prog = t.get('progress', 0)
@@ -386,7 +397,7 @@ def build_grouped_tasks_list_py(tasks):
                 is_done = False
                 
             tick = " ✅" if is_done else ""
-            msg += f"{t['number']}. {t['name']} – Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
+            msg += f"{t['number']}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
         msg += "\n"
         
     return msg.strip()
@@ -657,8 +668,9 @@ def generate_pdf_report():
             
             # Fetch the latest confirmed note if any
             from db import supabase
-            note_res = supabase.table("updates").select("note").eq("task_id", t['id']).neq("note", None).order("timestamp", desc=True).limit(1).execute()
-            latest_note = note_res.data[0]['note'] if note_res.data else "None"
+            update_res = supabase.table("updates").select("note, blockers").eq("task_id", t['id']).neq("note", None).order("timestamp", desc=True).limit(1).execute()
+            latest_note = update_res.data[0]['note'] if update_res.data else "None"
+            blocker = update_res.data[0]['blockers'] if update_res.data and update_res.data[0].get('blockers') else t.get('blocker_reason') or "None"
             
             pdf.cell(0, 6, txt=f"Blocker: {blocker}", ln=1)
             pdf.cell(0, 6, txt=f"Note: {latest_note}", ln=1)
@@ -824,7 +836,12 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     try:
         # Handle cases where progress is not provided (e.g. deadline-only update)
         if progress_str is not None:
-            progress = int(str(progress_str).replace('%', ''))
+            import re
+            m = re.search(r'(\d+)', str(progress_str))
+            if m:
+                progress = int(m.group(1))
+            else:
+                progress = match.get('progress', 0)
         else:
             progress = match.get('progress', 0)
             if progress is None: progress = 0
