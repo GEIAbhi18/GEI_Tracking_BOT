@@ -544,7 +544,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
         if not state.get("awaiting_note_confirmation"):
             # Check for command or project mention (Step 8: Safety)
             msg_lower = text.lower()
-            COMMAND_KEYWORDS = ["show", "list", "view", "projects", "/", "update", "complete", "blocker", "ticket", "task"]
+            COMMAND_KEYWORDS = ["show tasks", "list tasks", "view tasks", "show projects", "/", "update task", "complete task", "add blocker", "raise ticket"]
             
             proj_match = resolve_project(text, get_projects())
             
