@@ -4,7 +4,7 @@ import re
 from db import (
     get_all_tasks, save_update, create_ticket, get_user_by_telegram_id, 
     get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers,
-    get_open_tickets, get_user_by_name
+    get_open_tickets, get_user_by_name, remove_blocker
 )
 from core.conversation_state import set_state, clear_state
 from core.context_manager import update_context, get_context
@@ -44,7 +44,6 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
     projects = get_projects()
     project_match = resolve_project(task_name, projects)
     if project_match:
-        from db import get_all_tasks
         tasks = get_all_tasks()
         p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
         if not p_tasks:
@@ -113,7 +112,6 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
     projects = get_projects()
     project_match = resolve_project(task_name, projects)
     if project_match:
-        from db import get_all_tasks
         tasks = get_all_tasks()
         p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
         if not p_tasks:
@@ -171,7 +169,6 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
     projects = get_projects()
     project_match = resolve_project(task_name, projects)
     if project_match:
-        from db import get_all_tasks
         tasks = get_all_tasks()
         p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
         if not p_tasks:
@@ -487,7 +484,7 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
         return
         
     # Resolve task using context
-    from db import get_all_tasks
+
     last_list = context.get('last_task_list', [])
     all_tasks = get_all_tasks()
     match = resolve_task_from_list(task_reference, all_tasks, last_list_ids=last_list, active_project_id=active_project_id)
@@ -617,7 +614,7 @@ async def handle_close_ticket(entities, user_id, context, send_reply_func):
 
 def generate_pdf_report():
     from fpdf import FPDF
-    from db import get_all_tasks, get_projects
+
     projects = get_projects()
     tasks = get_all_tasks()
     
@@ -894,7 +891,7 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     await send_reply_func(f"Blocker added successfully 🛑\nTask: {match['name']}\nIssue: {description}")
 
 async def perform_remove_blocker(task_query, user_id, send_reply_func):
-    from db import remove_blocker, get_all_tasks
+
     
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
