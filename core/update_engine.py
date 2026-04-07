@@ -370,7 +370,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             task_query = state.get("task_query")
             deadline = state.get("deadline")
             await handlers.perform_update(task_query, text, user_id, send_reply_func, deadline=deadline)
-            clear_state(user_id)
         elif step == "waiting_for_proof":
             if not images:
                 await send_reply_func("Please upload an actual image as proof.")
@@ -379,7 +378,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             pr = state.get("progress", "100")
             dl = state.get("deadline")
             await handlers.perform_update(tq, pr, user_id, send_reply_func, images=images, deadline=dl)
-            clear_state(user_id)
     
     elif action == "complete_task":
         if step == "waiting_for_project":
@@ -435,7 +433,6 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 return
             tq = state.get("task_query")
             await handlers.perform_update(tq, "100", user_id, send_reply_func, images=images)
-            clear_state(user_id)
             
     elif action == "get_task_detail":
         if step == "waiting_for_project":

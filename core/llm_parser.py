@@ -18,9 +18,10 @@ INSTRUCTIONS:
 * Extract all relevant entities
 * Return structured JSON only
 * If a message follows a task update and provides context (e.g., "reason for delay", "additional details"), it should be treated as a potential note.
+* Support shorthand task references like "3-1" or "3.1" where 3 is the project index and 1 is the task index.
 
 ALLOWED INTENTS:
-* task_update: For progress updates (e.g., "60% done")
+* task_update: For progress updates (e.g., "60% done", "3-1 60%")
 * complete_task: To mark a task as finished
 * add_blocker: To report a new blocker/issue
 * remove_blocker: To resolve an existing blocker
@@ -83,6 +84,18 @@ Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range":
 Example 10:
 User: "which tasks are blocked"
 Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "has_blockers": true}}
+
+Example 14:
+User: "3-1 80% done"
+Output: {"intent": "task_update", "task_reference": "3-1", "progress": 80, "confidence": 0.98}
+
+Example 15:
+User: "3.1 no blocker"
+Output: {"intent": "remove_blocker", "task_reference": "3-1", "confidence": 0.95}
+
+Example 16:
+User: "complete 1-2"
+Output: {"intent": "complete_task", "task_reference": "1-2", "confidence": 0.98}
 
 Example 11:
 User: "ask asif"

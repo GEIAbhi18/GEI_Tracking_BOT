@@ -152,12 +152,38 @@ def resolve_project(query, projects):
         if p['name'].lower().startswith(q_lower):
             return p
             
-    # Priority 3: Query in project name
-    for p in projects:
-        if q_lower in p['name'].lower():
-            return p
-            
     return None
+
+def format_date_human(date_str):
+    """
+    Formats a date string (YYYY-MM-DD or ISO) into a human-friendly format like '7th April'.
+    """
+    if not date_str or date_str == 'None':
+        return "No deadline"
+    from datetime import datetime
+    try:
+        sd = str(date_str).strip()
+        # Extract date part if it's ISO or has time
+        if 'T' in sd:
+            date_part = sd.split('T')[0]
+        elif ' ' in sd and len(sd) > 10:
+            date_part = sd.split(' ')[0]
+        else:
+            date_part = sd
+            
+        dt = datetime.strptime(date_part, "%Y-%m-%d")
+        
+        day = dt.day
+        if 11 <= day <= 13:
+            suffix = 'th'
+        else:
+            suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+            
+        return f"{day}{suffix} {dt.strftime('%B')}"
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Date formatting failed for {date_str}: {e}")
+        return str(date_str)[:10]
 
 def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=None):
     """
@@ -171,14 +197,33 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
     if q.startswith("task "): q = q[5:].strip()
     q_numeric = re.search(r'(\d+)', q)
     
-    # 0. Try active project mapping using project_task_number
-    if q_numeric and active_project_id:
-        target_number = int(q_numeric.group(1))
-        # Find task with this project_task_number natively assigned
+    # 0. Try X-Y format (ProjectNumber-TaskNumber)
+    match_xy = re.match(r'^(\d+)[-.](\d+)$', q)
+    if match_xy:
+        proj_idx = int(match_xy.group(1))
+        task_idx = int(match_xy.group(2))
+        
+        from core.context_manager import get_context
+        ctx = get_context(tasks[0].get('id') if tasks else None) # Dummy context fetch
+        # Actually we need the grouped structure here. 
+        # But we can simulate it if we know the project order.
+        # For simplicity, we'll try to find tasks that match this project index if we have it in a shared map.
+        # However, a cleaner way is to resolve it based on the sorted projects.
+        
+        from collections import defaultdict
+        grouped = defaultdict(list)
         for t in tasks:
-            if t.get('project_id') == active_project_id and t.get('project_task_number') == target_number:
-                return t
-                
+            p_obj = t.get('projects')
+            p_name = p_obj.get('name', 'Unknown') if isinstance(p_obj, dict) else 'Unknown'
+            grouped[p_name].append(t)
+            
+        sorted_projects = sorted(grouped.keys())
+        if 1 <= proj_idx <= len(sorted_projects):
+            target_p_name = sorted_projects[proj_idx - 1]
+            p_tasks = sorted(grouped[target_p_name], key=lambda x: x.get('project_task_number', 0))
+            if 1 <= task_idx <= len(p_tasks):
+                return p_tasks[task_idx - 1]
+
     # 1. Try list index matching
     if q_numeric and last_list_ids:
         idx = int(q_numeric.group(1)) - 1

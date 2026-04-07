@@ -364,27 +364,18 @@ def build_grouped_tasks_list_py(tasks):
             continue
         
     msg = ""
-    for p_name, t_list in grouped.items():
-        msg += f"**{p_name}**\n"
+    # Sort projects by name for stable numbering
+    sorted_p_names = sorted(grouped.keys())
+    for proj_idx, p_name in enumerate(sorted_p_names, 1):
+        t_list = grouped[p_name]
+        msg += f"**{proj_idx}. {p_name}**\n"
         # Sort tasks by their number before displaying
         t_list = sorted(t_list, key=lambda x: float(x['number']) if str(x['number']).replace('.','').isdigit() else 999)
         for t in t_list:
-            start_str = "Unknown"
-            if t.get('created_at'):
-                try:
-                    sd = datetime.fromisoformat(t['created_at'].replace('Z', '+00:00'))
-                    start_str = sd.strftime("%d %b")
-                except:
-                    start_str = str(t['created_at'])[:10]
-                    
-            dl_str = "No deadline"
-            if t.get('deadline'):
-                try:
-                    d = datetime.fromisoformat(t['deadline'].replace('Z', '+00:00'))
-                    dl_str = d.strftime("%d %b")
-                except:
-                    # fallback date parser
-                    dl_str = str(t['deadline'])[:10]
+            from core.utils import format_date_human
+            start_str = format_date_human(t.get('created_at')).replace("No deadline", "Unknown")
+            dl_str = format_date_human(t.get('deadline'))
+            
             try:
                 # Cast to int to ensure we handle strings/floats correctly
                 current_prog = t.get('progress', 0)
@@ -644,7 +635,8 @@ def generate_pdf_report():
             
             t_status = t.get('status', 'pending')
             progress = t.get('progress', 0)
-            deadline = t.get('deadline') or 'None'
+            from core.utils import format_date_human
+            deadline = format_date_human(t.get('deadline'))
             pdf.cell(0, 6, txt=f"Status: {t_status} | Progress: {progress}% | Deadline: {deadline}", ln=1)
             
             t_rag = "amber"
