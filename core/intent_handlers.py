@@ -356,6 +356,7 @@ def build_grouped_tasks_list_py(tasks):
             'name': t.get('name', 'Unknown Task'),
             'deadline': t.get('deadline'),
             'created_at': t.get('created_at'),
+            'planned_start_date': t.get('planned_start_date'),
             'progress': prog,
             'blockerCount': blocker_count
             })
