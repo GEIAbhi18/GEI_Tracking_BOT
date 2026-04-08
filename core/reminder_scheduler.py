@@ -1,14 +1,13 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
+from telegram.ext import ContextTypes
 from db import get_active_users_with_tasks, get_tasks_for_user, supabase
 from core.context_manager import update_context as set_context
 
 logger = logging.getLogger(__name__)
 
-async def send_reminder_to_user(application, user, reason="scheduled"):
+async def send_reminder_to_user(context: ContextTypes.DEFAULT_TYPE, user, reason="scheduled"):
     """Sends a reminder message to a specific user and updates their state."""
     tid = user.get('telegram_id')
     if not tid:
@@ -39,7 +38,7 @@ async def send_reminder_to_user(application, user, reason="scheduled"):
     msg += "\nReply with updates in natural language."
 
     try:
-        await application.bot.send_message(chat_id=tid, text=msg)
+        await context.bot.send_message(chat_id=tid, text=msg)
         
         # Update last_reminder_at
         supabase.table("users").update({"last_reminder_at": datetime.now().isoformat()}).eq("id", user['id']).execute()
@@ -53,7 +52,7 @@ async def send_reminder_to_user(application, user, reason="scheduled"):
     except Exception as e:
         logger.error(f"Failed to send reminder to {user['name']}: {e}")
 
-async def check_inactivity_and_notify(application):
+async def check_inactivity_and_notify(context: ContextTypes.DEFAULT_TYPE):
     """Checks for inactive users (> 4 hours) and notifies them."""
     logger.info("Running inactivity check...")
     users = get_active_users_with_tasks()
@@ -89,27 +88,13 @@ async def check_inactivity_and_notify(application):
                         already_sent_recently = True
                 
                 if not already_sent_recently:
-                    await send_reminder_to_user(application, user, reason="inactivity")
+                    await send_reminder_to_user(context, user, reason="inactivity")
         except Exception as e:
             logger.error(f"Error checking inactivity for {user['name']}: {e}")
 
-async def send_scheduled_reminders(application):
+async def send_scheduled_reminders(context: ContextTypes.DEFAULT_TYPE):
     """Sends reminders to all active users at fixed times."""
     logger.info("Running scheduled reminders (11AM/4PM)...")
     users = get_active_users_with_tasks()
     for user in users:
-        await send_reminder_to_user(application, user, reason="scheduled")
-
-def setup_reminder_scheduler(application):
-    """Initializes the APScheduler for reminders."""
-    from config import TIMEZONE
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    
-    # 1. Scheduled Reminders (5:00 PM Mon-Sat)
-    scheduler.add_job(send_scheduled_reminders, CronTrigger(day_of_week='mon-sat', hour=17, minute=0), args=[application])
-    
-    # 2. Inactivity Check (Every hour)
-    scheduler.add_job(check_inactivity_and_notify, 'interval', minutes=60, args=[application])
-    
-    scheduler.start()
-    logger.info("Hybrid Reminder Scheduler started.")
+        await send_reminder_to_user(context, user, reason="scheduled")

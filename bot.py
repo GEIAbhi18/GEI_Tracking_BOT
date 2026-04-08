@@ -80,21 +80,45 @@ async def send_multiline_updates_report_job(context: ContextTypes.DEFAULT_TYPE):
                 await context.bot.send_message(chat_id=target, text=report, parse_mode='Markdown')
     except Exception as e: logging.error(f"Multiline report error: {e}")
 
+import telegram
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if isinstance(context.error, telegram.error.Conflict):
+        logging.warning("⚠️ Bot conflict detected! (Railway overlap) Waiting for old instance to shut down...")
+    else:
+        logging.error("Exception while handling an update:", exc_info=context.error)
+
 application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(MessageHandler(filters.TEXT | filters.PHOTO, handle_message))
+application.add_error_handler(error_handler)
+
 tz = pytz.timezone('Asia/Kolkata')
-job_time = datetime.time(hour=18, minute=0, tzinfo=tz)
-application.job_queue.run_daily(send_daily_report_job, time=job_time, days=(0,1,2,3,4,5))
-application.job_queue.run_daily(send_multiline_updates_report_job, time=job_time, days=(0,1,2,3,4,5))
+time_9am = datetime.time(hour=9, minute=0, tzinfo=tz)
+time_5pm = datetime.time(hour=17, minute=0, tzinfo=tz)
+time_6pm = datetime.time(hour=18, minute=0, tzinfo=tz)
+weekdays = (0,1,2,3,4,5)
+
+application.job_queue.run_daily(send_daily_report_job, time=time_6pm, days=weekdays)
+application.job_queue.run_daily(send_multiline_updates_report_job, time=time_6pm, days=weekdays)
 
 def start_bot():
-    from core.reminder_scheduler import setup_reminder_scheduler
-    from scheduler import start_scheduler
+    from scheduler import send_deadline_alerts, send_reminder, send_daily_report
+    from core.reminder_scheduler import send_scheduled_reminders, check_inactivity_and_notify
+    
     logging.info(f"BOOTING PROCESS: {os.getpid()}")
-    start_scheduler(application)
-    setup_reminder_scheduler(application)
-    logging.info("Starting GEI Telegram Bot...")
+    
+    # Consolidate all external APScheduler jobs to PTB's native JobQueue
+    application.job_queue.run_daily(send_deadline_alerts, time=time_9am, days=weekdays)
+    application.job_queue.run_daily(send_reminder, time=time_5pm, days=weekdays)
+    application.job_queue.run_daily(send_scheduled_reminders, time=time_5pm, days=weekdays)
+    application.job_queue.run_daily(send_daily_report, time=time_6pm, days=weekdays)
+    
+    # Run every hour (3600s), staggering the first run by 10s
+    application.job_queue.run_repeating(check_inactivity_and_notify, interval=3600, first=10)
+    
+    logging.info("Starting GEI Telegram Bot natively...")
+    # drop_pending_updates prevents processing old messages on reboot
     application.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":

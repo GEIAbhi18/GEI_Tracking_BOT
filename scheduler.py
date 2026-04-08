@@ -1,24 +1,23 @@
 import logging
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ContextTypes
 from config import EMPLOYEE_CHAT_ID, DIRECTOR_CHAT_ID, TIMEZONE
 from db import get_todays_updates, get_upcoming_deadlines, get_all_tasks
 from rag import calculate_project_rag, calculate_rag
 
 logger = logging.getLogger(__name__)
 
-async def send_reminder(application):
+async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Sending 5PM reminder to employee...")
     try:
-        await application.bot.send_message(
+        await context.bot.send_message(
             chat_id=EMPLOYEE_CHAT_ID,
             text="Asif, aaj ke tasks ka update bhejo.\nExample:\n'Top Terrace waterproofing 40% done, material delay' + photo"
         )
     except Exception as e:
         logger.error(f"Error sending reminder: {e}")
 
-async def send_deadline_alerts(application):
+async def send_deadline_alerts(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Checking for upcoming deadlines...")
     try:
         deadlines = get_upcoming_deadlines()
@@ -31,7 +30,7 @@ async def send_deadline_alerts(application):
             alert_text += f"*{project_name}* -> {task['name']}\n"
             alert_text += f"⏳ Due: {task['deadline']}\n\n"
             
-        await application.bot.send_message(
+        await context.bot.send_message(
             chat_id=EMPLOYEE_CHAT_ID,
             text=alert_text,
             parse_mode="Markdown"
@@ -39,7 +38,7 @@ async def send_deadline_alerts(application):
     except Exception as e:
         logger.error(f"Error sending deadline alerts: {e}")
 
-async def send_daily_report(application):
+async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
     logger.info("Generating daily report for director...")
     try:
         updates = get_todays_updates()
@@ -95,7 +94,7 @@ async def send_daily_report(application):
             
             buttons.append([InlineKeyboardButton(f"[{p_name} Details]", callback_data=f"proj_{p_info['id']}")])
         
-        await application.bot.send_message(
+        await context.bot.send_message(
             chat_id=DIRECTOR_CHAT_ID,
             text=report_text,
             parse_mode="Markdown",
@@ -103,10 +102,3 @@ async def send_daily_report(application):
         )
     except Exception as e:
         logger.error(f"Error sending 6PM report: {e}")
-
-def start_scheduler(application):
-    scheduler = AsyncIOScheduler(timezone=TIMEZONE)
-    scheduler.add_job(send_deadline_alerts, CronTrigger(day_of_week='mon-sat', hour=9, minute=0), args=[application])
-    scheduler.add_job(send_reminder, CronTrigger(day_of_week='mon-sat', hour=17, minute=0), args=[application])
-    scheduler.add_job(send_daily_report, CronTrigger(day_of_week='mon-sat', hour=18, minute=0), args=[application])
-    scheduler.start()
