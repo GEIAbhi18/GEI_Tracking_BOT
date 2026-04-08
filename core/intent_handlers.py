@@ -373,7 +373,8 @@ def build_grouped_tasks_list_py(tasks):
         t_list = sorted(t_list, key=lambda x: float(x['number']) if str(x['number']).replace('.','').isdigit() else 999)
         for t in t_list:
             from core.utils import format_date_human
-            start_str = format_date_human(t.get('created_at')).replace("No deadline", "Unknown")
+            start_val = t.get('planned_start_date') or t.get('created_at')
+            start_str = format_date_human(start_val).replace("No deadline", "Unknown")
             dl_str = format_date_human(t.get('deadline'))
             
             try:
@@ -655,20 +656,30 @@ def generate_pdf_report():
                 pdf.cell(0, 6, txt="Amber", ln=1)
             pdf.set_text_color(0, 0, 0) # reset black
             
-            # Fetch the latest confirmed note if any
+            # Fetch the latest confirmed note and proof images if any
             latest_note = "None"
             blocker = t.get('blocker_reason') or "None"
+            atts = t.get('attachments') or []
             
             from db import supabase
-            update_res = supabase.table("updates").select("note, blockers").eq("task_id", t['id']).neq("note", None).order("timestamp", desc=True).limit(1).execute()
+            update_res = supabase.table("updates").select("note, blockers, images").eq("task_id", t['id']).order("timestamp", desc=True).limit(5).execute()
             if update_res.data:
-                latest_note = update_res.data[0].get('note') or "None"
+                # Get the latest blocker from the most recent update
                 blocker = update_res.data[0].get('blockers') or blocker
+                # Find the latest note
+                for r in update_res.data:
+                    if r.get('note'):
+                        latest_note = r['note']
+                        break
+                # Find the latest images
+                for r in update_res.data:
+                    if r.get('images') and len(r['images']) > 0:
+                        atts.extend(r['images'])
+                        break
             
             pdf.cell(0, 6, txt=f"Blocker: {blocker}", ln=1)
             pdf.cell(0, 6, txt=f"Note: {latest_note}", ln=1)
             
-            atts = t.get('attachments')
             if atts and isinstance(atts, list) and len(atts) > 0:
                 img_url = atts[0]
                 proof_url = img_url
