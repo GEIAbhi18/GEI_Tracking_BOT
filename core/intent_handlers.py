@@ -754,11 +754,22 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
     if not projects:
         await send_reply_func("No projects exist. Create a project first.")
         return
-    msg = "Which project should this task be added to? (You can type the number)\n\n"
-    for i, p in enumerate(projects, 1):
-        msg += f"{i}. {p['name']}\n"
-    set_state(user_id, {"action": "create_task", "step": "waiting_for_project"})
-    await send_reply_func(msg)
+        
+    project_query = entities.get("project_name") or entities.get("task_name") # LLM might put project name here
+    match = resolve_project(project_query, projects) if project_query else None
+    
+    if not match and context.get("active_project_id"):
+        match = next((p for p in projects if p['id'] == context["active_project_id"]), None)
+
+    if match:
+        set_state(user_id, {"action": "create_task", "step": "waiting_for_task_name", "project_query": match['name']})
+        await send_reply_func("enter task name")
+    else:
+        msg = "Which project should this task be added to? (You can type the number)\n\n"
+        for i, p in enumerate(projects, 1):
+            msg += f"{i}. {p['name']}\n"
+        set_state(user_id, {"action": "create_task", "step": "waiting_for_project"})
+        await send_reply_func(msg)
 
 async def handle_help(entities, user_id, context, send_reply_func):
     msg = (

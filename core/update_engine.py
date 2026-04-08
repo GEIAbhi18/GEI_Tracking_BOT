@@ -488,15 +488,27 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             state["project_query"] = text
             state["step"] = "waiting_for_task_name"
             set_state(user_id, state)
-            await send_reply_func("What is the name of the new task?")
+            await send_reply_func("enter task name")
         elif step == "waiting_for_task_name":
             state["task_name"] = text
+            state["step"] = "waiting_for_start_date"
+            set_state(user_id, state)
+            await send_reply_func("Start date (YYYY-MM-DD or NLP like tommorow or 10th April)")
+        elif step == "waiting_for_start_date":
+            # Parse start date
+            try:
+                parsed_start = parse_human_date(text)
+            except Exception as e:
+                logging.warning(f"Start date parsing failed for '{text}': {e}")
+                parsed_start = text
+            state["start_date"] = parsed_start
             state["step"] = "waiting_for_deadline"
             set_state(user_id, state)
-            await send_reply_func("What is the deadline for this task? (e.g. YYYY-MM-DD or tomorrow)")
+            await send_reply_func("deadline YYYY-MM-DD or NLP like tommorow or 10th April")
         elif step == "waiting_for_deadline":
             project_query = state.get("project_query", "")
             task_name = state.get("task_name")
+            start_date = state.get("start_date")
             deadline = text
             pq = project_query.strip()
             projects = get_projects()
@@ -511,13 +523,16 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     parsed_deadline = deadline 
                 
                 try:
-                    result = add_task(match['id'], task_name, parsed_deadline)
+                    result = add_task(match['id'], task_name, parsed_deadline, start_date=start_date)
                 except Exception as ae:
                     logging.error(f"Database error in add_task: {ae}")
                     result = None
                 
                 if result:
-                    await send_reply_func(f"Task '{task_name}' created successfully for project '{match['name']}'! ✅\nDeadline: {parsed_deadline}")
+                    from core.utils import format_date_human
+                    f_start = format_date_human(start_date)
+                    f_dl = format_date_human(parsed_deadline)
+                    await send_reply_func(f"task created successfully start date: {f_start} , deadline: {f_dl}")
                 else:
                     await send_reply_func(f"Sorry, I couldn't save the task '{task_name}'. Please check the format and try again.")
             else:

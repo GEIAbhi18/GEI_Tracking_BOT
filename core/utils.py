@@ -16,6 +16,9 @@ def parse_human_date(date_text: str) -> str:
     text = date_text.strip().lower()
     # Remove common filler words
     text = re.sub(r'\b(on|at|by|for|the)\b', '', text).strip()
+    # Remove ordinal suffixes: 1st, 2nd, 3rd, 4th -> 1, 2, 3, 4
+    text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text)
+    text = text.strip()
     
     today = datetime.now()
     

@@ -117,7 +117,7 @@ def create_project_db(name, created_by=None):
     resp = supabase.table("projects").insert(data).execute()
     return resp.data[0] if resp.data else None
 
-def add_task(project_id, name, deadline=None, assigned_to=None):
+def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None):
     data = {
         "project_id": project_id,
         "name": name,
@@ -127,6 +127,8 @@ def add_task(project_id, name, deadline=None, assigned_to=None):
         data["assigned_to"] = assigned_to
     if deadline:
         data["deadline"] = deadline
+    if start_date:
+        data["planned_start_date"] = start_date
     try:
         resp = supabase.table("tasks").insert(data).execute()
         return resp.data[0] if resp.data else None
