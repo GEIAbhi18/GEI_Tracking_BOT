@@ -4,7 +4,7 @@ import re
 from db import (
     get_all_tasks, save_update, create_ticket, get_user_by_telegram_id, 
     get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers,
-    get_open_tickets, get_user_by_name, remove_blocker
+    get_open_tickets, get_user_by_name, remove_blocker, update_task_image
 )
 from core.conversation_state import set_state, clear_state
 from core.context_manager import update_context, get_context
@@ -227,6 +227,46 @@ async def handle_remove_blocker(entities, user_id, context, send_reply_func):
         return
 
     await perform_remove_blocker(task_name, user_id, send_reply_func)
+
+async def handle_add_image(entities, user_id, context, send_reply_func, images=None):
+    task_name = entities.get("task_name")
+    
+    if not task_name:
+        set_state(user_id, {"action": "add_image", "step": "waiting_for_project"})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
+        return
+
+    # Check if task_name is actually a project name
+    projects = get_projects()
+    project_match = resolve_project(task_name, projects)
+    if project_match:
+        tasks = get_all_tasks()
+        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        if not p_tasks:
+            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            return
+        tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+        set_state(user_id, {"action": "add_image", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
+        await send_reply_func(f"Which task in '{project_match['name']}' do you want to add an image to? (Type the number)\n\n{tasks_msg}")
+        return
+
+    # Resolve task_name if it's a number from a list
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
+    tasks = get_all_tasks()
+    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
+    resolved_name = match['name'] if match else task_name
+
+    if not images:
+        set_state(user_id, {"action": "add_image", "step": "waiting_for_proof", "task_query": resolved_name})
+        await send_reply_func(f"Please upload the image for '{resolved_name}'. (This will replace any older images)")
+        return
+
+    await perform_add_image(resolved_name, user_id, send_reply_func, images=images)
+
 
 def filter_tasks(tasks, filters):
     if not filters:
@@ -933,6 +973,31 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_blocker")
     
     await send_reply_func(f"Blocker added successfully 🛑\nTask: {match['name']}\nIssue: {description}")
+
+async def perform_add_image(task_query, user_id, send_reply_func, images=None):
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
+    tasks = get_all_tasks()
+    match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
+    
+    if not match:
+        await send_reply_func(f"Could not find task matching '{task_query}'.")
+        return
+
+    if not images:
+        await send_reply_func("No image was provided. Upload canceled.")
+        return
+
+    update_task_image(match['id'], images)
+    
+    # Update Context
+    update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_image")
+    from core.conversation_state import clear_state
+    clear_state(user_id)
+    
+    await send_reply_func(f"Image added and updated successfully for '{match['name']}'. 🖼️")
+
 
 async def perform_remove_blocker(task_query, user_id, send_reply_func):
 

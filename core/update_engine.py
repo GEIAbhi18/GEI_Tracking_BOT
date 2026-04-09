@@ -105,6 +105,9 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     elif stripped_lower in ["create task", "new task", "create_task", "new_task"]:
         await handlers.handle_create_task({"intent": "create_task"}, user_id, context, send_reply_func)
         return
+    elif stripped_lower in ["add image", "upload image", "add_image", "upload_image"]:
+        await handlers.handle_add_image({"intent": "add_image"}, user_id, context, send_reply_func)
+        return
     elif stripped_lower in ["update task", "task update", "update_task", "task_update"]:
         await handlers.handle_task_update({"intent": "task_update"}, user_id, context, send_reply_func)
         return
@@ -179,6 +182,9 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         elif "task" in text.lower() and "create" in text.lower():
             intent = "create_task"
             parsed = {"intent": "create_task", "confidence": 0.8}
+        elif "image" in text.lower() and ("add" in text.lower() or "upload" in text.lower()):
+            intent = "add_image"
+            parsed = {"intent": "add_image", "confidence": 0.8}
         elif "task" in text.lower() and re.search(r'task\s*\d+', text.lower()):
             intent = "get_task_detail"
             parsed = {"intent": "get_task_detail", "task_reference": re.search(r'task\s*(\d+)', text.lower()).group(0), "confidence": 0.9}
@@ -206,6 +212,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_add_blocker(parsed, user_id, context, send_reply_func, images=images)
     elif intent == "remove_blocker":
         await handlers.handle_remove_blocker(parsed, user_id, context, send_reply_func)
+    elif intent == "add_image":
+        await handlers.handle_add_image(parsed, user_id, context, send_reply_func, images=images)
     elif intent == "list_tasks" or intent == "query_tasks":
         await handlers.handle_query_tasks(parsed, user_id, context, send_reply_func)
     elif intent == "get_task_detail":
@@ -317,6 +325,48 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             else:
                 await send_reply_func("Please type 'All' to resolve everything or the number of the specific blocker.")
     
+    elif action == "add_image":
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            projects = get_projects()
+            match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
+                
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
+            tasks = get_all_tasks()
+            if match:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
+                
+            if not p_tasks:
+                await send_reply_func("No pending tasks found for this project.")
+                clear_state(user_id)
+                return
+                
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Which task do you want to add an image to? (Type the number)\n\n{tasks_msg}")
+        elif step == "waiting_for_task":
+            t_map = state.get("_task_map", [])
+            tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
+            tq = tq_obj['name'] if tq_obj else text.strip()
+            state["task_query"] = tq
+            state["step"] = "waiting_for_proof"
+            set_state(user_id, state)
+            await send_reply_func(f"Please upload the image for '{tq}'. (This will replace any older images)")
+        elif step == "waiting_for_proof":
+            if not images:
+                await send_reply_func("Please upload an actual image as proof.")
+                return
+            tq = state.get("task_query")
+            await handlers.perform_add_image(tq, user_id, send_reply_func, images=images)
+            
+
     elif action == "update_task":
         if step == "waiting_for_project":
             state["project_query"] = text

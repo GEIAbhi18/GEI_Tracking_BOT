@@ -256,3 +256,15 @@ def get_task_by_name(task_name):
     # Basic partial match
     response = supabase.table("tasks").select("*, projects(name)").ilike("name", f"%{task_name}%").execute()
     return response.data
+
+def update_task_image(task_id, images):
+    """Replaces old image with new one in tasks and latest update to ensure it overrides in the report."""
+    response = supabase.table("tasks").update({"attachments": images}).eq("id", task_id).execute()
+    
+    # Also update the latest update's image so the PDF report picks it correctly
+    update_res = supabase.table("updates").select("id").eq("task_id", task_id).order("timestamp", desc=True).limit(1).execute()
+    if update_res.data:
+        update_id = update_res.data[0]['id']
+        supabase.table("updates").update({"images": images}).eq("id", update_id).execute()
+        
+    return response.data
