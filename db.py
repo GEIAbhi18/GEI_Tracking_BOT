@@ -35,14 +35,16 @@ def get_all_tasks():
 def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None):
     from rag import calculate_rag
     
-    task_response = supabase.table("tasks").select("created_at, deadline").eq("id", task_id).execute()
+    task_response = supabase.table("tasks").select("created_at, deadline, planned_start_date").eq("id", task_id).execute()
     task_data = task_response.data[0] if task_response.data else {}
     
     # Robust date parsing to prevent crashes
     try:
-        task_created_at = datetime.fromisoformat(task_data.get("created_at").replace('Z', '+00:00')) if task_data.get("created_at") else None
+        # Priority: planned_start_date > created_at
+        start_date_str = task_data.get("planned_start_date") or task_data.get("created_at")
+        task_start_date = datetime.fromisoformat(start_date_str.replace('Z', '+00:00')) if start_date_str else None
     except:
-        task_created_at = None
+        task_start_date = None
     
     # Use new deadline if provided, else use existing
     final_deadline_str = new_deadline if new_deadline else task_data.get("deadline")
@@ -53,7 +55,7 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
     except:
         task_deadline = None
     
-    rag_color, _ = calculate_rag(progress, task_created_at, task_deadline, blockers, 0)
+    rag_color, _ = calculate_rag(progress, task_start_date, task_deadline, blockers, 0)
     
     data = {
         "task_id": task_id,
@@ -75,6 +77,10 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
     task_update_data = {"progress": progress}
     if new_deadline:
         task_update_data["deadline"] = new_deadline
+    
+    if int(progress) >= 100:
+        task_update_data["status"] = "completed"
+        task_update_data["actual_end_date"] = datetime.now().isoformat()
         
     supabase.table("tasks").update(task_update_data).eq("id", task_id).execute()
     return response.data

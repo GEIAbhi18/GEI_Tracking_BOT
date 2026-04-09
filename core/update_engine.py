@@ -370,8 +370,28 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             task_query = state.get("task_query")
             deadline = state.get("deadline")
             await handlers.perform_update(task_query, text, user_id, send_reply_func, deadline=deadline)
+        elif step == "waiting_for_proof_choice":
+            choice = text.strip().lower()
+            tq = state.get("task_query")
+            pr = state.get("progress", "100")
+            dl = state.get("deadline")
+            if choice in ["no", "n", "skip", "nope"]:
+                await handlers.perform_update(tq, pr, user_id, send_reply_func, deadline=dl)
+            elif choice in ["yes", "y", "yep", "ok", "sure"]:
+                state["step"] = "waiting_for_proof"
+                set_state(user_id, state)
+                await send_reply_func(f"Please upload the image proof for '{tq}'.")
+            else:
+                await send_reply_func("Please reply with **Yes** to upload an image or **No** to complete without an image.")
         elif step == "waiting_for_proof":
             if not images:
+                # If they didn't upload image but typed text, check if they meant 'no' after all
+                if text.strip().lower() in ["no", "skip"]:
+                    tq = state.get("task_query")
+                    pr = state.get("progress", "100")
+                    dl = state.get("deadline")
+                    await handlers.perform_update(tq, pr, user_id, send_reply_func, deadline=dl)
+                    return
                 await send_reply_func("Please upload an actual image as proof.")
                 return
             tq = state.get("task_query")
@@ -427,8 +447,23 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             await send_reply_func(f"Please upload an image proof to mark '{tq}' as complete.")
             
+        elif step == "waiting_for_proof_choice":
+            choice = text.strip().lower()
+            tq = state.get("task_query")
+            if choice in ["no", "n", "skip", "nope"]:
+                await handlers.perform_update(tq, "100", user_id, send_reply_func)
+            elif choice in ["yes", "y", "yep", "ok", "sure"]:
+                state["step"] = "waiting_for_proof"
+                set_state(user_id, state)
+                await send_reply_func(f"Please upload the image proof for '{tq}'.")
+            else:
+                await send_reply_func("Please reply with **Yes** to upload an image or **No** to complete without an image.")
         elif step == "waiting_for_proof":
             if not images:
+                if text.strip().lower() in ["no", "skip"]:
+                    tq = state.get("task_query")
+                    await handlers.perform_update(tq, "100", user_id, send_reply_func)
+                    return
                 await send_reply_func("Please upload an actual image as proof.")
                 return
             tq = state.get("task_query")

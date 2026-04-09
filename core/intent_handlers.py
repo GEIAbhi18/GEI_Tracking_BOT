@@ -63,7 +63,7 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
         await send_reply_func(f"What is the progress % for '{task_name}'?")
         return
 
-    # Check for 100% completion - Require proof
+    # Check for 100% completion - Ask for proof choice
     try:
         if progress is not None and int(str(progress).replace('%','')) >= 100 and not images:
             # Resolve task_name if it's a number from a list
@@ -74,8 +74,8 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
             match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
             resolved_name = match['name'] if match else task_name
             
-            set_state(user_id, {"action": "update_task", "step": "waiting_for_proof", "task_query": resolved_name, "progress": "100", "deadline": deadline})
-            await send_reply_func(f"Please upload an image proof to mark '{resolved_name}' as 100% complete.")
+            set_state(user_id, {"action": "update_task", "step": "waiting_for_proof_choice", "task_query": resolved_name, "progress": "100", "deadline": deadline})
+            await send_reply_func(f"Task '{resolved_name}' is 100% complete! ✅\nDo you want to upload a proof image? (Reply **Yes** or **No**)")
             return
     except:
         pass
@@ -130,10 +130,10 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
     match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     resolved_name = match['name'] if match else task_name
 
-    # Require proof for completion
+    # Ask for proof choice
     if not images:
-        set_state(user_id, {"action": "complete_task", "step": "waiting_for_proof", "task_query": resolved_name})
-        await send_reply_func(f"Please upload an image proof to mark '{resolved_name}' as complete.")
+        set_state(user_id, {"action": "complete_task", "step": "waiting_for_proof_choice", "task_query": resolved_name})
+        await send_reply_func(f"Task '{resolved_name}' is marked as complete! ✅\nDo you want to upload a proof image? (Reply **Yes** or **No**)")
         return
 
     await perform_update(resolved_name, "100", user_id, send_reply_func, images=images)
@@ -197,18 +197,33 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
 async def handle_remove_blocker(entities, user_id, context, send_reply_func):
     task_name = entities.get("task_name")
     
-    if not task_name and context.get("recent_task_name"):
-        task_name = context["recent_task_name"]
-
     if not task_name:
         tasks = get_all_tasks()
         blocked_tasks = [t for t in tasks if t.get('is_blocked')]
         if not blocked_tasks:
-            await send_reply_func("No blocked tasks found.")
+            await send_reply_func("No blocked tasks found. Everything is on track! 🟢")
             return
-        tasks_msg = "\n".join([f"- {t['name']}" for t in blocked_tasks])
+            
+        from collections import defaultdict
+        grouped = defaultdict(list)
+        for t in blocked_tasks:
+            p_obj = t.get('projects')
+            if isinstance(p_obj, list) and p_obj:
+                p_name = p_obj[0].get('name', 'General')
+            elif isinstance(p_obj, dict):
+                p_name = p_obj.get('name', 'General')
+            else:
+                p_name = 'General'
+            grouped[p_name].append(t)
+            
+        msg = "Which Project Which task to remove the blocker?\n\n"
+        for p, ts in grouped.items():
+            msg += f"**{p}**:\n"
+            for t in ts:
+                msg += f"- {t['name']}\n"
+        
         set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_task"})
-        await send_reply_func(f"Which task's blocker should I remove?\n\n{tasks_msg}")
+        await send_reply_func(msg)
         return
 
     await perform_remove_blocker(task_name, user_id, send_reply_func)
@@ -641,9 +656,23 @@ def generate_pdf_report():
             deadline = format_date_human(t.get('deadline'))
             pdf.cell(0, 6, txt=f"Status: {t_status} | Progress: {progress}% | Deadline: {deadline}", ln=1)
             
-            t_rag = "amber"
-            if t_status == 'completed': t_rag = "green"
-            if t.get('is_blocked'): t_rag = "red"
+            from rag import calculate_rag
+            from datetime import datetime
+            
+            # Prepare dates for RAG calculation
+            def parse_dt(dt_str):
+                if not dt_str: return None
+                try:
+                    return datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
+                except:
+                    return None
+
+            t_start = parse_dt(t.get('planned_start_date') or t.get('created_at'))
+            t_deadline = parse_dt(t.get('deadline'))
+            t_blocker = t.get('blocker_reason')
+            
+            t_rag, _ = calculate_rag(progress, t_start, t_deadline, t_blocker)
+            t_rag = t_rag.lower()
             
             pdf.cell(12, 6, txt="RAG: ")
             if t_rag == "red":
