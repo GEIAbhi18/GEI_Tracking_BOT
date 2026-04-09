@@ -198,30 +198,10 @@ async def handle_remove_blocker(entities, user_id, context, send_reply_func):
     task_name = entities.get("task_name")
     
     if not task_name:
-        tasks = get_all_tasks()
-        blocked_tasks = [t for t in tasks if t.get('is_blocked')]
-        if not blocked_tasks:
-            await send_reply_func("No blocked tasks found. Everything is on track! 🟢")
-            return
-            
-        from collections import defaultdict
-        grouped = defaultdict(list)
-        for t in blocked_tasks:
-            p_obj = t.get('projects')
-            if isinstance(p_obj, list) and p_obj:
-                p_name = p_obj[0].get('name', 'General')
-            elif isinstance(p_obj, dict):
-                p_name = p_obj.get('name', 'General')
-            else:
-                p_name = 'General'
-            grouped[p_name].append(t)
-            
-        msg = "Which project is the task in? (Type the number)\n\n"
-        for idx, p in enumerate(grouped.keys(), 1):
-            msg += f"{idx}. {p}\n"
-        
-        set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_project", "_project_map": list(grouped.keys())})
-        await send_reply_func(msg)
+        set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_project"})
+        projects = get_projects()
+        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+        await send_reply_func(f"Which project is the task in? (Type the number)\n\n{p_list}")
         return
 
     # Check if task_name is actually a project name

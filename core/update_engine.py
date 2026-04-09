@@ -305,16 +305,10 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
     
     elif action == "remove_blocker":
         if step == "waiting_for_project":
-            p_map = state.get("_project_map", [])
-            if text.strip().isdigit() and 1 <= int(text.strip()) <= len(p_map):
-                project_name = p_map[int(text.strip()) - 1]
-            else:
-                project_name = text.strip()
-                
-            state["project_query"] = project_name
+            state["project_query"] = text
             
             projects = get_projects()
-            match = resolve_project(project_name, projects)
+            match = resolve_project(text, projects)
             if match:
                 update_context(user_id, active_project_id=match['id'])
                 
@@ -325,7 +319,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             if match:
                 p_tasks = [t for t in tasks if t.get('is_blocked') and t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t.get('is_blocked') and t.get('projects') and project_name.lower() in str(t.get('projects', {}).get('name', '')).lower()]
+                p_tasks = [t for t in tasks if t.get('is_blocked') and t.get('projects') and text.lower() in str(t.get('projects', {}).get('name', '')).lower()]
                 
             if not p_tasks:
                 await send_reply_func("No blocked tasks found for this project.")
@@ -499,10 +493,10 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 
             if state.get("task_query_pending"):
                 t_name = state.get("task_query_pending")
-                state["step"] = "waiting_for_proof"
+                state["step"] = "waiting_for_proof_choice"
                 state["task_query"] = t_name
                 set_state(user_id, state)
-                await send_reply_func(f"Please upload an image proof to mark '{t_name}' as complete.")
+                await send_reply_func(f"Task '{t_name}' is marked as complete! ✅\nDo you want to upload a proof image? (Reply **Yes** or **No**)")
                 return
 
             state["step"] = "waiting_for_task"
@@ -530,11 +524,11 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
             tq = tq_obj['name'] if tq_obj else text.strip()
             
-            # Now ask for proof instead of finishing
+            # Now ask for proof choice instead of finishing correctly
             state["task_query"] = tq
-            state["step"] = "waiting_for_proof"
+            state["step"] = "waiting_for_proof_choice"
             set_state(user_id, state)
-            await send_reply_func(f"Please upload an image proof to mark '{tq}' as complete.")
+            await send_reply_func(f"Task '{tq}' is marked as complete! ✅\nDo you want to upload a proof image? (Reply **Yes** or **No**)")
             
         elif step == "waiting_for_proof_choice":
             choice = text.strip().lower()

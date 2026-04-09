@@ -35,6 +35,11 @@ def get_all_tasks():
 def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None):
     from rag import calculate_rag
     
+    try:
+        progress = int(str(progress).replace('%', '').strip())
+    except:
+        progress = 0
+        
     task_response = supabase.table("tasks").select("created_at, deadline, planned_start_date").eq("id", task_id).execute()
     task_data = task_response.data[0] if task_response.data else {}
     
