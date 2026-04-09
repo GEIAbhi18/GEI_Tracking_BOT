@@ -304,8 +304,47 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             clear_state(user_id)
     
     elif action == "remove_blocker":
-        if step == "waiting_for_task":
-            await handlers.perform_remove_blocker(text, user_id, send_reply_func)
+        if step == "waiting_for_project":
+            p_map = state.get("_project_map", [])
+            if text.strip().isdigit() and 1 <= int(text.strip()) <= len(p_map):
+                project_name = p_map[int(text.strip()) - 1]
+            else:
+                project_name = text.strip()
+                
+            state["project_query"] = project_name
+            
+            projects = get_projects()
+            match = resolve_project(project_name, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
+                
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
+            tasks = get_all_tasks()
+            if match:
+                p_tasks = [t for t in tasks if t.get('is_blocked') and t.get('project_id') == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t.get('is_blocked') and t.get('projects') and project_name.lower() in str(t.get('projects', {}).get('name', '')).lower()]
+                
+            if not p_tasks:
+                await send_reply_func("No blocked tasks found for this project.")
+                clear_state(user_id)
+                return
+                
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Which task do you want to remove the blocker from? (Type the number)\n\n{tasks_msg}")
+
+        elif step == "waiting_for_task":
+            t_map = state.get("_task_map", [])
+            if t_map:
+                tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
+                tq = tq_obj['name'] if tq_obj else text.strip()
+            else:
+                tq = text.strip()
+            await handlers.perform_remove_blocker(tq, user_id, send_reply_func)
             # clear_state will be handled inside perform_remove_blocker if it sets a new state
         elif step == "waiting_for_resolve_choice":
             choice = text.strip().lower()

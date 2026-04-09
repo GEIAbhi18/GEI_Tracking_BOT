@@ -216,17 +216,37 @@ async def handle_remove_blocker(entities, user_id, context, send_reply_func):
                 p_name = 'General'
             grouped[p_name].append(t)
             
-        msg = "Which Project Which task to remove the blocker?\n\n"
-        for p, ts in grouped.items():
-            msg += f"**{p}**:\n"
-            for t in ts:
-                msg += f"- {t['name']}\n"
+        msg = "Which project is the task in? (Type the number)\n\n"
+        for idx, p in enumerate(grouped.keys(), 1):
+            msg += f"{idx}. {p}\n"
         
-        set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_task"})
+        set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_project", "_project_map": list(grouped.keys())})
         await send_reply_func(msg)
         return
 
-    await perform_remove_blocker(task_name, user_id, send_reply_func)
+    # Check if task_name is actually a project name
+    projects = get_projects()
+    project_match = resolve_project(task_name, projects)
+    if project_match:
+        tasks = get_all_tasks()
+        blocked_tasks = [t for t in tasks if t.get('is_blocked') and t.get('project_id') == project_match['id']]
+        if not blocked_tasks:
+            await send_reply_func(f"No blocked tasks found for project '{project_match['name']}'.")
+            return
+        tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(blocked_tasks)])
+        set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in blocked_tasks]})
+        await send_reply_func(f"Which task in '{project_match['name']}' do you want to remove the blocker from? (Type the number)\n\n{tasks_msg}")
+        return
+
+    # Resolve task_name if it's a number from a list
+    ctx = get_context(user_id)
+    last_list = ctx.get('last_task_list', [])
+    active_project_id = ctx.get('active_project_id')
+    tasks = get_all_tasks()
+    match = resolve_task_from_list(task_name, tasks, last_list_ids=last_list, active_project_id=active_project_id)
+    resolved_name = match['name'] if match else task_name
+
+    await perform_remove_blocker(resolved_name, user_id, send_reply_func)
 
 async def handle_add_image(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
