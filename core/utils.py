@@ -220,7 +220,13 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
             p_name = p_obj.get('name', 'Unknown') if isinstance(p_obj, dict) else 'Unknown'
             grouped[p_name].append(t)
             
-        sorted_projects = sorted(grouped.keys())
+        # Use database creation order to match the display list (Feature Fix)
+        from db import get_projects
+        all_projects = get_projects()
+        p_order_map = {p['name']: i for i, p in enumerate(all_projects)}
+        
+        sorted_projects = sorted(grouped.keys(), key=lambda x: p_order_map.get(x, 999))
+        
         if 1 <= proj_idx <= len(sorted_projects):
             target_p_name = sorted_projects[proj_idx - 1]
             p_tasks = sorted(grouped[target_p_name], key=lambda x: x.get('project_task_number', 0))
