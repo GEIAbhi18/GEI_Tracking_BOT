@@ -117,6 +117,12 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     elif stripped_lower in ["view tickets", "show tickets", "view_tickets", "show_tickets"]:
         await handlers.handle_view_tickets({"intent": "view_tickets"}, user_id, context, send_reply_func)
         return
+    elif stripped_lower in ["edit date", "edit_date", "/edit_date", "change date"]:
+        await handlers.handle_edit_date({"intent": "edit_date"}, user_id, context, send_reply_func)
+        return
+    elif stripped_lower in ["create note", "create_note", "/create_note", "add note"]:
+        await handlers.handle_create_note({"intent": "create_note"}, user_id, context, send_reply_func)
+        return
     elif stripped_lower in ["get report", "request report", "get_report", "request_report"]:
         await handlers.handle_request_report({"intent": "request_report"}, user_id, context, send_reply_func)
         return
@@ -230,6 +236,10 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_reply_ticket(parsed, user_id, context, send_reply_func)
     elif intent == "view_projects":
         await handlers.handle_view_projects(parsed, user_id, context, send_reply_func)
+    elif intent == "edit_date":
+        await handlers.handle_edit_date(parsed, user_id, context, send_reply_func)
+    elif intent == "create_note":
+        await handlers.handle_create_note(parsed, user_id, context, send_reply_func)
     elif intent == "request_report" or intent == "get_report":
         await handlers.handle_request_report(parsed, user_id, context, send_reply_func)
     elif intent == "create_project":
@@ -657,6 +667,154 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     await send_reply_func(f"Sorry, I couldn't save the task '{task_name}'. Please check the format and try again.")
             else:
                 await send_reply_func("Failed to create task. Project not found.")
+            clear_state(user_id)
+
+    elif action == "edit_date":
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            projects = get_projects()
+            match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
+            
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
+            tasks = get_all_tasks()
+            if match:
+                p_tasks = [t for t in tasks if t.get('project_id') == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t.get('projects') and text.lower() in t['projects']['name'].lower()]
+            
+            if not p_tasks:
+                await send_reply_func("No tasks found for this project.")
+                clear_state(user_id)
+                return
+            
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Which task do you want to edit? (Type the number)\n\n{tasks_msg}")
+            
+        elif step == "waiting_for_task":
+            t_map = state.get("_task_map", [])
+            tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
+            tq = tq_obj['name'] if tq_obj else text.strip()
+            
+            tasks = get_all_tasks()
+            full_task = next((t for t in tasks if t['name'] == tq), None)
+            if not full_task:
+                await send_reply_func("Task not found. Please try again.")
+                return
+                
+            state["task_id"] = full_task['id']
+            state["task_name"] = full_task['name']
+            state["step"] = "waiting_for_date_type"
+            set_state(user_id, state)
+            await send_reply_func("What do you want to edit?\n1. Start Date\n2. Deadline")
+            
+        elif step == "waiting_for_date_type":
+            choice = text.strip()
+            if choice == "1":
+                state["date_type"] = "start_date"
+                state["step"] = "waiting_for_new_date"
+                set_state(user_id, state)
+                await send_reply_func(f"Enter new Start Date for '{state['task_name']}':")
+            elif choice == "2":
+                state["date_type"] = "deadline"
+                state["step"] = "waiting_for_new_date"
+                set_state(user_id, state)
+                await send_reply_func(f"Enter new Deadline for '{state['task_name']}':")
+            else:
+                await send_reply_func("Please enter 1 or 2.")
+                
+        elif step == "waiting_for_new_date":
+            # Parse and Update
+            try:
+                parsed_date = parse_human_date(text)
+            except:
+                parsed_date = text
+                
+            from db import update_task_dates
+            dt = state.get("date_type")
+            t_id = state.get("task_id")
+            
+            if dt == "start_date":
+                result = update_task_dates(t_id, start_date=parsed_date)
+            else:
+                result = update_task_dates(t_id, deadline=parsed_date)
+            
+            if result:
+                from core.utils import format_date_human
+                f_start = format_date_human(result.get('planned_start_date') or result.get('created_at'))
+                f_dl = format_date_human(result.get('deadline'))
+                await send_reply_func(f"✅ Update saved!\nTask: {result['name']}\nStart Date: {f_start}\nDeadline: {f_dl}")
+            else:
+                await send_reply_func("Failed to update date.")
+            clear_state(user_id)
+
+    elif action == "create_note":
+        if step == "waiting_for_project":
+            state["project_query"] = text
+            projects = get_projects()
+            match = resolve_project(text, projects)
+            if match:
+                update_context(user_id, active_project_id=match['id'])
+            
+            state["step"] = "waiting_for_task"
+            set_state(user_id, state)
+            
+            tasks = get_all_tasks()
+            if match:
+                p_tasks = [t for t in tasks if t.get('project_id') == match['id']]
+            else:
+                p_tasks = [t for t in tasks if t.get('projects') and text.lower() in t['projects']['name'].lower()]
+            
+            if not p_tasks:
+                await send_reply_func("No tasks found for this project.")
+                clear_state(user_id)
+                return
+            
+            tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
+            state["_task_map"] = [t['name'] for t in p_tasks]
+            set_state(user_id, state)
+            await send_reply_func(f"Select Task to add a note: (Type the number)\n\n{tasks_msg}")
+            
+        elif step == "waiting_for_task":
+            t_map = state.get("_task_map", [])
+            tq_obj = resolve_task_from_list(text, [{"name": n} for n in t_map])
+            tq = tq_obj['name'] if tq_obj else text.strip()
+            
+            tasks = get_all_tasks()
+            full_task = next((t for t in tasks if t['name'] == tq), None)
+            if not full_task:
+                await send_reply_func("Task not found. Please try again.")
+                return
+                
+            state["task_id"] = full_task['id']
+            state["task_name"] = full_task['name']
+            state["step"] = "waiting_for_note_content"
+            set_state(user_id, state)
+            await send_reply_func(f"Enter Note to be added for '{full_task['name']}':")
+            
+        elif step == "waiting_for_note_content":
+            # Save Note
+            from db import save_note
+            t_id = state.get("task_id")
+            t_name = state.get("task_name")
+            
+            # Need to ensure there is at least one update to attach the note to, or create a dummy update?
+            # actually save_note searches for latest update.
+            # to be safe, we should create a manual update if none exists or just save_note
+            success = save_note(t_id, text)
+            if not success:
+                # Create a placeholder update to hold the note
+                from db import save_update, get_user_by_telegram_id
+                u_info = get_user_by_telegram_id(user_id)
+                save_update(t_id, 0, "None", [], u_info['id'] if u_info else None)
+                save_note(t_id, text)
+                
+            await send_reply_func(f"✅ Note successfully added to *{t_name}*")
             clear_state(user_id)
 
     elif action == "clarify":

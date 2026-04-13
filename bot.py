@@ -20,9 +20,15 @@ logging.getLogger("telegram").setLevel(logging.WARNING)
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    # Clear any existing state or context (Requirement 2)
+    from core.conversation_state import clear_state
+    from core.context_manager import clear_context
+    clear_state(user_id)
+    clear_context(user_id)
+    
     u_info = get_user_by_telegram_id(user_id)
     name = u_info['name'] if u_info else "there"
-    await update.message.reply_text(f"Hi {name}, What can I help you with?")
+    await update.message.reply_text(f"Hi {name}, context cleared! What can I help you with today?")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = (update.message.text or update.message.caption or "").lstrip('/')

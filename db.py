@@ -273,3 +273,17 @@ def update_task_image(task_id, images):
         supabase.table("updates").update({"images": images}).eq("id", update_id).execute()
         
     return response.data
+
+def update_task_dates(task_id, start_date=None, deadline=None):
+    """Updates the start date and/or deadline of a specific task."""
+    data = {}
+    if start_date:
+        data["planned_start_date"] = start_date
+    if deadline:
+        data["deadline"] = deadline
+    
+    if not data:
+        return None
+        
+    response = supabase.table("tasks").update(data).eq("id", task_id).execute()
+    return response.data[0] if response.data else None

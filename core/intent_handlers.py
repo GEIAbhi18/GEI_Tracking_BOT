@@ -450,21 +450,24 @@ def build_grouped_tasks_list_py(tasks):
             continue
         
     msg = ""
-    # Sort projects by name for stable numbering
-    sorted_p_names = sorted(grouped.keys())
+    # Sort projects by their absolute order in the database (Feature Request 1)
+    all_projects = get_projects()
+    project_order_map = {p['name']: i for i, p in enumerate(all_projects)}
+    
+    sorted_p_names = sorted(grouped.keys(), key=lambda x: project_order_map.get(x, 999))
+    
     for proj_idx, p_name in enumerate(sorted_p_names, 1):
         t_list = grouped[p_name]
         msg += f"**{proj_idx}. {p_name}**\n"
-        # Sort tasks by their number before displaying
-        t_list = sorted(t_list, key=lambda x: float(x['number']) if str(x['number']).replace('.','').isdigit() else 999)
+        # Sort tasks by their project_task_number
+        t_list = sorted(t_list, key=lambda x: (float(x['number']) if str(x['number']).replace('.','').isdigit() else 999))
         for t in t_list:
             from core.utils import format_date_human
             start_val = t.get('planned_start_date') or t.get('created_at')
-            start_str = format_date_human(start_val).replace("No deadline", "Unknown")
+            start_str = format_date_human(start_val)
             dl_str = format_date_human(t.get('deadline'))
             
             try:
-                # Cast to int to ensure we handle strings/floats correctly
                 current_prog = t.get('progress', 0)
                 if current_prog is None: current_prog = 0
                 is_done = int(float(current_prog)) >= 100
@@ -472,7 +475,7 @@ def build_grouped_tasks_list_py(tasks):
                 is_done = False
                 
             tick = " ✅" if is_done else ""
-            msg += f"{t['number']}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
+            msg += f"{int(t['number'])}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
         msg += "\n"
         
     return msg.strip()
@@ -923,10 +926,34 @@ async def handle_greeting(entities, user_id, context, send_reply_func):
     
     msg = f"Hi {name}, What can I help you with?\n\n🤖 Available Commands:\n"
     if role == 'director':
-        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /view_tickets\n• /ask_asif\n• /help"
+        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /edit_date\n• /create_note\n• /ask_asif\n• /help"
     else:
-        msg += "• /update_task\n• /raise_ticket\n• /view_tickets\n• /create_task\n• /create_project\n• /help"
+        msg += "• /update_task\n• /raise_ticket\n• /edit_date\n• /create_note\n• /create_task\n• /help"
     
+    await send_reply_func(msg)
+
+async def handle_edit_date(entities, user_id, context, send_reply_func):
+    projects = get_projects()
+    if not projects:
+        await send_reply_func("No projects exist.")
+        return
+    msg = "Select Project to edit task date: (Type the number)\n\n"
+    # Ensure consistent order (Requirement 1)
+    for i, p in enumerate(projects, 1):
+        msg += f"{i}. {p['name']}\n"
+    set_state(user_id, {"action": "edit_date", "step": "waiting_for_project"})
+    await send_reply_func(msg)
+
+async def handle_create_note(entities, user_id, context, send_reply_func):
+    projects = get_projects()
+    if not projects:
+        await send_reply_func("No projects exist.")
+        return
+    msg = "Select Project to add a note: (Type the number)\n\n"
+    # Ensure consistent order (Requirement 1)
+    for i, p in enumerate(projects, 1):
+        msg += f"{i}. {p['name']}\n"
+    set_state(user_id, {"action": "create_note", "step": "waiting_for_project"})
     await send_reply_func(msg)
 
 async def handle_clarify(entities, user_id, context, send_reply_func):

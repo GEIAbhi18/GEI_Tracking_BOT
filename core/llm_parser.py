@@ -35,6 +35,8 @@ ALLOWED INTENTS:
 * view_tickets: For showing open tickets
 * trigger_reminder_user: To manually ping a user for updates (e.g., "ask asif", "send updates to asif")
 * get_task_detail: To see full information about a specific task (e.g., "show task 1", "task 1 info", "details for task waterproofing")
+* edit_date: To change start date or deadline of a task
+* create_note: To manually add a note to a specific task
 * help: For assistance
 
 FILTER RULES:
