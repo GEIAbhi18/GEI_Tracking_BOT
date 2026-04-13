@@ -143,12 +143,14 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         parsed = {
             "intent": intent,
             "task_name": parsed_obj.get("task_reference") or parsed_obj.get("project_name"),
+            "project_name_extracted": parsed_obj.get("project_name"),
             "progress": parsed_obj.get("progress"),
             "blocker_description": parsed_obj.get("blocker_text"),
             "confidence": confidence,
             "query_filters": parsed_obj.get("query_filters"),
             "target_user": parsed_obj.get("target_user"),
-            "message_type": parsed_obj.get("message_type")
+            "message_type": parsed_obj.get("message_type"),
+            "deadline": parsed_obj.get("deadline") # Ensure deadline is also passed if present
         }
 
         # Step 7: Fallback if confidence is low

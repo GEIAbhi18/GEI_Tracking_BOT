@@ -26,12 +26,22 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
     
+    project_name_extracted = entities.get("project_name_extracted")
+    
     if is_numeric_task and not active_project_id:
-        set_state(user_id, {"action": "update_task", "step": "waiting_for_project", "task_query_pending": task_name, "progress": progress, "deadline": entities.get("deadline")})
-        projects = get_projects()
-        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
-        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
-        return
+        if project_name_extracted:
+            projects = get_projects()
+            match = resolve_project(project_name_extracted, projects)
+            if match:
+                active_project_id = match['id']
+                update_context(user_id, active_project_id=active_project_id)
+        
+        if not active_project_id:
+            set_state(user_id, {"action": "update_task", "step": "waiting_for_project", "task_query_pending": task_name, "progress": progress, "deadline": entities.get("deadline")})
+            projects = get_projects()
+            p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+            await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+            return
 
     if not task_name:
         set_state(user_id, {"action": "update_task", "step": "waiting_for_project"})
@@ -94,12 +104,22 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
     
+    project_name_extracted = entities.get("project_name_extracted")
+
     if is_numeric_task and not active_project_id:
-        set_state(user_id, {"action": "complete_task", "step": "waiting_for_project", "task_query_pending": task_name})
-        projects = get_projects()
-        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
-        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
-        return
+        if project_name_extracted:
+            projects = get_projects()
+            match = resolve_project(project_name_extracted, projects)
+            if match:
+                active_project_id = match['id']
+                update_context(user_id, active_project_id=active_project_id)
+
+        if not active_project_id:
+            set_state(user_id, {"action": "complete_task", "step": "waiting_for_project", "task_query_pending": task_name})
+            projects = get_projects()
+            p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+            await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+            return
 
     if not task_name:
         set_state(user_id, {"action": "complete_task", "step": "waiting_for_project"})
@@ -151,12 +171,22 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
     
+    project_name_extracted = entities.get("project_name_extracted")
+
     if is_numeric_task and not active_project_id:
-        set_state(user_id, {"action": "add_blocker", "step": "waiting_for_project", "task_query_pending": task_name, "blocker_description": blocker_text})
-        projects = get_projects()
-        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
-        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
-        return
+        if project_name_extracted:
+            projects = get_projects()
+            match = resolve_project(project_name_extracted, projects)
+            if match:
+                active_project_id = match['id']
+                update_context(user_id, active_project_id=active_project_id)
+
+        if not active_project_id:
+            set_state(user_id, {"action": "add_blocker", "step": "waiting_for_project", "task_query_pending": task_name, "blocker_description": blocker_text})
+            projects = get_projects()
+            p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+            await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+            return
 
     if not task_name:
         set_state(user_id, {"action": "add_blocker", "step": "waiting_for_project"})
@@ -522,14 +552,24 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
     
+    project_name_extracted = entities.get("project_name_extracted")
+
     if is_numeric_task and not active_project_id:
-        # Ask for project context to show info
-        set_state(user_id, {"action": "get_task_detail", "step": "waiting_for_project", "task_query_pending": task_reference})
-        from db import get_projects
-        projects = get_projects()
-        p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
-        await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
-        return
+        if project_name_extracted:
+            projects = get_projects()
+            match = resolve_project(project_name_extracted, projects)
+            if match:
+                active_project_id = match['id']
+                update_context(user_id, active_project_id=active_project_id)
+
+        if not active_project_id:
+            # Ask for project context to show info
+            set_state(user_id, {"action": "get_task_detail", "step": "waiting_for_project", "task_query_pending": task_reference})
+            from db import get_projects
+            projects = get_projects()
+            p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
+            await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
+            return
         
     # Resolve task using context
 

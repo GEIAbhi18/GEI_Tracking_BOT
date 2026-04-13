@@ -8,16 +8,22 @@ from rag import calculate_project_rag, calculate_rag
 logger = logging.getLogger(__name__)
 
 async def send_reminder(context: ContextTypes.DEFAULT_TYPE):
-    logger.info("Sending 5PM reminder to employee...")
+    if not EMPLOYEE_CHAT_ID:
+        logger.error("EMPLOYEE_CHAT_ID is not set in environment variables. Cannot send 5PM reminder.")
+        return
+    logger.info(f"Sending 5PM reminder to employee (ID: {EMPLOYEE_CHAT_ID})...")
     try:
         await context.bot.send_message(
             chat_id=EMPLOYEE_CHAT_ID,
             text="Asif, aaj ke tasks ka update bhejo.\nExample:\n'Top Terrace waterproofing 40% done, material delay' + photo"
         )
     except Exception as e:
-        logger.error(f"Error sending reminder: {e}")
+        logger.error(f"Error sending reminder to {EMPLOYEE_CHAT_ID}: {e}")
 
 async def send_deadline_alerts(context: ContextTypes.DEFAULT_TYPE):
+    if not EMPLOYEE_CHAT_ID:
+        logger.error("EMPLOYEE_CHAT_ID is not set in environment variables. Cannot send deadline alerts.")
+        return
     logger.info("Checking for upcoming deadlines...")
     try:
         deadlines = get_upcoming_deadlines()
@@ -36,9 +42,12 @@ async def send_deadline_alerts(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
     except Exception as e:
-        logger.error(f"Error sending deadline alerts: {e}")
+        logger.error(f"Error sending deadline alerts to {EMPLOYEE_CHAT_ID}: {e}")
 
 async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
+    if not DIRECTOR_CHAT_ID:
+        logger.error("DIRECTOR_CHAT_ID is not set in environment variables. Cannot send 6PM report.")
+        return
     logger.info("Generating daily report for director...")
     try:
         updates = get_todays_updates()
@@ -101,4 +110,4 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(buttons)
         )
     except Exception as e:
-        logger.error(f"Error sending 6PM report: {e}")
+        logger.error(f"Error sending 6PM report to {DIRECTOR_CHAT_ID}: {e}")
