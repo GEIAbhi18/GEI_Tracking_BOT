@@ -14,6 +14,10 @@ def calculate_rag(progress, task_start_date, task_deadline, blockers, missed_upd
     if blockers and blockers.lower() not in ['no', 'none', 'nothing', '', 'null']:
         return "RED", f"Blocker reported: {blockers}"
     
+    # Check if task hasn't started yet (Feature Request 2)
+    if task_start_date and now < task_start_date:
+        return "NOT_STARTED", "The task has not begin"
+
     # If no start date or deadline, we can't calculate ratio, default to Green if no blockers
     if not task_start_date or not task_deadline:
         if progress >= 100:
@@ -31,10 +35,6 @@ def calculate_rag(progress, task_start_date, task_deadline, blockers, missed_upd
         return "GREEN", "On track."
 
     expected_progress = (days_passed / total_duration) * 100
-    
-    # Cap expected progress between 0 and 100
-    if expected_progress < 0: expected_progress = 0
-    if expected_progress > 100: expected_progress = 100
 
     if expected_progress == 0:
         return "GREEN", "On track (Just started)."
@@ -64,5 +64,8 @@ def calculate_project_rag(task_rags):
     if "AMBER" in task_rags:
         return "AMBER"
         
-    # Technically if majority is green it's green, if all amber it's amber.
+    # If all tasks are NOT_STARTED, project is NOT_STARTED
+    if all(r == "NOT_STARTED" for r in task_rags):
+        return "NOT_STARTED"
+        
     return "GREEN"

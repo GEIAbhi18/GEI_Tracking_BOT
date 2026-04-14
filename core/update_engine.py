@@ -37,9 +37,17 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     stripped_lower = text.strip().lower()
 
     # Pre-intercept "state-breakers" - If user types a clear top-level command, break any existing loop
-    COMMAND_KEYWORDS = ["/start", "show tasks", "view tasks", "list tasks", "show blockers", "help", "/help", "exit", "cancel"]
+    COMMAND_KEYWORDS = [
+        "/start", "show tasks", "view tasks", "list tasks", "show blockers", 
+        "help", "/help", "exit", "cancel", "update task", "add image", 
+        "complete task", "task detail", "create project", "create task", "add blocker"
+    ]
     if state and any(cmd in stripped_lower for cmd in COMMAND_KEYWORDS):
+        from core.context_manager import clear_context
         clear_state(user_id)
+        clear_context(user_id)
+        update_context(user_id, message=text) # Start fresh with current command
+        context = get_context(user_id) # Refresh blank context
         state = None # Fall through to LLM/Router
 
     # MULTILINE UPDATE INTERCEPT 1: "YES/EDIT" Confirmation
@@ -289,9 +297,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
+                p_tasks = [t for t in tasks if t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -383,9 +391,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
+                p_tasks = [t for t in tasks if t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -405,11 +413,23 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             set_state(user_id, state)
             await send_reply_func(f"Please upload the image for '{tq}'. (This will replace any older images)")
         elif step == "waiting_for_proof":
-            if not images:
-                await send_reply_func("Please upload an actual image as proof.")
+            if images:
+                if "collected_images" not in state: state["collected_images"] = []
+                state["collected_images"].extend(images)
+                set_state(user_id, state)
+                await send_reply_func(f"Image received ({len(state['collected_images'])} total). Send more or type 'done' to finish.")
                 return
-            tq = state.get("task_query")
-            await handlers.perform_add_image(tq, user_id, send_reply_func, images=images)
+            
+            if text.strip().lower() == "done":
+                collected = state.get("collected_images", [])
+                if not collected:
+                    await send_reply_func("You haven't uploaded any images yet. Please upload proof or type 'cancel'.")
+                    return
+                tq = state.get("task_query")
+                await handlers.perform_add_image(tq, user_id, send_reply_func, images=collected)
+                return
+            
+            await send_reply_func("Please upload an image as proof or type 'done' to finish.")
             
 
     elif action == "update_task":
@@ -440,9 +460,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
+                p_tasks = [t for t in tasks if t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -479,20 +499,29 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             else:
                 await send_reply_func("Please reply with **Yes** to upload an image or **No** to complete without an image.")
         elif step == "waiting_for_proof":
-            if not images:
-                # If they didn't upload image but typed text, check if they meant 'no' after all
-                if text.strip().lower() in ["no", "skip"]:
-                    tq = state.get("task_query")
-                    pr = state.get("progress", "100")
-                    dl = state.get("deadline")
-                    await handlers.perform_update(tq, pr, user_id, send_reply_func, deadline=dl)
-                    return
-                await send_reply_func("Please upload an actual image as proof.")
+            if images:
+                if "collected_images" not in state: state["collected_images"] = []
+                state["collected_images"].extend(images)
+                set_state(user_id, state)
+                await send_reply_func(f"Image received ({len(state['collected_images'])} total). Send more or type 'done' to finish.")
                 return
-            tq = state.get("task_query")
-            pr = state.get("progress", "100")
-            dl = state.get("deadline")
-            await handlers.perform_update(tq, pr, user_id, send_reply_func, images=images, deadline=dl)
+                
+            if text.strip().lower() == "done":
+                collected = state.get("collected_images", [])
+                tq = state.get("task_query")
+                pr = state.get("progress", "100")
+                dl = state.get("deadline")
+                await handlers.perform_update(tq, pr, user_id, send_reply_func, images=collected, deadline=dl)
+                return
+                
+            if text.strip().lower() in ["no", "skip"]:
+                tq = state.get("task_query")
+                pr = state.get("progress", "100")
+                dl = state.get("deadline")
+                await handlers.perform_update(tq, pr, user_id, send_reply_func, deadline=dl)
+                return
+            
+            await send_reply_func("Please upload an image proof or type 'done' to finish.")
     
     elif action == "complete_task":
         if step == "waiting_for_project":
@@ -516,9 +545,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
             tasks = get_all_tasks()
             if match:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == match['id']]
+                p_tasks = [t for t in tasks if t.get('project_id') == match['id']]
             else:
-                p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('projects') and text.lower() in t['projects']['name'].lower()]
+                p_tasks = [t for t in tasks if t.get('projects') and text.lower() in t['projects']['name'].lower()]
                 
             if not p_tasks:
                 await send_reply_func("No pending tasks found for this project.")
@@ -554,15 +583,25 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             else:
                 await send_reply_func("Please reply with **Yes** to upload an image or **No** to complete without an image.")
         elif step == "waiting_for_proof":
-            if not images:
-                if text.strip().lower() in ["no", "skip"]:
-                    tq = state.get("task_query")
-                    await handlers.perform_update(tq, "100", user_id, send_reply_func)
-                    return
-                await send_reply_func("Please upload an actual image as proof.")
+            if images:
+                if "collected_images" not in state: state["collected_images"] = []
+                state["collected_images"].extend(images)
+                set_state(user_id, state)
+                await send_reply_func(f"Image received ({len(state['collected_images'])} total). Send more or type 'done' to finish.")
                 return
-            tq = state.get("task_query")
-            await handlers.perform_update(tq, "100", user_id, send_reply_func, images=images)
+                
+            if text.strip().lower() == "done":
+                collected = state.get("collected_images", [])
+                tq = state.get("task_query")
+                await handlers.perform_update(tq, "100", user_id, send_reply_func, images=collected)
+                return
+
+            if text.strip().lower() in ["no", "skip"]:
+                tq = state.get("task_query")
+                await handlers.perform_update(tq, "100", user_id, send_reply_func)
+                return
+            
+            await send_reply_func("Please upload an image proof or type 'done' to finish.")
             
     elif action == "get_task_detail":
         if step == "waiting_for_project":

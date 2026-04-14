@@ -79,13 +79,32 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
                     break
             
             if not task_updated:
-                # Mark as missed, so RED RAG
-                rag_color, _ = calculate_rag(0, None, None, "", missed_updates=1)
+                # Instead of defaulting to RED, check if it's a future task
+                from datetime import datetime
+                def parse_dt(dt_str):
+                    if not dt_str: return None
+                    try:
+                        return datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
+                    except:
+                        return None
+                
+                t_start = parse_dt(t.get("planned_start_date") or t.get("created_at"))
+                t_dl = parse_dt(t.get("deadline"))
+                
+                rag_color, _ = calculate_rag(0, t_start, t_dl, "", missed_updates=1 if t_start and datetime.now(t_start.tzinfo if t_start.tzinfo else None) > t_start else 0)
+                
+                # If it's not started, we don't consider it a "missed response" red
+                if rag_color == "NOT_STARTED":
+                    blocker_msg = "Task has not begin."
+                else:
+                    rag_color = "RED"
+                    blocker_msg = "Asif did not respond."
+
                 projects_data[pname]['tasks'].append({
                     'name': t['name'],
-                    'rag': "RED",
+                    'rag': rag_color,
                     'progress': 0,
-                    'blockers': "Asif did not respond.",
+                    'blockers': blocker_msg,
                     'deadline': t['deadline'],
                     'updated': False
                 })
@@ -93,13 +112,13 @@ async def send_daily_report(context: ContextTypes.DEFAULT_TYPE):
         report_text = "📊 *6PM Project Summary*\n\n"
         buttons = []
         
-        emoji_map = {"RED": "🔴", "AMBER": "🟡", "GREEN": "🟢"}
+        emoji_map = {"RED": "🔴", "AMBER": "🟡", "GREEN": "🟢", "NOT_STARTED": "⚪"}
         
         for p_name, p_info in projects_data.items():
             task_rags = [t['rag'] for t in p_info['tasks']]
             proj_rag = calculate_project_rag(task_rags)
             
-            report_text += f"{p_name} ➔ {emoji_map.get(proj_rag, '-')}\n"
+            report_text += f"{p_name} ➔ {emoji_map.get(proj_rag, '⚪')}\n"
             
             buttons.append([InlineKeyboardButton(f"[{p_name} Details]", callback_data=f"proj_{p_info['id']}")])
         

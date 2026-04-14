@@ -55,9 +55,9 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
     project_match = resolve_project(task_name, projects)
     if project_match:
         tasks = get_all_tasks()
-        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        p_tasks = [t for t in tasks if t.get('project_id') == project_match['id']]
         if not p_tasks:
-            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            await send_reply_func(f"No tasks found for project '{project_match['name']}'.")
             return
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "update_task", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
@@ -133,9 +133,9 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
     project_match = resolve_project(task_name, projects)
     if project_match:
         tasks = get_all_tasks()
-        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        p_tasks = [t for t in tasks if t.get('project_id') == project_match['id']]
         if not p_tasks:
-            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            await send_reply_func(f"No tasks found for project '{project_match['name']}'.")
             return
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "complete_task", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
@@ -273,9 +273,9 @@ async def handle_add_image(entities, user_id, context, send_reply_func, images=N
     project_match = resolve_project(task_name, projects)
     if project_match:
         tasks = get_all_tasks()
-        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        p_tasks = [t for t in tasks if t.get('project_id') == project_match['id']]
         if not p_tasks:
-            await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
+            await send_reply_func(f"No tasks found for project '{project_match['name']}'.")
             return
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "add_image", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
@@ -705,109 +705,260 @@ async def handle_close_ticket(entities, user_id, context, send_reply_func):
 
 def generate_pdf_report():
     from fpdf import FPDF
+    import os
+    from datetime import datetime
+    import pytz
+    from config import TIMEZONE
+
+    # --- Configuration & Colors ---
+    COLORS = {
+        "HEADER_BG": (31, 95, 160),      # Professional Blue
+        "TEXT_DARK": (40, 40, 40),
+        "TEXT_GREY": (100, 100, 100),
+        "LINE_GREY": (200, 200, 200),
+        "ZREBRA_BG": (245, 248, 252),    # Light Blue-Grey
+        "RED": (200, 50, 50),
+        "AMBER": (220, 150, 0),
+        "GREEN": (40, 150, 40),
+        "NOT_STARTED": (120, 120, 120)
+    }
+
+    class GEIReport(FPDF):
+        def header(self):
+            # Top Banner (Implicitly handled in first page setup)
+            pass
+
+        def footer(self):
+            # Line separator
+            self.set_draw_color(*COLORS["LINE_GREY"])
+            self.line(10, self.h - 15, self.w - 10, self.h - 15)
+            
+            self.set_y(-12)
+            self.set_font("Helvetica", "I", 8)
+            self.set_text_color(*COLORS["TEXT_GREY"])
+            self.cell(0, 10, "GEI Tracking Bot · Auto-generated · Confidential · Do not distribute", align="C")
+
+    # Initialize PDF
+    pdf = GEIReport()
+    pdf.set_auto_page_break(auto=True, margin=20)
+    pdf.add_page()
+    
+    # --- Top Header Section ---
+    local_tz = pytz.timezone(TIMEZONE or "UTC")
+    now_local = datetime.now(local_tz)
+    date_str = now_local.strftime("%d %B %Y")
+    time_str = now_local.strftime("%I:%M %p %Z")
+
+    pdf.set_font("Helvetica", "B", 24)
+    pdf.set_text_color(*COLORS["TEXT_DARK"])
+    pdf.cell(100, 15, "Daily Project Report", ln=0)
+    
+    # Date/Time on Right
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*COLORS["TEXT_GREY"])
+    pdf.set_x(-70)
+    pdf.cell(60, 5, date_str, ln=1, align="R")
+    pdf.set_x(-70)
+    pdf.cell(60, 5, f"Generated at {time_str}", ln=1, align="R")
+    
+    pdf.ln(2)
+    pdf.set_font("Helvetica", "", 10)
+    pdf.set_text_color(*COLORS["TEXT_GREY"])
+    pdf.cell(0, 5, "GEI Construction · Telegram Project Tracker · Auto-generated", ln=1)
+    
+    # Separator Line
+    pdf.set_draw_color(*COLORS["HEADER_BG"])
+    pdf.set_line_width(0.5)
+    pdf.line(10, pdf.get_y() + 2, 200, pdf.get_y() + 2)
+    pdf.ln(10)
 
     projects = get_projects()
     tasks = get_all_tasks()
-    
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", 'B', 20)
-    pdf.cell(0, 10, txt="Daily Project Report", ln=1, align="C")
-    
-    for p in projects:
-        pdf.ln(10)
-        pdf.set_font("Arial", 'B', 16)
-        pdf.cell(0, 10, txt=f"Project: {p['name']}", ln=1)
-        
-        p_tasks = [t for t in tasks if t.get('project_id') == p['id']]
-        red = sum(1 for t in p_tasks if t.get('is_blocked'))
-        green = sum(1 for t in p_tasks if t.get('status') == 'completed')
-        amber = len(p_tasks) - red - green
-        
-        pdf.set_font("Arial", size=12)
-        pdf.cell(0, 8, txt=f"Tasks: {len(p_tasks)} | Red: {red} | Amber: {amber} | Green: {green}", ln=1)
-        
-        for t in p_tasks:
-            pdf.ln(5)
-            pdf.set_font("Arial", 'B', 12)
-            pdf.cell(0, 8, txt=f"Task: {t['name']}", ln=1)
-            pdf.set_font("Arial", size=10)
-            
-            t_status = t.get('status', 'pending')
-            progress = t.get('progress', 0)
-            from core.utils import format_date_human
-            deadline = format_date_human(t.get('deadline'))
-            pdf.cell(0, 6, txt=f"Status: {t_status} | Progress: {progress}% | Deadline: {deadline}", ln=1)
-            
-            from rag import calculate_rag
-            from datetime import datetime
-            
-            # Prepare dates for RAG calculation
-            def parse_dt(dt_str):
-                if not dt_str: return None
-                try:
-                    return datetime.fromisoformat(str(dt_str).replace('Z', '+00:00'))
-                except:
-                    return None
 
-            t_start = parse_dt(t.get('planned_start_date') or t.get('created_at'))
-            t_deadline = parse_dt(t.get('deadline'))
-            t_blocker = t.get('blocker_reason')
+    for p in projects:
+        p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
+        if not p_tasks: continue
+
+        # Sort tasks by start date ascending
+        def get_sort_date(task):
+            dt_str = task.get('planned_start_date') or task.get('created_at')
+            if not dt_str: return datetime(9999, 12, 31)
+            try:
+                if isinstance(dt_str, str):
+                    return datetime.fromisoformat(dt_str.replace('Z', '+00:00')).replace(tzinfo=None)
+                return dt_str
+            except:
+                return datetime(9999, 12, 31)
+        p_tasks.sort(key=get_sort_date)
+
+        # Calculate Summary
+        task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
+        for t in p_tasks:
+            from rag import calculate_rag
+            progress = t.get("progress", 0)
+            t_start = None
+            try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+            except: pass
+            t_dl = None
+            try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+            except: pass
             
-            t_rag, _ = calculate_rag(progress, t_start, t_deadline, t_blocker)
-            t_rag = t_rag.lower()
+            t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
+            task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
+
+        # Project Header Row
+        pdf.set_font("Helvetica", "B", 14)
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(120, 10, p["name"], ln=0)
+        
+        # Summary on Right
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*COLORS["RED"])
+        pdf.cell(10, 10, str(task_stats["RED"]), align="R")
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(10, 10, " Red ", align="L")
+        
+        pdf.set_text_color(*COLORS["AMBER"])
+        pdf.cell(10, 10, str(task_stats["AMBER"]), align="R")
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(15, 10, " Amber ", align="L")
+        
+        pdf.set_text_color(*COLORS["GREEN"])
+        pdf.cell(10, 10, str(task_stats["GREEN"]), align="R")
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(15, 10, " Green", align="L")
+        
+        pdf.set_font("Helvetica", "", 10)
+        pdf.set_text_color(*COLORS["TEXT_GREY"])
+        pdf.cell(0, 10, f" · {len(p_tasks)} tasks", ln=1, align="R")
+        
+        # --- Table Headers ---
+        pdf.set_fill_color(*COLORS["HEADER_BG"])
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 9)
+        
+        cols = [
+            ("Task", 38), ("Start", 22), ("Deadline", 22), ("Progress", 25), 
+            ("RAG", 18), ("Blocker", 28), ("Note", 25), ("Proof", 12)
+        ]
+        
+        y_start = pdf.get_y()
+        for label, width in cols:
+            pdf.cell(width, 8, label, fill=True, border=0, align="L" if label == "Task" else "C")
+        pdf.ln(8)
+
+        # --- Table Rows ---
+        from core.utils import format_date_human
+        from db import supabase
+        
+        for idx, t in enumerate(p_tasks):
+            # Zebra striping
+            fill = (idx % 2 != 0)
+            if fill: pdf.set_fill_color(*COLORS["ZREBRA_BG"])
+            else: pdf.set_fill_color(255, 255, 255)
             
-            pdf.cell(12, 6, txt="RAG: ")
-            if t_rag == "red":
-                pdf.set_text_color(220, 0, 0)
-                pdf.cell(0, 6, txt="Red", ln=1)
-            elif t_rag == "green":
-                pdf.set_text_color(0, 180, 0)
-                pdf.cell(0, 6, txt="Green", ln=1)
-            else:
-                pdf.set_text_color(200, 150, 0)
-                pdf.cell(0, 6, txt="Amber", ln=1)
-            pdf.set_text_color(0, 0, 0) # reset black
+            # Pre-calculate data
+            progress = int(t.get("progress", 0) or 0)
+            start_date = format_date_human(t.get("planned_start_date") or t.get("created_at"))
+            deadline = format_date_human(t.get("deadline"))
             
-            # Fetch the latest confirmed note and proof images if any
+            # Fetch latest update for Note/Blocker/Images
             latest_note = "None"
-            blocker = t.get('blocker_reason') or "None"
-            atts = t.get('attachments') or []
+            blocker = t.get("blocker_reason") or "None"
+            atts = t.get("attachments") or []
             
-            from db import supabase
-            update_res = supabase.table("updates").select("note, blockers, images").eq("task_id", t['id']).order("timestamp", desc=True).limit(5).execute()
+            update_res = supabase.table("updates").select("note, blockers, images").eq("task_id", t["id"]).order("timestamp", desc=True).limit(5).execute()
             if update_res.data:
-                # Get the latest blocker from the most recent update
-                blocker = update_res.data[0].get('blockers') or blocker
-                # Find the latest note
-                for r in update_res.data:
-                    if r.get('note'):
-                        latest_note = r['note']
-                        break
-                # Find the latest images
-                for r in update_res.data:
-                    if r.get('images') and len(r['images']) > 0:
-                        atts.extend(r['images'])
-                        break
+                blocker = next((u["blockers"] for u in update_res.data if u["blockers"] and u["blockers"].lower() not in ["none", "null", ""]), blocker)
+                latest_note = next((u["note"] for u in update_res.data if u["note"]), "None")
+                for u in update_res.data:
+                    if u["images"]: atts.extend(u["images"])
+
+            # RAG again for row
+            t_start = None
+            try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+            except: pass
+            t_dl = None
+            try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+            except: pass
+            from rag import calculate_rag
+            rag_val, _ = calculate_rag(progress, t_start, t_dl, blocker)
             
-            pdf.cell(0, 6, txt=f"Blocker: {blocker}", ln=1)
-            pdf.cell(0, 6, txt=f"Note: {latest_note}", ln=1)
+            # Row Start
+            y_row = pdf.get_y()
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.set_font("Helvetica", "B", 8)
             
-            if atts and isinstance(atts, list) and len(atts) > 0:
-                img_url = atts[0]
-                proof_url = img_url
-                if proof_url.startswith('data:image'):
-                    import os
-                    host = os.getenv("NEXT_PUBLIC_SITE_URL", "http://localhost:3000")
-                    proof_url = f"{host}/api/proof?taskId={t['id']}"
-                    
-                pdf.set_text_color(0, 0, 255)
-                pdf.cell(0, 6, txt="View Proof Image", link=proof_url, ln=1)
-                pdf.set_text_color(0, 0, 0)
+            # Task Name (Multi-line support if needed, but cell for now)
+            pdf.cell(38, 12, t["name"][:25], fill=True, border="B", border_color=COLORS["LINE_GREY"])
             
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(22, 12, start_date, fill=True, border="B", align="C")
+            pdf.cell(22, 12, deadline, fill=True, border="B", align="C")
+            
+            # Progress Column (Progress Bar)
+            x_prev = pdf.get_x()
+            pdf.cell(25, 12, "", fill=True, border="B") # Background for bar
+            
+            # Draw Progress Bar
+            bar_w = 18
+            bar_h = 2.5
+            pdf.set_draw_color(*COLORS["LINE_GREY"])
+            pdf.set_fill_color(230, 230, 230)
+            pdf.rect(x_prev + 3.5, y_row + 6, bar_w, bar_h, style="FD") # Track
+            
+            # Progress Fill color based on RAG or just blue
+            p_color = COLORS["GREEN"] if progress >= 100 else (100, 150, 255)
+            pdf.set_fill_color(*p_color)
+            pdf.rect(x_prev + 3.5, y_row + 6, (progress / 100) * bar_w, bar_h, style="F")
+            
+            # Progress Text
+            pdf.set_y(y_row + 2)
+            pdf.set_x(x_prev)
+            pdf.set_font("Helvetica", "", 6)
+            pdf.set_text_color(*COLORS["TEXT_GREY"])
+            pdf.cell(25, 4, f"{progress}%", align="C")
+            pdf.set_y(y_row) # Reset Y for next cells
+            pdf.set_x(x_prev + 25)
+            
+            # RAG Column (Dot + Text)
+            x_rag = pdf.get_x()
+            pdf.set_fill_color(*(COLORS["ZREBRA_BG"] if fill else (255,255,255)))
+            pdf.cell(18, 12, "", fill=True, border="B")
+            
+            r_color = COLORS.get(rag_val, COLORS["TEXT_DARK"])
+            pdf.set_fill_color(*r_color)
+            pdf.circle(x_rag + 3, y_row + 6, 1, style="F")
+            
+            pdf.set_xy(x_rag + 5, y_row)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*r_color)
+            pdf.cell(13, 12, rag_val.capitalize().replace("_", " "), align="L")
+            
+            # Blocker / Note
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.cell(28, 12, (blocker[:18] + ".." if len(blocker) > 18 else blocker), fill=True, border="B", align="L")
+            pdf.cell(25, 12, (latest_note[:15] + ".." if len(latest_note) > 15 else latest_note), fill=True, border="B", align="L")
+            
+            # Proof
+            if atts:
+                pdf.set_text_color(30, 100, 200)
+                pdf.set_font("Helvetica", "U", 8)
+                pdf.cell(12, 12, "View", fill=True, border="B", align="C", link=atts[0])
+            else:
+                pdf.set_text_color(*COLORS["TEXT_GREY"])
+                pdf.set_font("Helvetica", "", 8)
+                pdf.cell(12, 12, "—", fill=True, border="B", align="C")
+            
+            pdf.ln(12)
+        
+        pdf.ln(10)
+
     filepath = "/tmp/daily_report.pdf"
     pdf.output(filepath)
     return filepath
+
 
 async def handle_trigger_reminder_user(entities, user_id, context, send_reply_func):
     target_name = entities.get("target_user") or "Asif"
