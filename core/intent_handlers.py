@@ -789,6 +789,10 @@ def generate_pdf_report():
     projects = get_projects()
     tasks = get_all_tasks()
 
+    def check_space(h):
+        if pdf.get_y() + h > pdf.page_break_trigger:
+            pdf.add_page()
+
     for p in projects:
         p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
         if not p_tasks: continue
@@ -820,10 +824,16 @@ def generate_pdf_report():
             t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
             task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
 
-        # Project Header Row
+        # Check space for Project Header + Summary + Table Header + 2 Rows
+        check_space(50)
+        
+        # Project Header Row with Background
+        pdf.set_fill_color(240, 240, 240)
+        pdf.rect(10, pdf.get_y(), 190, 10, style="F")
+        
         pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(*COLORS["TEXT_DARK"])
-        pdf.cell(120, 10, clean(p["name"]), ln=0)
+        pdf.cell(90, 10, " " + clean(p["name"][:35]), ln=0)
         
         # Summary on Right
         pdf.set_font("Helvetica", "B", 10)
@@ -842,9 +852,9 @@ def generate_pdf_report():
         pdf.set_text_color(*COLORS["TEXT_DARK"])
         pdf.cell(15, 10, " Green", align="L")
         
-        pdf.set_font("Helvetica", "", 10)
+        pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*COLORS["TEXT_GREY"])
-        pdf.cell(0, 10, clean(f" | {len(p_tasks)} tasks"), ln=1, align="R")
+        pdf.cell(30, 10, clean(f" ({len(p_tasks)} tasks)"), ln=1, align="R")
         
         # --- Table Headers ---
         pdf.set_fill_color(*COLORS["HEADER_BG"])
@@ -898,7 +908,8 @@ def generate_pdf_report():
             from rag import calculate_rag
             rag_val, _ = calculate_rag(progress, t_start, t_dl, blocker)
             
-            # Row Start
+            # Row Start Check
+            check_space(12)
             y_row = pdf.get_y()
             pdf.set_text_color(*COLORS["TEXT_DARK"])
             pdf.set_font("Helvetica", "B", 8)
