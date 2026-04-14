@@ -708,7 +708,21 @@ def generate_pdf_report():
     import os
     from datetime import datetime
     import pytz
+    from core.utils import format_date_human
+    from db import supabase
     from config import TIMEZONE
+
+    def clean(text):
+        if not text: return ""
+        replacements = {
+            "\u2014": "-", "\u2013": "-", "\u2022": "*", 
+            "\u00b7": "|", "\u201c": "\"", "\u201d": "\"",
+            "\u2018": "'", "\u2019": "'"
+        }
+        text = str(text)
+        for k, v in replacements.items():
+            text = text.replace(k, v)
+        return text.encode('latin-1', 'replace').decode('latin-1')
 
     # --- Configuration & Colors ---
     COLORS = {
@@ -736,7 +750,7 @@ def generate_pdf_report():
             self.set_y(-12)
             self.set_font("Helvetica", "I", 8)
             self.set_text_color(*COLORS["TEXT_GREY"])
-            self.cell(0, 10, "GEI Tracking Bot · Auto-generated · Confidential · Do not distribute", align="C")
+            self.cell(0, 10, clean("GEI Tracking Bot | Auto-generated | Confidential | Do not distribute"), align="C")
 
     # Initialize PDF
     pdf = GEIReport()
@@ -764,7 +778,7 @@ def generate_pdf_report():
     pdf.ln(2)
     pdf.set_font("Helvetica", "", 10)
     pdf.set_text_color(*COLORS["TEXT_GREY"])
-    pdf.cell(0, 5, "GEI Construction · Telegram Project Tracker · Auto-generated", ln=1)
+    pdf.cell(0, 5, clean("GEI Construction | Telegram Project Tracker | Auto-generated"), ln=1)
     
     # Separator Line
     pdf.set_draw_color(*COLORS["HEADER_BG"])
@@ -809,7 +823,7 @@ def generate_pdf_report():
         # Project Header Row
         pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(*COLORS["TEXT_DARK"])
-        pdf.cell(120, 10, p["name"], ln=0)
+        pdf.cell(120, 10, clean(p["name"]), ln=0)
         
         # Summary on Right
         pdf.set_font("Helvetica", "B", 10)
@@ -830,7 +844,7 @@ def generate_pdf_report():
         
         pdf.set_font("Helvetica", "", 10)
         pdf.set_text_color(*COLORS["TEXT_GREY"])
-        pdf.cell(0, 10, f" · {len(p_tasks)} tasks", ln=1, align="R")
+        pdf.cell(0, 10, clean(f" | {len(p_tasks)} tasks"), ln=1, align="R")
         
         # --- Table Headers ---
         pdf.set_fill_color(*COLORS["HEADER_BG"])
@@ -891,7 +905,7 @@ def generate_pdf_report():
             
             # Task Name (Multi-line support if needed, but cell for now)
             pdf.set_draw_color(*COLORS["LINE_GREY"])
-            pdf.cell(38, 12, t["name"][:25], fill=True, border="B")
+            pdf.cell(38, 12, clean(t["name"][:25]), fill=True, border="B")
             
             pdf.set_font("Helvetica", "", 8)
             pdf.cell(22, 12, start_date, fill=True, border="B", align="C")
@@ -939,8 +953,8 @@ def generate_pdf_report():
             # Blocker / Note
             pdf.set_font("Helvetica", "", 7)
             pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.cell(28, 12, (blocker[:18] + ".." if len(blocker) > 18 else blocker), fill=True, border="B", align="L")
-            pdf.cell(25, 12, (latest_note[:15] + ".." if len(latest_note) > 15 else latest_note), fill=True, border="B", align="L")
+            pdf.cell(28, 12, clean(blocker[:18] + ".." if len(blocker) > 18 else blocker), fill=True, border="B", align="L")
+            pdf.cell(25, 12, clean(latest_note[:15] + ".." if len(latest_note) > 15 else latest_note), fill=True, border="B", align="L")
             
             # Proof
             if atts:
@@ -950,7 +964,7 @@ def generate_pdf_report():
             else:
                 pdf.set_text_color(*COLORS["TEXT_GREY"])
                 pdf.set_font("Helvetica", "", 8)
-                pdf.cell(12, 12, "—", fill=True, border="B", align="C")
+                pdf.cell(12, 12, "-", fill=True, border="B", align="C")
             
             pdf.ln(12)
         
