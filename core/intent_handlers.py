@@ -890,7 +890,8 @@ def generate_pdf_report():
             pdf.set_font("Helvetica", "B", 8)
             
             # Task Name (Multi-line support if needed, but cell for now)
-            pdf.cell(38, 12, t["name"][:25], fill=True, border="B", border_color=COLORS["LINE_GREY"])
+            pdf.set_draw_color(*COLORS["LINE_GREY"])
+            pdf.cell(38, 12, t["name"][:25], fill=True, border="B")
             
             pdf.set_font("Helvetica", "", 8)
             pdf.cell(22, 12, start_date, fill=True, border="B", align="C")
