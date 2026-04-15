@@ -474,8 +474,8 @@ def build_grouped_tasks_list_py(tasks):
             except:
                 is_done = False
                 
-            tick = " ✅" if is_done else ""
-            msg += f"{int(t['number'])}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{tick} | {t['blockerCount']} blocker(s)\n"
+            marker = " ✅" if is_done else (" 🛑" if int(t.get('blockerCount', 0)) > 0 else "")
+            msg += f"{int(t['number'])}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{marker} | {t['blockerCount']} blocker(s)\n"
         msg += "\n"
         
     return msg.strip()
@@ -797,9 +797,9 @@ def generate_pdf_report():
         p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
         if not p_tasks: continue
 
-        # Sort tasks by start date ascending
+        # Sort tasks by deadline ascending (fallback to start date)
         def get_sort_date(task):
-            dt_str = task.get('planned_start_date') or task.get('created_at')
+            dt_str = task.get('deadline') or task.get('planned_start_date') or task.get('created_at')
             if not dt_str: return datetime(9999, 12, 31)
             try:
                 if isinstance(dt_str, str):
