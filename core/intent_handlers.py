@@ -474,8 +474,9 @@ def build_grouped_tasks_list_py(tasks):
             except:
                 is_done = False
                 
-            marker = " ✅" if is_done else (" 🛑" if int(t.get('blockerCount', 0)) > 0 else "")
-            msg += f"{int(t['number'])}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{marker} | {t['blockerCount']} blocker(s)\n"
+            done_marker = " ✅" if is_done else ""
+            blocker_marker = " 🛑" if (not is_done and int(t.get('blockerCount', 0)) > 0) else ""
+            msg += f"{int(t['number'])}. {t['name']} – Start: {start_str} | Deadline: {dl_str} | {t['progress']}% done{done_marker} | {t['blockerCount']} blocker(s){blocker_marker}\n"
         msg += "\n"
         
     return msg.strip()
