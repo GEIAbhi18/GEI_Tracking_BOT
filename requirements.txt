@@ -7,3 +7,5 @@ rapidfuzz==3.6.1
 requests
 pydantic
 fpdf2
+Flask==3.0.3
+gunicorn==22.0.0

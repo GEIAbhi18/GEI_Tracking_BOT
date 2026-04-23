@@ -7,7 +7,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 from config import TELEGRAM_BOT_TOKEN
 from db import get_user_by_telegram_id, supabase
 from core.intent_handlers import generate_pdf_report
-from core.update_engine import process_update_message
+from core.logic import process_user_message
 import html, re
 
 # Configure logging
@@ -51,7 +51,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text: await context.bot.send_message(chat_id=target, text=text_html, parse_mode='HTML')
         
     try:
-        await process_update_message(text=user_message, user_id=user_id, images=images, send_reply_func=reply_function)
+        await process_user_message(text=user_message, user_id=user_id, images=images, send_reply_func=reply_function)
     except Exception as e:
         logging.exception(f"CRITICAL ERROR: {e}")
 
