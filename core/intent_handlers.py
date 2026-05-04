@@ -59,6 +59,8 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
         if not p_tasks:
             await send_reply_func(f"No tasks found for project '{project_match['name']}'.")
             return
+        # Sort tasks to match show tasks order
+        p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "update_task", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
         await send_reply_func(f"Which task in '{project_match['name']}' do you want to update? (Type the number)\n\n{tasks_msg}")
@@ -137,6 +139,8 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
         if not p_tasks:
             await send_reply_func(f"No tasks found for project '{project_match['name']}'.")
             return
+        # Sort tasks to match show tasks order
+        p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "complete_task", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
         await send_reply_func(f"Which task in '{project_match['name']}' should I complete? (Type the number)\n\n{tasks_msg}")
@@ -204,6 +208,8 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
         if not p_tasks:
             await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
             return
+        # Sort tasks to match show tasks order
+        p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "add_blocker", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
         await send_reply_func(f"Which task in '{project_match['name']}' is blocked? (Type the number)\n\n{tasks_msg}")
@@ -243,6 +249,8 @@ async def handle_remove_blocker(entities, user_id, context, send_reply_func):
         if not blocked_tasks:
             await send_reply_func(f"No blocked tasks found for project '{project_match['name']}'.")
             return
+        # Sort tasks to match show tasks order
+        blocked_tasks.sort(key=lambda x: x.get('project_task_number', 999))
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(blocked_tasks)])
         set_state(user_id, {"action": "remove_blocker", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in blocked_tasks]})
         await send_reply_func(f"Which task in '{project_match['name']}' do you want to remove the blocker from? (Type the number)\n\n{tasks_msg}")
@@ -277,6 +285,8 @@ async def handle_add_image(entities, user_id, context, send_reply_func, images=N
         if not p_tasks:
             await send_reply_func(f"No tasks found for project '{project_match['name']}'.")
             return
+        # Sort tasks to match show tasks order
+        p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
         tasks_msg = "\n".join([f"{idx+1}. {t['name']}" for idx, t in enumerate(p_tasks)])
         set_state(user_id, {"action": "add_image", "step": "waiting_for_task", "project_query": project_match['name'], "_task_map": [t['name'] for t in p_tasks]})
         await send_reply_func(f"Which task in '{project_match['name']}' do you want to add an image to? (Type the number)\n\n{tasks_msg}")

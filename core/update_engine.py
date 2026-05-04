@@ -305,7 +305,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 await send_reply_func("No pending tasks found for this project.")
                 clear_state(user_id)
                 return
-                
+            
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             state["_task_map"] = [t['name'] for t in p_tasks]
             set_state(user_id, state)
@@ -345,7 +347,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 await send_reply_func("No blocked tasks found for this project.")
                 clear_state(user_id)
                 return
-                
+            
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             state["_task_map"] = [t['name'] for t in p_tasks]
             set_state(user_id, state)
@@ -399,7 +403,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 await send_reply_func("No pending tasks found for this project.")
                 clear_state(user_id)
                 return
-                
+            
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             state["_task_map"] = [t['name'] for t in p_tasks]
             set_state(user_id, state)
@@ -468,7 +474,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 await send_reply_func("No pending tasks found for this project.")
                 clear_state(user_id)
                 return
-                
+            
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             state["_task_map"] = [t['name'] for t in p_tasks]
             set_state(user_id, state)
@@ -553,7 +561,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 await send_reply_func("No pending tasks found for this project.")
                 clear_state(user_id)
                 return
-                
+            
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             # Save task list natively into state for index matching next turn
             state["_task_map"] = [t['name'] for t in p_tasks]
@@ -730,6 +740,8 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 clear_state(user_id)
                 return
             
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             state["_task_map"] = [t['name'] for t in p_tasks]
             set_state(user_id, state)
@@ -814,6 +826,8 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 clear_state(user_id)
                 return
             
+            # Sort tasks to match show tasks order
+            p_tasks.sort(key=lambda x: x.get('project_task_number', 999))
             tasks_msg = "\n".join([f"{idx + 1}. {t['name']}" for idx, t in enumerate(p_tasks)])
             state["_task_map"] = [t['name'] for t in p_tasks]
             set_state(user_id, state)
