@@ -128,7 +128,7 @@ def create_project_db(name, created_by=None):
     resp = supabase.table("projects").insert(data).execute()
     return resp.data[0] if resp.data else None
 
-def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None):
+def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None):
     data = {
         "project_id": project_id,
         "name": name,
@@ -140,12 +140,25 @@ def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None)
         data["deadline"] = deadline
     if start_date:
         data["planned_start_date"] = start_date
+    if assigned_by:
+        data["assigned_by"] = assigned_by
     try:
         resp = supabase.table("tasks").insert(data).execute()
         return resp.data[0] if resp.data else None
     except Exception as e:
         import logging
         logging.error(f"Error adding task: {e}")
+        return None
+
+
+def get_user_by_id(user_id: str):
+    """Return user row by UUID primary key."""
+    try:
+        r = supabase.table("users").select("*").eq("id", user_id).execute()
+        return r.data[0] if r.data else None
+    except Exception as e:
+        import logging
+        logging.error(f"get_user_by_id error: {e}")
         return None
 
 def add_ticket_message(ticket_id, sender_id, message_text, image_url=None):

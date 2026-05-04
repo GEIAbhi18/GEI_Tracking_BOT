@@ -688,6 +688,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             project_query = state.get("project_query", "")
             task_name = state.get("task_name")
             start_date = state.get("start_date")
+            creator_user_id = state.get("creator_user_id")  # WA: who created this task
             deadline = text
             pq = project_query.strip()
             projects = get_projects()
@@ -702,7 +703,13 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     parsed_deadline = deadline 
                 
                 try:
-                    result = add_task(match['id'], task_name, parsed_deadline, start_date=start_date)
+                    result = add_task(
+                        match['id'],
+                        task_name,
+                        parsed_deadline,
+                        start_date=start_date,
+                        assigned_by=creator_user_id
+                    )
                 except Exception as ae:
                     logging.error(f"Database error in add_task: {ae}")
                     result = None
@@ -712,6 +719,19 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     f_start = format_date_human(start_date)
                     f_dl = format_date_human(parsed_deadline)
                     await send_reply_func(f"task created successfully start date: {f_start} , deadline: {f_dl}")
+
+                    # ── WhatsApp Task Assignment: Trigger ONLY if creator is Kanav ──
+                    try:
+                        _trigger_wa_task_assignment(
+                            task_id=result['id'],
+                            task_name=task_name,
+                            project_name=match['name'],
+                            due_date=f_dl,
+                            creator_telegram_id=user_id,
+                            creator_db_id=creator_user_id,
+                        )
+                    except Exception as wa_err:
+                        logging.error(f"WA task assignment trigger error: {wa_err}")
                 else:
                     await send_reply_func(f"Sorry, I couldn't save the task '{task_name}'. Please check the format and try again.")
             else:
@@ -932,3 +952,85 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
 # Legacy support for process_update_message (if still needed by some parts)
 async def process_update_message(text: str, user_id: int, images: list, send_reply_func):
     await handle_message(text, user_id, images, send_reply_func)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# WhatsApp Task Assignment Trigger (called after successful task creation)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _trigger_wa_task_assignment(task_id: str, task_name: str, project_name: str,
+                                 due_date: str, creator_telegram_id: int,
+                                 creator_db_id: str | None):
+    """
+    Fires the WhatsApp task assignment flow ONLY when the creator is Kanav.
+    Called synchronously from the create_task flow after DB insert succeeds.
+
+    Looks up:
+      - Creator's DB record (by telegram_id if creator_db_id missing)
+      - Kanav's WhatsApp number
+      - Asif's WhatsApp number (first assigned-to user found for this task)
+    """
+    import logging as _log
+    try:
+        from db import get_user_by_telegram_id, get_user_by_name, supabase
+        from whatsapp.task_assignment import on_task_created_by_kanav
+
+        # 1. Resolve creator
+        if creator_db_id:
+            from db import get_user_by_id
+            creator = get_user_by_id(creator_db_id)
+        else:
+            creator = get_user_by_telegram_id(creator_telegram_id)
+
+        if not creator:
+            _log.warning("WA trigger: could not resolve creator — skipping")
+            return
+
+        # 2. STRICT: only proceed if creator is Kanav
+        if creator.get("name", "").strip().lower() != "kanav":
+            _log.info(f"WA trigger: creator '{creator.get('name')}' is not Kanav — skipping")
+            return
+
+        kanav_wa = creator.get("whatsapp_number")
+        if not kanav_wa:
+            _log.warning("WA trigger: Kanav has no whatsapp_number — skipping")
+            return
+
+        # 3. Find the assigned user for this task
+        task_res = supabase.table("tasks").select(
+            "assigned_to, assigned_to_user:users!assigned_to(name, whatsapp_number)"
+        ).eq("id", task_id).execute()
+
+        if not task_res.data:
+            _log.warning(f"WA trigger: task {task_id} not found after insert — skipping")
+            return
+
+        task_row = task_res.data[0]
+        assignee = task_row.get("assigned_to_user") or {}
+        if isinstance(assignee, list):
+            assignee = assignee[0] if assignee else {}
+
+        assignee_wa = assignee.get("whatsapp_number")
+        assignee_name = assignee.get("name", "the assignee")
+
+        if not assignee_wa:
+            _log.warning(f"WA trigger: assigned user has no whatsapp_number — notifying Kanav only")
+            from whatsapp.task_assignment import send_text
+            send_text(kanav_wa, f"✅ Task Created.\n⚠️ {assignee_name} has no WhatsApp number registered. Please notify manually.")
+            return
+
+        # 4. Fire the assignment message
+        on_task_created_by_kanav(
+            task_id=task_id,
+            task_name=task_name,
+            project_name=project_name,
+            due_date=due_date,
+            creator_wa=kanav_wa,
+            assignee_wa=assignee_wa,
+            kanav_wa=kanav_wa,
+        )
+
+    except Exception as e:
+        import logging as _log2
+        _log2.error(f"_trigger_wa_task_assignment failed: {e}", exc_info=True)
+

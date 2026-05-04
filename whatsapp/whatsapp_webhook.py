@@ -1,7 +1,19 @@
+"""
+WhatsApp Webhook — Production Entry Point
+==========================================
+Handles:
+  - GET  /webhook  → Meta verification handshake
+  - POST /webhook  → Incoming messages (text + interactive button replies)
+
+Flow routing:
+  1. Interactive button replies → task_assignment.handle_button_reply()
+  2. Text messages in WA state  → task_assignment.handle_text_reply()
+  3. All other text             → core bot engine (process_user_message)
+"""
+
 import os
 import sys
 import logging
-import requests
 import asyncio
 
 # Ensure project root is in sys.path
@@ -9,80 +21,56 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask import Flask, request, jsonify
 from core.logic import process_user_message
+from whatsapp.task_assignment import (
+    send_text,
+    handle_button_reply,
+    handle_text_reply,
+)
 
 app = Flask(__name__)
 
-# Logging
+# ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Env variables
-WHATSAPP_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
+# ── Env vars ─────────────────────────────────────────────────────────────────
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 
 
-# ✅ Send WhatsApp message
-def send_whatsapp_message(to_number: str, message_text: str):
-    if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
-        logger.error("Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
-        return
+# ─────────────────────────────────────────────────────────────────────────────
+# WEBHOOK VERIFICATION (GET)
+# ─────────────────────────────────────────────────────────────────────────────
 
-    url = f"https://graph.facebook.com/v25.0/{PHONE_NUMBER_ID}/messages"
-
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to_number,
-        "type": "text",
-        "text": {
-            "body": message_text
-        }
-    }
-
-    try:
-        response = requests.post(url, headers=headers, json=payload)
-        logger.info(f"WhatsApp API Response: {response.status_code} | {response.text}")
-        response.raise_for_status()
-    except Exception as e:
-        logger.error(f"Error sending message: {e}")
-
-
-# ✅ Webhook verification (GET)
 @app.route('/webhook', methods=['GET'])
 def verify_webhook():
-    mode = request.args.get("hub.mode")
-    token = request.args.get("hub.verify_token")
+    mode      = request.args.get("hub.mode")
+    token     = request.args.get("hub.verify_token")
     challenge = request.args.get("hub.challenge")
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
         logger.info("Webhook verified successfully")
         return challenge, 200
-    else:
-        return "Verification failed", 403
+    return "Verification failed", 403
 
 
-# ✅ Handle incoming messages (POST)
+# ─────────────────────────────────────────────────────────────────────────────
+# INCOMING MESSAGES (POST)
+# ─────────────────────────────────────────────────────────────────────────────
+
 @app.route('/webhook', methods=['POST'])
 def handle_whatsapp_message():
     try:
         body = request.get_json()
-        logger.info(f"Incoming data: {body}")
-
         if not body:
             return jsonify({"status": "no data"}), 200
 
-        entry = body.get("entry", [])
-        for e in entry:
-            changes = e.get("changes", [])
-            for change in changes:
+        logger.info(f"Incoming WA payload: {str(body)[:500]}")
+
+        for entry in body.get("entry", []):
+            for change in entry.get("changes", []):
                 value = change.get("value", {})
 
-                # Skip status updates (read/delivered)
+                # ── Skip delivery/read status updates ────────────────────────
                 if value.get("statuses"):
                     continue
 
@@ -91,24 +79,21 @@ def handle_whatsapp_message():
                     continue
 
                 for message in messages:
-                    if message.get("type") != "text":
-                        continue
+                    sender = message.get("from", "")
+                    msg_type = message.get("type", "")
 
-                    sender = message.get("from")
-                    text = message.get("text", {}).get("body", "")
+                    # ── Interactive button reply ──────────────────────────────
+                    if msg_type == "interactive":
+                        _handle_interactive(sender, message)
 
-                    logger.info(f"Message from {sender}: {text}")
+                    # ── Plain text ────────────────────────────────────────────
+                    elif msg_type == "text":
+                        text = message.get("text", {}).get("body", "").strip()
+                        if text:
+                            _handle_text(sender, text)
 
-                    # ✅ FIX: Run async function properly
-                    response_text = asyncio.run(
-                        process_user_message(
-                            user_id=sender,
-                            text=text
-                        )
-                    )
-
-                    if response_text:
-                        send_whatsapp_message(sender, response_text)
+                    else:
+                        logger.info(f"Unsupported message type '{msg_type}' from {sender}")
 
         return jsonify({"status": "ok"}), 200
 
@@ -117,7 +102,54 @@ def handle_whatsapp_message():
         return jsonify({"status": "error"}), 200
 
 
-# ✅ Run locally
+# ─────────────────────────────────────────────────────────────────────────────
+# INTERNAL ROUTING HELPERS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _handle_interactive(sender: str, message: dict):
+    """Route interactive button replies to the task assignment module."""
+    try:
+        interactive = message.get("interactive", {})
+        i_type = interactive.get("type")
+
+        if i_type == "button_reply":
+            button_id = interactive["button_reply"]["id"]
+            logger.info(f"Button reply from {sender}: {button_id}")
+            handle_button_reply(sender, button_id)
+        else:
+            logger.warning(f"Unhandled interactive type '{i_type}' from {sender}")
+
+    except (KeyError, TypeError) as e:
+        logger.error(f"Error parsing interactive message from {sender}: {e}")
+
+
+def _handle_text(sender: str, text: str):
+    """
+    Route text messages:
+      1. If sender is in a WA task-assignment state → task_assignment module
+      2. Otherwise → core bot engine
+    """
+    # 1. Task assignment multi-step state (e.g. rejection reason, new date)
+    if handle_text_reply(sender, text):
+        logger.info(f"Text handled by task_assignment module for {sender}")
+        return
+
+    # 2. Core bot engine (existing NLP / intent handling)
+    logger.info(f"Text from {sender} → core engine: {text[:80]}")
+    try:
+        response_text = asyncio.run(
+            process_user_message(user_id=sender, text=text)
+        )
+        if response_text:
+            send_text(sender, response_text)
+    except Exception as e:
+        logger.error(f"Core engine error for {sender}: {e}", exc_info=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# LOCAL RUN
+# ─────────────────────────────────────────────────────────────────────────────
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5001))  # use 5001 to avoid macOS conflict
-    app.run(host='0.0.0.0', port=port, debug=True)
+    port = int(os.environ.get('PORT', 5001))
+    app.run(host='0.0.0.0', port=port, debug=False)
