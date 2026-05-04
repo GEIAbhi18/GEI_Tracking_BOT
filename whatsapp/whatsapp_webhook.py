@@ -25,6 +25,7 @@ from whatsapp.task_assignment import (
     send_text,
     handle_button_reply,
     handle_text_reply,
+    _send_document_wa,
 )
 
 app = Flask(__name__)
@@ -127,21 +128,31 @@ def _handle_text(sender: str, text: str):
     """
     Route text messages:
       1. If sender is in a WA task-assignment state → task_assignment module
-      2. Otherwise → core bot engine
+      2. Otherwise → core bot engine with a WhatsApp-native send_reply_func
     """
     # 1. Task assignment multi-step state (e.g. rejection reason, new date)
     if handle_text_reply(sender, text):
         logger.info(f"Text handled by task_assignment module for {sender}")
         return
 
-    # 2. Core bot engine (existing NLP / intent handling)
+    # 2. Core bot engine — pass a WA-native reply function so documents work
     logger.info(f"Text from {sender} → core engine: {text[:80]}")
+
+    async def wa_send_reply(text: str = None, document: str = None, target_user_id: int = None):
+        """
+        WhatsApp-aware send function.
+        - text messages → sent as plain text
+        - document (PDF path) → uploaded to WA media API, then sent as document
+        """
+        if text:
+            send_text(sender, text)
+        if document:
+            _send_document_wa(sender, document)
+
     try:
-        response_text = asyncio.run(
-            process_user_message(user_id=sender, text=text)
+        asyncio.run(
+            process_user_message(user_id=sender, text=text, send_reply_func=wa_send_reply)
         )
-        if response_text:
-            send_text(sender, response_text)
     except Exception as e:
         logger.error(f"Core engine error for {sender}: {e}", exc_info=True)
 

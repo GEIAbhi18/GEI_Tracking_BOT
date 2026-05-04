@@ -79,6 +79,52 @@ def send_interactive_buttons(to: str, body: str, buttons: list[dict]) -> bool:
     }
     return _post_wa(payload)
 
+def _send_document_wa(to: str, file_path: str) -> bool:
+    """Upload a file to WhatsApp and send it as a document."""
+    if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
+        logger.error("WA Task Assignment: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
+        return False
+        
+    if not os.path.exists(file_path):
+        logger.error(f"File not found: {file_path}")
+        return False
+
+    # Step 1: Upload media
+    upload_url = f"{WA_API_BASE}/media"
+    headers = {"Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}"}
+    
+    file_name = os.path.basename(file_path)
+    mime_type = "application/pdf" if file_name.endswith(".pdf") else "application/octet-stream"
+    
+    try:
+        with open(file_path, "rb") as f:
+            files = {
+                "file": (file_name, f, mime_type)
+            }
+            data = {"messaging_product": "whatsapp"}
+            upload_res = requests.post(upload_url, headers=headers, data=data, files=files, timeout=30)
+            upload_res.raise_for_status()
+            media_id = upload_res.json().get("id")
+    except Exception as e:
+        logger.error(f"WA API media upload error: {e}")
+        return False
+
+    if not media_id:
+        logger.error("Failed to get media_id from WhatsApp upload response")
+        return False
+
+    # Step 2: Send document message
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "document",
+        "document": {
+            "id": media_id,
+            "filename": file_name
+        }
+    }
+    return _post_wa(payload)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DB HELPERS (imported lazily to avoid circular imports at module load)

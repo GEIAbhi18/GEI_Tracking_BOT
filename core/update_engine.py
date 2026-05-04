@@ -131,7 +131,11 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     elif stripped_lower in ["create note", "create_note", "/create_note", "add note"]:
         await handlers.handle_create_note({"intent": "create_note"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["get report", "request report", "get_report", "request_report"]:
+    elif (stripped_lower in [
+        "get report", "request report", "get_report", "request_report",
+        "report", "show report", "daily report", "give report",
+        "give me report", "generate report", "send report", "/get_report"
+    ] or (stripped_lower == "report")):
         await handlers.handle_request_report({"intent": "request_report"}, user_id, context, send_reply_func)
         return
     elif stripped_lower in ["hello", "hi", "hey", "greetings", "start", "help"]:
