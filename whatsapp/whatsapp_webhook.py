@@ -21,6 +21,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from flask import Flask, request, jsonify
 from core.logic import process_user_message
+from core.error_messages import friendly_system_error
 from whatsapp.task_assignment import (
     send_text,
     handle_button_reply,
@@ -155,6 +156,11 @@ def _handle_text(sender: str, text: str):
         )
     except Exception as e:
         logger.error(f"Core engine error for {sender}: {e}", exc_info=True)
+        # Send a friendly message so the user isn't left hanging
+        try:
+            send_text(sender, friendly_system_error(text))
+        except Exception:
+            pass  # Last resort — can't even send the error message
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -11,6 +11,10 @@ from db import (
     update_user_activity, remove_blocker, create_project_db, add_task, save_note
 )
 from core.utils import parse_human_date, resolve_project, resolve_task_from_list
+from core.error_messages import (
+    friendly_clarify, friendly_system_error, friendly_task_not_found,
+    friendly_project_not_found, friendly_missing_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -382,9 +386,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     await send_reply_func(f"Blocker '{blockers[idx]}' resolved. 🟢 (Task status set to unblocked)")
                     clear_state(user_id)
                 else:
-                    await send_reply_func("Invalid choice. Please type the blocker number or 'All'.")
+                    await send_reply_func("That didn't match — type the blocker number or 'All' to resolve everything.")
             else:
-                await send_reply_func("Please type 'All' to resolve everything or the number of the specific blocker.")
+                await send_reply_func("Type 'All' to resolve everything, or the number of the specific blocker.")
     
     elif action == "add_image":
         if step == "waiting_for_project":
@@ -646,16 +650,16 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 
             u_info = get_user_by_telegram_id(user_id)
             if not match:
-                await send_reply_func("Failed to create ticket. Project not found.")
+                await send_reply_func(friendly_project_not_found(pq))
             elif not u_info:
-                await send_reply_func(f"Employee/User with Telegram ID {user_id} not found in database. Please contact admin to register your device before raising tickets.")
+                await send_reply_func("Your device isn't registered yet.\nPlease contact Kanav to get set up before raising tickets.")
             else:
                 try:
                     create_ticket(u_info['id'], match['id'], message=text)
                     await send_reply_func(f"✅ Ticket raised for project '{match['name']}'.")
                 except Exception as e:
                     logging.error(f"Error creating ticket: {e}")
-                    await send_reply_func("Failed to raise ticket due to a system error. Please try again.")
+                    await send_reply_func(friendly_system_error())
             clear_state(user_id)
 
     elif action == "create_project":
@@ -737,9 +741,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     except Exception as wa_err:
                         logging.error(f"WA task assignment trigger error: {wa_err}")
                 else:
-                    await send_reply_func(f"Sorry, I couldn't save the task '{task_name}'. Please check the format and try again.")
+                    await send_reply_func(f"Couldn't save '{task_name}' — please double-check the details and try again.\nTry: 'create task' to start over")
             else:
-                await send_reply_func("Failed to create task. Project not found.")
+                await send_reply_func(friendly_project_not_found(project_query))
             clear_state(user_id)
 
     elif action == "edit_date":
@@ -779,7 +783,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             tasks = get_all_tasks()
             full_task = next((t for t in tasks if t['name'] == tq), None)
             if not full_task:
-                await send_reply_func("Task not found. Please try again.")
+                await send_reply_func(friendly_task_not_found(tq))
                 return
                 
             state["task_id"] = full_task['id']
@@ -825,7 +829,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 f_dl = format_date_human(result.get('deadline'))
                 await send_reply_func(f"✅ Update saved!\nTask: {result['name']}\nStart Date: {f_start}\nDeadline: {f_dl}")
             else:
-                await send_reply_func("Failed to update date.")
+                await send_reply_func(friendly_system_error())
             clear_state(user_id)
 
     elif action == "create_note":
@@ -865,7 +869,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             tasks = get_all_tasks()
             full_task = next((t for t in tasks if t['name'] == tq), None)
             if not full_task:
-                await send_reply_func("Task not found. Please try again.")
+                await send_reply_func(friendly_task_not_found(tq))
                 return
                 
             state["task_id"] = full_task['id']
@@ -907,7 +911,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             elif text_strip == "4":
                 await handlers.handle_query_tasks({}, user_id, context, send_reply_func)
             else:
-                await send_reply_func("Invalid choice. Please try again or rephrase your request.")
+                await send_reply_func("That didn't match any option — try typing the number (1, 2, 3, or 4).")
 
     elif action == "task_update":
         # Follow-up detection (Step 2)

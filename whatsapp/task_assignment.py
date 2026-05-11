@@ -326,7 +326,7 @@ def _handle_accept(sender_phone: str, task_id: str):
     task = get_task_by_id(task_id)
 
     if not task:
-        send_text(sender_phone, "❌ Task not found. Please contact Kanav.")
+        send_text(sender_phone, "Couldn't find that task — it may have been removed.\nPlease contact Kanav.")
         return
 
     # Idempotency: skip if already accepted
@@ -356,7 +356,7 @@ def _handle_reject_step1(sender_phone: str, task_id: str):
     """Asif clicked Reject — ask for reason."""
     task = get_task_by_id(task_id)
     if not task:
-        send_text(sender_phone, "❌ Task not found.")
+        send_text(sender_phone, "Couldn't find that task — it may have been removed.\nPlease contact Kanav.")
         return
 
     if task.get("assignment_status") == "rejected":
@@ -395,7 +395,7 @@ def _handle_editdate_step1(sender_phone: str, task_id: str):
     """Asif clicked Edit Date — ask for new date."""
     task = get_task_by_id(task_id)
     if not task:
-        send_text(sender_phone, "❌ Task not found.")
+        send_text(sender_phone, "Couldn't find that task — it may have been removed.\nPlease contact Kanav.")
         return
 
     update_task_assignment(task_id, assignment_status="awaiting_new_date")
@@ -414,14 +414,14 @@ def _handle_editdate_step2(sender_phone: str, task_id: str, date_text: str):
     date_text = date_text.strip()
     if not re.match(r'^\d{4}-\d{2}-\d{2}$', date_text):
         send_text(sender_phone,
-                  "❌ Invalid date format. Please use YYYY-MM-DD (e.g. 2026-05-15).")
+                  "That date format didn't work — please use YYYY-MM-DD.\nExample: 2026-05-15")
         return
 
     # Optional: validate it's a real calendar date
     try:
         datetime.strptime(date_text, "%Y-%m-%d")
     except ValueError:
-        send_text(sender_phone, "❌ Invalid date. Please enter a valid date in YYYY-MM-DD format.")
+        send_text(sender_phone, "That doesn't look like a real date.\nPlease enter a date like 2026-05-15")
         return
 
     # Update DB: new deadline + accept

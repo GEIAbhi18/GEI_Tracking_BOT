@@ -44,7 +44,7 @@ async def process_multi_line_trigger(text, user_id, send_reply_func, set_state):
                     "blocker": str(js.get("blocker", "No blocker")).strip() or "No blocker"
                 })
             except Exception as e:
-                await send_reply_func(f"Error in line {idx}: Invalid format. Please use 'Project - Task - Progress - Blocker'")
+                await send_reply_func(f"Line {idx} didn't quite match the format.\nTry: 'Project - Task - Progress - Blocker'")
                 return True
         else:
             pRaw = match.group(1).strip()
@@ -80,12 +80,12 @@ async def process_multi_line_trigger(text, user_id, send_reply_func, set_state):
         prog = item['progress']
         
         if not (0 <= prog <= 100):
-            await send_reply_func(f"Error in line {lNum}: Progress must be between 0 and 100.")
+            await send_reply_func(f"Line {lNum}: Progress should be between 0 and 100.\nTry: 'Project - Task - 60 - No blocker'")
             return True
             
         matched_proj = proj_map.get(pRaw) or resolve_project(pRaw, projects)
         if not matched_proj:
-            await send_reply_func(f"Error in line {lNum}: Project '{pRaw}' not found. Check project number or name.")
+            await send_reply_func(f"Line {lNum}: Couldn't find project '{pRaw}'.\nTry: 'show projects' to see the list, or use the project number")
             return True
             
         p_tasks = [t for t in all_tasks if t.get('project_id') == matched_proj['id']]
@@ -95,7 +95,7 @@ async def process_multi_line_trigger(text, user_id, send_reply_func, set_state):
         
         matched_task = t_map_num.get(tRaw) or resolve_task_from_list(tRaw, p_tasks)
         if not matched_task:
-            await send_reply_func(f"Error in line {lNum}: Task '{tRaw}' not found in project '{matched_proj['name']}'.")
+            await send_reply_func(f"Line {lNum}: Couldn't find task '{tRaw}' in '{matched_proj['name']}'.\nTry: 'show tasks' to see available tasks")
             return True
             
         validated.append({
@@ -154,7 +154,7 @@ async def handle_multi_update_confirmation(text, user_id, state, send_reply_func
                 await send_reply_func("✅ Updates saved successfully")
             except Exception as e:
                 logger.error(f"Error saving daily_updates: {e}")
-                await send_reply_func("System Error: Could not save updates to daily_updates table.")
+                await send_reply_func("The system is a little slow right now — please try again in a moment.\nYour message was not lost.")
         else:
             await send_reply_func("No valid updates to save.")
             

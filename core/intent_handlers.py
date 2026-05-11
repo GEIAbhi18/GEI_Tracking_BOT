@@ -9,6 +9,11 @@ from db import (
 from core.conversation_state import set_state, clear_state
 from core.context_manager import update_context, get_context
 from core.utils import parse_human_date, resolve_project, resolve_task_from_list
+from core.error_messages import (
+    get_error_message, friendly_task_not_found, friendly_project_not_found,
+    friendly_clarify, friendly_system_error, friendly_missing_info,
+    friendly_permission_denied,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -547,7 +552,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
 
     filtered = filter_tasks(tasks, filters)
     if not filtered:
-        await send_reply_func("No tasks found matching criteria.")
+        await send_reply_func("No tasks found matching that criteria — try 'show my tasks' to see everything.")
         return
         
     msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
@@ -593,11 +598,11 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
     
     if not match:
         if active_project_id:
-            await send_reply_func(f"Could not find '{task_reference}' in the active project.")
+            await send_reply_func(friendly_task_not_found(str(task_reference)))
         elif not last_list:
-            await send_reply_func("I don't have a recent task list for you. Please first request the task list (e.g., 'show tasks').")
+            await send_reply_func("I don't have a recent task list yet.\nTry: 'show tasks' first to load your list")
         else:
-            await send_reply_func(f"Could not find task matching '{task_reference}'. Please select a valid number from the list.")
+            await send_reply_func(friendly_task_not_found(str(task_reference)))
         return
 
     # Fetch full details
@@ -699,9 +704,9 @@ async def handle_reply_ticket(entities, user_id, context, send_reply_func):
             add_ticket_message(target_ticket['id'], u_info['id'], reply_msg)
             await send_reply_func(f"✅ Reply added to Ticket {ticket_index}.")
         else:
-            await send_reply_func(f"Employee/User with Telegram ID {user_id} not found in database. Please contact admin to register your device.")
+            await send_reply_func("Your device isn't registered yet.\nPlease contact Kanav to get set up.")
     else:
-        await send_reply_func(f"Ticket {ticket_index} not found.")
+        await send_reply_func(f"Couldn't find Ticket {ticket_index}.\nTry: 'view tickets' to see all open tickets")
 
 async def handle_close_ticket(entities, user_id, context, send_reply_func):
     ticket_index = entities.get("ticket_index")
@@ -712,7 +717,7 @@ async def handle_close_ticket(entities, user_id, context, send_reply_func):
         close_ticket(target_ticket['id'])
         await send_reply_func(f"✅ Ticket {ticket_index} closed.")
     else:
-        await send_reply_func(f"Ticket {ticket_index} not found.")
+        await send_reply_func(f"Couldn't find Ticket {ticket_index}.\nTry: 'view tickets' to see all open tickets")
 
 def generate_pdf_report():
     from fpdf import FPDF
@@ -1004,7 +1009,7 @@ async def handle_trigger_reminder_user(entities, user_id, context, send_reply_fu
         # 1. Resolve user
         user = get_user_by_name(target_name)
         if not user or not user.get('telegram_id'):
-            await send_reply_func(f"User '{target_name}' not found or has no telegram_id.")
+            await send_reply_func(f"Couldn't find '{target_name}' in the system.\nMake sure the name is spelled correctly.")
             return
             
         target_tid = user['telegram_id']
@@ -1035,7 +1040,7 @@ async def handle_trigger_reminder_user(entities, user_id, context, send_reply_fu
         await send_reply_func(f"✅ Reminder sent to {user['name']}")
     except Exception as e:
         logger.error(f"Error in handle_trigger_reminder_user: {e}")
-        await send_reply_func(f"Error: {str(e)}")
+        await send_reply_func(friendly_system_error())
 
 async def handle_ask_asif(entities, user_id, context, send_reply_func):
     # Backward compatibility for direct calls or old routing
@@ -1155,18 +1160,20 @@ async def handle_create_note(entities, user_id, context, send_reply_func):
     await send_reply_func(msg)
 
 async def handle_clarify(entities, user_id, context, send_reply_func):
+    # Get original user message for language detection
+    user_msg = ""
+    msgs = context.get("messages", []) if context else []
+    if msgs:
+        user_msg = str(msgs[-1]) if msgs else ""
+
     set_state(user_id, {"action": "clarify", "step": "waiting_for_choice"})
     msg = (
-        "I'm not sure I understood that correctly. Did you want to:\n"
+        friendly_clarify(user_msg) + "\n\n"
+        "Or pick what you'd like to do:\n"
         "1. Update task progress\n"
         "2. Add a blocker\n"
         "3. Complete a task\n"
-        "4. Raise a ticket\n"
-        "5. View all tickets\n"
-        "6. Show All Blockers Project wise\n"
-        "7. Create Project or Task\n"
-        "8. Show your tasks\n\n"
-        "Please specify your request."
+        "4. Show your tasks\n"
     )
     await send_reply_func(msg)
 
@@ -1180,7 +1187,7 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     if not match:
-        await send_reply_func(f"Could not find task matching '{task_query}'.")
+        await send_reply_func(friendly_task_not_found(str(task_query)))
         return
 
     try:
@@ -1225,7 +1232,7 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     if not match:
-        await send_reply_func(f"Could not find task matching '{task_query}'.")
+        await send_reply_func(friendly_task_not_found(str(task_query)))
         return
 
     add_blocker(match['id'], description)
@@ -1247,7 +1254,7 @@ async def perform_add_image(task_query, user_id, send_reply_func, images=None):
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     if not match:
-        await send_reply_func(f"Could not find task matching '{task_query}'.")
+        await send_reply_func(friendly_task_not_found(str(task_query)))
         return
 
     if not images:
@@ -1273,7 +1280,7 @@ async def perform_remove_blocker(task_query, user_id, send_reply_func):
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list)
         
     if not match:
-        await send_reply_func(f"Could not find task matching '{task_query}'.")
+        await send_reply_func(friendly_task_not_found(str(task_query)))
         return
 
     # Check for multiple active blockers in update history

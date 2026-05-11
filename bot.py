@@ -8,6 +8,7 @@ from config import TELEGRAM_BOT_TOKEN
 from db import get_user_by_telegram_id, supabase
 from core.intent_handlers import generate_pdf_report
 from core.logic import process_user_message
+from core.error_messages import friendly_system_error
 import html, re
 
 # Configure logging
@@ -54,6 +55,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await process_user_message(text=user_message, user_id=user_id, images=images, send_reply_func=reply_function)
     except Exception as e:
         logging.exception(f"CRITICAL ERROR: {e}")
+        # Always send a friendly message — never leave the user hanging
+        try:
+            error_msg = friendly_system_error(user_message)
+            error_html = html.escape(error_msg)
+            await update.message.reply_text(error_html, parse_mode='HTML')
+        except Exception:
+            pass  # Last resort — can't even send the error message
 
 async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
     try:

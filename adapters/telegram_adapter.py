@@ -81,7 +81,7 @@ async def raise_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.chat_id
     u_info = get_user_by_telegram_id(user_id)
     if not u_info:
-        await update.message.reply_text("User unknown in DB.")
+        await update.message.reply_text("Your device isn't registered yet.\nPlease contact Kanav to get set up.")
         return
         
     args = context.args
@@ -94,7 +94,7 @@ async def raise_ticket(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pid = next((p['id'] for p in projects if p['name'].lower() == proj_name.lower()), None)
     
     if not pid:
-        await update.message.reply_text("Project not found.")
+        await update.message.reply_text("That project name didn't match anything.\nTry: 'show projects' to see all active projects")
         return
         
     msg = " ".join(args[1:])

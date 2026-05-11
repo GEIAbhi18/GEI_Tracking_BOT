@@ -1,5 +1,6 @@
 import logging
 from core.update_engine import process_update_message
+from core.error_messages import friendly_system_error
 
 async def process_user_message(user_id: str, text: str, images: list = None, send_reply_func=None) -> str:
     """
@@ -25,8 +26,15 @@ async def process_user_message(user_id: str, text: str, images: list = None, sen
         await process_update_message(text=text, user_id=int(user_id), images=_images, send_reply_func=reply_cb)
     except Exception as e:
         logging.exception(f"Error processing message: {e}")
-        if not send_reply_func:
-            responses.append("Sorry, an error occurred while processing your request.")
+        # Send a friendly message instead of exposing internals
+        error_msg = friendly_system_error(text or "")
+        if send_reply_func:
+            try:
+                await send_reply_func(error_msg)
+            except Exception:
+                pass  # Can't send to user — just log above
+        else:
+            responses.append(error_msg)
 
     # Combine collected responses for webhook-style return
     # Also attach document paths so the WhatsApp layer can access them
@@ -35,3 +43,4 @@ async def process_user_message(user_id: str, text: str, images: list = None, sen
     # We attach them to the coroutine frame via a well-known attribute
     process_user_message._last_documents = document_paths
     return result
+
