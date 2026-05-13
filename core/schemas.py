@@ -19,5 +19,6 @@ class IntentResponse(BaseModel):
     message_type: Optional[str] = None
     progress: Optional[Union[int, float]] = None
     blocker_text: Optional[str] = None
+    deadline: Optional[str] = None
     confidence: float
     query_filters: Optional[QueryFilters] = None
