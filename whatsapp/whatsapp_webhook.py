@@ -29,7 +29,6 @@ from whatsapp.task_assignment import (
     handle_text_reply,
     _send_document_wa,
 )
-from whatsapp.audio_handler import handle_voice_note
 
 app = Flask(__name__)
 
@@ -213,6 +212,9 @@ def _handle_audio(sender: str, message: dict):
         return
 
     logger.info(f"Voice note received from {sender}, media_id: {media_id}")
+
+    # Lazy import — avoid loading groq SDK at server startup
+    from whatsapp.audio_handler import handle_voice_note
 
     # Step 1: Download + Transcribe
     result = handle_voice_note(media_id, sender)

@@ -17,7 +17,6 @@ import time
 import logging
 import tempfile
 import requests
-from groq import Groq
 
 logger = logging.getLogger(__name__)
 
@@ -102,6 +101,7 @@ def transcribe_audio(file_path: str) -> str:
     Raises:
         Exception: If transcription fails after retries
     """
+    from groq import Groq  # Lazy import — avoid loading at server startup
     client = Groq(api_key=GROQCLOUD_API_KEY)
 
     for attempt in range(MAX_RETRIES):
