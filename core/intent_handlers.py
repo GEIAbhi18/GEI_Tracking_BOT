@@ -1080,12 +1080,82 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
     except Exception:
         pass
 
-    project_query = entities.get("project_name") or entities.get("task_name") # LLM might put project name here
+    # For WhatsApp users: try resolving by phone number if telegram lookup failed
+    if not creator_db_id:
+        try:
+            from whatsapp.task_assignment import get_user_by_whatsapp
+            wa_user = get_user_by_whatsapp(str(user_id))
+            if wa_user:
+                creator_db_id = wa_user['id']
+        except Exception:
+            pass
+
+    # Resolve project — try project_name_extracted first, then task_name as fallback
+    project_query = entities.get("project_name_extracted") or entities.get("project_name") or entities.get("task_name")
     match = resolve_project(project_query, projects) if project_query else None
     
     if not match and context.get("active_project_id"):
         match = next((p for p in projects if p['id'] == context["active_project_id"]), None)
 
+    # Extract task name for direct creation (voice notes provide everything at once)
+    # task_name from entities comes from LLM's task_reference field
+    task_name_for_creation = entities.get("task_name")
+    deadline_raw = entities.get("deadline")
+
+    # Safety: if task_name equals the project name, it's not actually a task name
+    if (task_name_for_creation and match and
+            task_name_for_creation.strip().lower() == match['name'].strip().lower()):
+        task_name_for_creation = None
+
+    # DIRECT CREATION: if we have project + task name, skip the multi-step flow
+    if match and task_name_for_creation:
+        parsed_deadline = parse_human_date(deadline_raw) if deadline_raw else None
+
+        try:
+            from db import add_task
+            result = add_task(
+                match['id'],
+                task_name_for_creation,
+                parsed_deadline,
+                assigned_by=creator_db_id
+            )
+        except Exception as e:
+            import logging
+            logging.error(f"Direct task creation error: {e}")
+            result = None
+
+        if result:
+            from core.utils import format_date_human
+            f_dl = format_date_human(parsed_deadline) if parsed_deadline else "Not set"
+            await send_reply_func(
+                f"✅ Task created successfully!\n"
+                f"📌 Task: {task_name_for_creation}\n"
+                f"📂 Project: {match['name']}\n"
+                f"📅 Deadline: {f_dl}"
+            )
+
+            # Trigger WA task assignment if creator is Kanav
+            try:
+                from core.update_engine import _trigger_wa_task_assignment
+                _trigger_wa_task_assignment(
+                    task_id=result['id'],
+                    task_name=task_name_for_creation,
+                    project_name=match['name'],
+                    due_date=f_dl,
+                    creator_telegram_id=user_id,
+                    creator_db_id=creator_db_id,
+                )
+            except Exception as wa_err:
+                import logging
+                logging.error(f"WA task assignment trigger error: {wa_err}")
+        else:
+            await send_reply_func(
+                f"Couldn't save '{task_name_for_creation}' — please try again.\n"
+                f"Try: 'create task' to start over"
+            )
+        return
+
+    # MULTI-STEP FALLBACK: ask for missing info step by step
     if match:
         set_state(user_id, {"action": "create_task", "step": "waiting_for_task_name",
                             "project_query": match['name'], "creator_user_id": creator_db_id})

@@ -86,8 +86,10 @@ def transcribe_audio(file_path: str) -> str:
     """
     Transcribe an audio file using Groq Whisper API.
 
-    Language is set to Hindi ('hi') which handles Hindi/English
-    code-switching (Hinglish) automatically via Whisper.
+    Language is set to English ('en') to force Roman script output.
+    This ensures Hinglish (Hindi-English mix) speech is transcribed
+    in Roman characters that match project/task names in the database,
+    rather than Devanagari script.
 
     Includes retry logic for Groq API rate limits.
 
@@ -108,9 +110,11 @@ def transcribe_audio(file_path: str) -> str:
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(file_path), audio_file),
                     model=GROQ_WHISPER_MODEL,
-                    language="hi",          # handles Hinglish automatically
+                    language="en",          # Roman script output for Hinglish
                     response_format="text",
-                    temperature=0.0         # deterministic output, no hallucination
+                    temperature=0.0,        # deterministic output
+                    prompt="Construction project management conversation in Hinglish. "
+                           "Romanize all Hindi words. Project and task names are in English."
                 )
 
             # response_format="text" returns a plain string directly

@@ -111,6 +111,32 @@ Example 13:
 User: "send updates to asif"
 Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
 
+Example 17 (Voice note - create task with full info):
+User: "Dummy Test mein ek naya task banana hai audio testing deadline 20 May"
+Output: {"intent": "create_task", "project_name": "Dummy Test", "task_reference": "audio testing", "deadline": "20 May", "confidence": 0.95}
+
+Example 18 (Voice note - create task):
+User: "create a new task in Top Terrace project called railing installation deadline 25 May"
+Output: {"intent": "create_task", "project_name": "Top Terrace", "task_reference": "railing installation", "deadline": "25 May", "confidence": 0.95}
+
+Example 19 (Voice note - add blocker with project context):
+User: "Top Terrace waterproofing mein blocker hai cement delivery nahi aayi"
+Output: {"intent": "add_blocker", "project_name": "Top Terrace", "task_reference": "waterproofing", "blocker_text": "cement delivery nahi aayi", "confidence": 0.92}
+
+Example 20 (Voice note - task update Hinglish):
+User: "bhai slope correction wala kaam 45% tak pahunch gaya ek blocker hai labour nahi aa rahi"
+Output: {"intent": "task_update", "task_reference": "slope correction", "progress": 45, "blocker_text": "labour nahi aa rahi", "confidence": 0.90}
+
+Example 21 (Voice note - create ticket):
+User: "Top Terrace mein waterproofing ka issue hai paani leak ho raha hai"
+Output: {"intent": "create_ticket", "project_name": "Top Terrace", "task_reference": "waterproofing", "blocker_text": "paani leak ho raha hai", "confidence": 0.90}
+
+IMPORTANT RULES FOR create_task:
+* task_reference = the NEW task name to create (not the project name)
+* project_name = the project to create it under
+* deadline = the deadline if mentioned
+* NEVER put the project name in task_reference for create_task intent
+
 OUTPUT FORMAT:
 {
 "intent": "intent_here",
@@ -120,6 +146,7 @@ OUTPUT FORMAT:
 "message_type": "task_update_reminder if applicable",
 "progress": null,
 "blocker_text": "blocker text if any",
+"deadline": "deadline date if mentioned",
 "confidence": 1.0,
 "query_filters": {
   "range": "overdue|today|tomorrow|this_week|custom_range|all",
