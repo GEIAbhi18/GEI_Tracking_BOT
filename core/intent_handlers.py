@@ -1256,6 +1256,28 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     tasks = get_all_tasks()
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
+    # Check for ambiguous matches — ask user to choose
+    if not match and resolve_task_from_list.ambiguous_matches:
+        amb = resolve_task_from_list.ambiguous_matches
+        msg = f"Multiple tasks match *\"{task_query}\"*. Which one?\n\n"
+        for i, t in enumerate(amb, 1):
+            p_name = t.get('projects', {}).get('name', '') if isinstance(t.get('projects'), dict) else ''
+            msg += f"{i}. {t['name']}" + (f" ({p_name})" if p_name else "") + "\n"
+        msg += "\nReply with the number."
+        
+        # Save state so the next message resolves the choice
+        set_state(user_id, {
+            "action": "disambiguate_update",
+            "step": "waiting_for_choice",
+            "task_options": [t['id'] for t in amb],
+            "task_names": [t['name'] for t in amb],
+            "progress_str": str(progress_str) if progress_str is not None else None,
+            "images": images or [],
+            "deadline": deadline,
+        })
+        await send_reply_func(msg)
+        return
+
     if not match:
         await send_reply_func(friendly_task_not_found(str(task_query)))
         return
@@ -1301,6 +1323,26 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     tasks = get_all_tasks()
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
+    # Check for ambiguous matches — ask user to choose
+    if not match and resolve_task_from_list.ambiguous_matches:
+        amb = resolve_task_from_list.ambiguous_matches
+        msg = f"Multiple tasks match *\"{task_query}\"*. Which one?\n\n"
+        for i, t in enumerate(amb, 1):
+            p_name = t.get('projects', {}).get('name', '') if isinstance(t.get('projects'), dict) else ''
+            msg += f"{i}. {t['name']}" + (f" ({p_name})" if p_name else "") + "\n"
+        msg += "\nReply with the number."
+        
+        set_state(user_id, {
+            "action": "disambiguate_blocker",
+            "step": "waiting_for_choice",
+            "task_options": [t['id'] for t in amb],
+            "task_names": [t['name'] for t in amb],
+            "description": description,
+            "images": images or [],
+        })
+        await send_reply_func(msg)
+        return
+
     if not match:
         await send_reply_func(friendly_task_not_found(str(task_query)))
         return

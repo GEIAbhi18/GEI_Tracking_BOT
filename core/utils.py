@@ -192,7 +192,15 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
     """
     Resolves a task from a query and a list of tasks.
     Supports active_project_id mapping to project_task_number.
+    
+    AMBIGUITY HANDLING:
+    When a partial name matches multiple tasks with similar relevance,
+    this function returns None and stores the ambiguous matches in
+    resolve_task_from_list.ambiguous_matches so the caller can ask the user.
     """
+    # Reset ambiguous matches on every call
+    resolve_task_from_list.ambiguous_matches = []
+
     if not query:
         return None
         
@@ -246,20 +254,42 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
         if 0 <= idx < len(tasks):
             return tasks[idx]
 
-    # 3. Try name matching
-    # Priority 1: Exact match
+    # 3. Try name matching WITH ambiguity detection
+    # Priority 1: Exact match (no ambiguity possible)
     for t in tasks:
         if t.get('name', '').lower() == q:
             return t
     
-    # Priority 2: Starts with
-    for t in tasks:
-        if t.get('name', '').lower().startswith(q):
-            return t
+    # Priority 2: Starts with — check for multiple matches
+    starts_with = [t for t in tasks if t.get('name', '').lower().startswith(q)]
+    if len(starts_with) == 1:
+        return starts_with[0]
+    elif len(starts_with) > 1:
+        # If active_project_id is set, try to narrow down
+        if active_project_id:
+            filtered = [t for t in starts_with if t.get('project_id') == active_project_id]
+            if len(filtered) == 1:
+                return filtered[0]
+        # AMBIGUOUS — store for caller to handle
+        resolve_task_from_list.ambiguous_matches = starts_with
+        logger.info(f"Ambiguous task match for '{query}': {[t.get('name') for t in starts_with]}")
+        return None
             
-    # Priority 3: Contains
-    for t in tasks:
-        if q in t.get('name', '').lower():
-            return t
+    # Priority 3: Contains — check for multiple matches
+    contains = [t for t in tasks if q in t.get('name', '').lower()]
+    if len(contains) == 1:
+        return contains[0]
+    elif len(contains) > 1:
+        if active_project_id:
+            filtered = [t for t in contains if t.get('project_id') == active_project_id]
+            if len(filtered) == 1:
+                return filtered[0]
+        # AMBIGUOUS — store for caller to handle
+        resolve_task_from_list.ambiguous_matches = contains
+        logger.info(f"Ambiguous task match for '{query}': {[t.get('name') for t in contains]}")
+        return None
             
     return None
+
+# Initialize the class attribute
+resolve_task_from_list.ambiguous_matches = []

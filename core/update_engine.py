@@ -913,6 +913,119 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             else:
                 await send_reply_func("That didn't match any option — try typing the number (1, 2, 3, or 4).")
 
+    elif action == "disambiguate_update":
+        if step == "waiting_for_choice":
+            choice = text.strip().replace('.', '').strip()
+            options = state.get("task_options", [])
+            names = state.get("task_names", [])
+            
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                idx = int(choice) - 1
+                task_id = options[idx]
+                task_name = names[idx]
+                progress_str = state.get("progress_str")
+                deadline = state.get("deadline")
+                img = state.get("images", [])
+                clear_state(user_id)
+                
+                # Find the full task object
+                tasks = get_all_tasks()
+                match = next((t for t in tasks if t['id'] == task_id), None)
+                if match:
+                    try:
+                        if progress_str is not None:
+                            m = re.search(r'(\d+)', str(progress_str))
+                            progress = int(m.group(1)) if m else (match.get('progress', 0) or 0)
+                        else:
+                            progress = match.get('progress', 0) or 0
+                    except:
+                        progress = match.get('progress', 0) or 0
+                    
+                    u_info = get_user_by_telegram_id(user_id)
+                    emp_uuid = u_info['id'] if u_info else None
+                    save_update(match['id'], progress, "None", img, emp_uuid, new_deadline=deadline)
+                    update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
+                    set_state(user_id, {"action": "task_update", "task_id": match['id'], "task_name": match['name']})
+                    
+                    dl_msg = f"\nDeadline: {deadline}" if deadline else ""
+                    await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%{dl_msg}")
+                else:
+                    await send_reply_func("Task not found — please try again.")
+            else:
+                await send_reply_func(f"Please reply with a number between 1 and {len(options)}.")
+
+    elif action == "disambiguate_blocker":
+        if step == "waiting_for_choice":
+            choice = text.strip().replace('.', '').strip()
+            options = state.get("task_options", [])
+            names = state.get("task_names", [])
+            
+            if choice.isdigit() and 1 <= int(choice) <= len(options):
+                idx = int(choice) - 1
+                task_id = options[idx]
+                task_name = names[idx]
+                description = state.get("description", "")
+                img = state.get("images", [])
+                clear_state(user_id)
+                
+                tasks = get_all_tasks()
+                match = next((t for t in tasks if t['id'] == task_id), None)
+                if match:
+                    add_blocker(match['id'], description)
+                    u_info = get_user_by_telegram_id(user_id)
+                    save_update(match['id'], match.get('progress', 0), description, img, u_info['id'] if u_info else None)
+                    update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_blocker")
+                    await send_reply_func(f"Blocker added successfully 🛑\nTask: {match['name']}\nIssue: {description}")
+                else:
+                    await send_reply_func("Task not found — please try again.")
+            else:
+                await send_reply_func(f"Please reply with a number between 1 and {len(options)}.")
+
+    elif action == "voice_batch_image_confirm":
+        if step == "waiting_for_choice":
+            choice = text.strip().lower().replace('.', '').strip()
+            task_ids = state.get("completed_task_ids", [])
+            task_names = state.get("completed_task_names", [])
+            
+            if choice in ["1", "yes", "y", "haan", "ha"]:
+                # Enter image upload state for the completed tasks
+                clear_state(user_id)
+                set_state(user_id, {
+                    "action": "voice_batch_image_upload",
+                    "step": "waiting_for_image",
+                    "completed_task_ids": task_ids,
+                    "completed_task_names": task_names,
+                })
+                names = ", ".join(task_names)
+                await send_reply_func(
+                    f"📸 Send the proof image(s) for: *{names}*\n"
+                    f"(Send as a photo attachment)"
+                )
+            elif choice in ["2", "no", "n", "nahi", "nhi"]:
+                clear_state(user_id)
+                await send_reply_func("✅ Tasks marked complete without proof images.")
+            else:
+                await send_reply_func("Reply with *1* (Yes) or *2* (No).")
+
+    elif action == "voice_batch_image_upload":
+        if step == "waiting_for_image":
+            if images:
+                task_ids = state.get("completed_task_ids", [])
+                task_names = state.get("completed_task_names", [])
+                for tid in task_ids:
+                    try:
+                        update_task_image(tid, images[0])
+                    except Exception as img_err:
+                        logging.error(f"Image save error for task {tid}: {img_err}")
+                clear_state(user_id)
+                names = ", ".join(task_names)
+                await send_reply_func(f"📸 Proof image saved for: *{names}* ✅")
+            else:
+                await send_reply_func("Please send a photo attachment, or type *skip* to finish without images.")
+                if text.strip().lower() in ["skip", "cancel", "no"]:
+                    clear_state(user_id)
+                    await send_reply_func("✅ Completed without proof images.")
+
     elif action == "task_update":
         # Follow-up detection (Step 2)
         if not state.get("awaiting_note_confirmation"):

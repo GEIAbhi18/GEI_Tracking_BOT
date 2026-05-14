@@ -135,7 +135,8 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
     Route text messages:
       1. Check for UNDO command (voice note context)
       2. If sender is in a WA task-assignment state → task_assignment module
-      3. Otherwise → core bot engine with a WhatsApp-native send_reply_func
+      3. For voice notes: check if batch update (multiple tasks) → batch handler
+      4. Otherwise → core bot engine with a WhatsApp-native send_reply_func
 
     Args:
         sender: WhatsApp phone number (E.164 without '+')
@@ -152,7 +153,21 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         logger.info(f"Text handled by task_assignment module for {sender}")
         return
 
-    # 2. Core bot engine — pass a WA-native reply function so documents work
+    # 2. Voice note batch detection — multiple tasks in one message
+    if voice_note:
+        try:
+            from whatsapp.voice_batch_handler import is_batch_transcript, extract_batch_updates
+            if is_batch_transcript(text):
+                logger.info(f"Batch voice note detected from {sender}")
+                batch_updates = extract_batch_updates(text)
+                if batch_updates and len(batch_updates) > 1:
+                    _handle_voice_batch(sender, batch_updates)
+                    return
+                logger.info("Batch extraction returned single/no updates, falling through to normal pipeline")
+        except Exception as e:
+            logger.warning(f"Batch detection failed, falling through: {e}")
+
+    # 3. Core bot engine — pass a WA-native reply function so documents work
     source_label = "voice" if voice_note else "text"
     logger.info(f"{source_label.capitalize()} from {sender} → core engine: {text[:80]}")
 
@@ -188,6 +203,180 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             send_text(sender, friendly_system_error(text))
         except Exception:
             pass  # Last resort — can't even send the error message
+
+
+def _handle_voice_batch(sender: str, updates: list):
+    """
+    Process multiple task updates from a single voice note.
+
+    For each update:
+      - Resolve project + task
+      - If ambiguous → collect for later disambiguation
+      - If completed → mark complete and queue image request
+      - Otherwise → save progress update
+
+    Sends a single combined summary at the end.
+    """
+    from db import (
+        get_projects, get_all_tasks, save_update, complete_task,
+        add_blocker as db_add_blocker, get_user_by_telegram_id
+    )
+    from core.utils import resolve_project, resolve_task_from_list
+    from core.conversation_state import set_state
+
+    projects = get_projects()
+    all_tasks = get_all_tasks()
+
+    # Resolve sender's DB user
+    emp_uuid = None
+    try:
+        from whatsapp.task_assignment import get_user_by_whatsapp
+        user = get_user_by_whatsapp(sender)
+        if user:
+            emp_uuid = user['id']
+    except Exception:
+        pass
+
+    if not emp_uuid:
+        try:
+            u_info = get_user_by_telegram_id(int(sender))
+            emp_uuid = u_info['id'] if u_info else None
+        except Exception:
+            pass
+
+    saved = []        # Successfully saved updates
+    completed = []    # Tasks marked complete
+    ambiguous = []    # Couldn't resolve — need user input
+    failed = []       # Couldn't find task at all
+
+    for upd in updates:
+        task_name = upd["task_name"]
+        project_name = upd.get("project_name")
+        progress = upd.get("progress")
+        is_complete = upd.get("completed", False)
+        blocker = upd.get("blocker")
+
+        # Resolve project to narrow task search
+        active_project_id = None
+        if project_name:
+            p_match = resolve_project(project_name, projects)
+            if p_match:
+                active_project_id = p_match['id']
+
+        # Resolve task
+        match = resolve_task_from_list(
+            task_name, all_tasks, active_project_id=active_project_id
+        )
+
+        # Ambiguous? 
+        if not match and resolve_task_from_list.ambiguous_matches:
+            amb_tasks = resolve_task_from_list.ambiguous_matches
+            ambiguous.append({
+                "query": task_name,
+                "options": amb_tasks,
+                "progress": progress,
+                "completed": is_complete,
+                "blocker": blocker,
+            })
+            continue
+
+        # Not found?
+        if not match:
+            failed.append(task_name)
+            continue
+
+        # Process the update
+        prog_val = progress if progress is not None else (match.get('progress', 0) or 0)
+        if is_complete:
+            prog_val = 100
+
+        blocker_text = blocker or "None"
+        save_update(match['id'], prog_val, blocker_text, [], emp_uuid)
+
+        if blocker and blocker.lower() not in ["none", "null", ""]:
+            db_add_blocker(match['id'], blocker)
+
+        if is_complete:
+            complete_task(match['id'])
+            p_name = ""
+            if isinstance(match.get('projects'), dict):
+                p_name = match['projects'].get('name', '')
+            completed.append({"name": match['name'], "project": p_name, "id": match['id']})
+        else:
+            saved.append({
+                "name": match['name'],
+                "progress": prog_val,
+                "blocker": blocker,
+            })
+
+    # Build summary message
+    msg_parts = []
+
+    if saved:
+        msg_parts.append("✅ *Updates saved:*")
+        for s in saved:
+            line = f"  • {s['name']} — {s['progress']}%"
+            if s.get('blocker'):
+                line += f" 🛑 {s['blocker']}"
+            msg_parts.append(line)
+
+    if completed:
+        msg_parts.append("\n🎉 *Marked complete:*")
+        for c in completed:
+            proj = f" ({c['project']})" if c.get('project') else ""
+            msg_parts.append(f"  • {c['name']}{proj}")
+
+    if failed:
+        msg_parts.append("\n⚠️ *Couldn't find:*")
+        for f_name in failed:
+            msg_parts.append(f"  • \"{f_name}\" — check the task name")
+
+    if not msg_parts:
+        send_text(sender, "Couldn't process any updates from your voice note. Please try again.")
+        return
+
+    summary = "\n".join(msg_parts)
+    send_text(sender, summary)
+
+    # Handle ambiguous tasks — ask for each one
+    if ambiguous:
+        # Queue the first ambiguous item for disambiguation
+        first = ambiguous[0]
+        amb_tasks = first["options"]
+        msg = f"\n\nMultiple tasks match *\"{first['query']}\"*. Which one?\n\n"
+        for i, t in enumerate(amb_tasks, 1):
+            p_name = t.get('projects', {}).get('name', '') if isinstance(t.get('projects'), dict) else ''
+            msg += f"{i}. {t['name']}" + (f" ({p_name})" if p_name else "") + "\n"
+        msg += "\nReply with the number."
+
+        set_state(sender, {
+            "action": "disambiguate_update",
+            "step": "waiting_for_choice",
+            "task_options": [t['id'] for t in amb_tasks],
+            "task_names": [t['name'] for t in amb_tasks],
+            "progress_str": str(first.get("progress")) if first.get("progress") is not None else None,
+            "deadline": None,
+            "images": [],
+            # Queue remaining ambiguous items
+            "pending_ambiguous": ambiguous[1:] if len(ambiguous) > 1 else [],
+        })
+        send_text(sender, msg)
+
+    # Ask for proof images if any tasks were completed
+    elif completed:
+        comp_names = ", ".join([c['name'] for c in completed])
+        set_state(sender, {
+            "action": "voice_batch_image_confirm",
+            "step": "waiting_for_choice",
+            "completed_task_ids": [c['id'] for c in completed],
+            "completed_task_names": [c['name'] for c in completed],
+        })
+        send_text(
+            sender,
+            f"\n📸 *{comp_names}* marked complete.\n"
+            f"Do you want to add proof images?\n\n"
+            f"1. Yes\n2. No"
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -241,8 +430,8 @@ def _handle_audio(sender: str, message: dict):
                 "voice notes will be back shortly."
             ),
             "empty_transcript": (
-                "🎙️ The voice note was too short or silent. "
-                "Please record again — at least 5 seconds."
+                "🎙️ Couldn't hear anything in your voice note. "
+                "Try recording again — speak clearly and close to the mic."
             ),
         }
 

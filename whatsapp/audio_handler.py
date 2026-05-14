@@ -90,7 +90,8 @@ def transcribe_audio(file_path: str) -> str:
     in Roman characters that match project/task names in the database,
     rather than Devanagari script.
 
-    Includes retry logic for Groq API rate limits.
+    If the first attempt returns an empty/very short result, retries once
+    with slightly higher temperature to capture quieter or unclear speech.
 
     Args:
         file_path: Path to the .ogg audio file
@@ -104,29 +105,46 @@ def transcribe_audio(file_path: str) -> str:
     from groq import Groq  # Lazy import — avoid loading at server startup
     client = Groq(api_key=GROQCLOUD_API_KEY)
 
-    for attempt in range(MAX_RETRIES):
+    whisper_prompt = (
+        "Construction project management conversation in Hinglish. "
+        "Romanize all Hindi words. Project and task names are in English. "
+        "Common words: task, update, blocker, waterproofing, slope, terrace, "
+        "create, complete, progress, deadline."
+    )
+
+    # Attempt 1: deterministic (temperature=0)
+    # Attempt 2: slightly creative (temperature=0.2) if first result was too short
+    # Attempt 3+: rate limit retries
+    temperatures = [0.0, 0.2]
+
+    for attempt in range(MAX_RETRIES + 1):  # +1 for the warm retry
+        temp = temperatures[attempt] if attempt < len(temperatures) else 0.0
         try:
             with open(file_path, "rb") as audio_file:
                 transcription = client.audio.transcriptions.create(
                     file=(os.path.basename(file_path), audio_file),
                     model=GROQ_WHISPER_MODEL,
-                    language="en",          # Roman script output for Hinglish
+                    language="en",
                     response_format="text",
-                    temperature=0.0,        # deterministic output
-                    prompt="Construction project management conversation in Hinglish. "
-                           "Romanize all Hindi words. Project and task names are in English."
+                    temperature=temp,
+                    prompt=whisper_prompt,
                 )
 
-            # response_format="text" returns a plain string directly
             result = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
-            logger.info(f"Transcription complete ({len(result)} chars): {result[:100]}...")
+
+            # If result is empty/too short on attempt 0, retry with higher temp
+            if attempt == 0 and (not result or len(result.split()) < 2):
+                logger.info(f"Short transcript on attempt 1 ('{result}'), retrying with temp={temperatures[1]}")
+                continue
+
+            logger.info(f"Transcription complete ({len(result)} chars, temp={temp}): {result[:100]}...")
             return result
 
         except Exception as e:
             error_str = str(e).lower()
             is_rate_limit = "rate" in error_str or "429" in error_str or "limit" in error_str
 
-            if is_rate_limit and attempt < MAX_RETRIES - 1:
+            if is_rate_limit and attempt < MAX_RETRIES:
                 logger.warning(f"Groq rate limit hit (attempt {attempt + 1}), retrying in {RETRY_DELAY_SECONDS}s...")
                 time.sleep(RETRY_DELAY_SECONDS)
                 continue
@@ -204,12 +222,13 @@ def handle_voice_note(media_id: str, sender_wa_number: str) -> dict:
             }
 
         # Step 3: Validate transcript
-        if not transcript or len(transcript.split()) < 5:
-            logger.warning(f"Transcript too short from {sender_wa_number}: '{transcript}'")
+        # Only reject truly empty transcripts — even 2-word commands are valid
+        if not transcript or len(transcript.strip()) < 2:
+            logger.warning(f"Transcript empty from {sender_wa_number}: '{transcript}'")
             return {
                 "transcript": transcript,
                 "success": False,
-                "error": "Transcript too short or empty",
+                "error": "Transcript empty or silent",
                 "error_type": "empty_transcript",
             }
 
