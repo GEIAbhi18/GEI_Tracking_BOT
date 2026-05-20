@@ -16,6 +16,8 @@ import os
 import sys
 import logging
 import asyncio
+import requests
+import threading
 
 # Ensure project root is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -32,6 +34,64 @@ from whatsapp.task_assignment import (
 
 app = Flask(__name__)
 
+# ── Register Feedback API Blueprint ──────────────────────────────────────────
+from feedback.routes import feedback_bp
+app.register_blueprint(feedback_bp)
+
+# ── Restore feedback sessions from sheet on startup ─────────────────────────
+try:
+    from feedback.session_store import restore_sessions_from_sheet
+    restore_sessions_from_sheet()
+except Exception as _fb_init_err:
+    logging.warning(f"Feedback session restore skipped: {_fb_init_err}")
+
+# ── Background Scheduler (shared for all cron jobs) ─────────────────────────
+from apscheduler.schedulers.background import BackgroundScheduler
+_bg_scheduler = BackgroundScheduler()
+
+# ── Feedback reminder cron ───────────────────────────────────────────────────
+try:
+    from feedback.reminders import check_and_send_reminders
+    from feedback.config import REMINDER_CRON_INTERVAL
+    _bg_scheduler.add_job(
+        check_and_send_reminders,
+        'interval',
+        seconds=REMINDER_CRON_INTERVAL,
+        id='feedback_reminders',
+        replace_existing=True,
+    )
+    logging.info(f"Feedback reminder cron registered (every {REMINDER_CRON_INTERVAL}s)")
+except Exception as _cron_err:
+    logging.warning(f"Feedback reminder cron failed to register: {_cron_err}")
+
+# ── Keep-Alive Self-Ping (prevents Render free-tier sleep) ───────────────────
+_RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://gei-whatsapp-tracking-bot.onrender.com")
+_KEEP_ALIVE_INTERVAL = int(os.getenv("KEEP_ALIVE_INTERVAL", "600"))  # 10 min default
+
+
+def _keep_alive_ping():
+    """Self-ping /health to keep Render from spinning down."""
+    try:
+        url = f"{_RENDER_URL}/health"
+        resp = requests.get(url, timeout=15)
+        logging.info(f"Keep-alive ping → {resp.status_code}")
+    except Exception as e:
+        logging.warning(f"Keep-alive ping failed: {e}")
+
+
+_bg_scheduler.add_job(
+    _keep_alive_ping,
+    'interval',
+    seconds=_KEEP_ALIVE_INTERVAL,
+    id='keep_alive_ping',
+    replace_existing=True,
+)
+logging.info(f"Keep-alive self-ping registered (every {_KEEP_ALIVE_INTERVAL}s → {_RENDER_URL}/health)")
+
+# ── Start the scheduler ─────────────────────────────────────────────────────
+_bg_scheduler.start()
+logging.info("Background scheduler started")
+
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -43,6 +103,16 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "")
 # ─────────────────────────────────────────────────────────────────────────────
 # WEBHOOK VERIFICATION (GET)
 # ─────────────────────────────────────────────────────────────────────────────
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    """Health check endpoint — used by keep-alive ping and Render health checks."""
+    return jsonify({
+        "status": "ok",
+        "service": "gei-whatsapp-bot",
+        "uptime": "alive",
+    }), 200
+
 
 @app.route('/webhook', methods=['GET'])
 def verify_webhook():
@@ -97,6 +167,9 @@ def handle_whatsapp_message():
                     elif msg_type == "text":
                         text = message.get("text", {}).get("body", "").strip()
                         if text:
+                            # ── Feedback-first routing ────────────────────
+                            if _try_feedback_route(sender, text):
+                                continue
                             _handle_text(sender, text)
 
                     else:
@@ -107,6 +180,27 @@ def handle_whatsapp_message():
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
         return jsonify({"status": "error"}), 200
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# FEEDBACK ROUTING (intercepts before main bot engine)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _try_feedback_route(sender: str, text: str) -> bool:
+    """
+    Check if this sender has an active feedback session.
+    If yes, route the message to the feedback engine and return True.
+    If no, return False (fall through to main bot engine).
+    """
+    try:
+        from feedback.engine import handle_feedback_reply
+        return handle_feedback_reply(sender, text)
+    except ImportError:
+        logger.warning("Feedback module not available — skipping feedback route")
+        return False
+    except Exception as e:
+        logger.error(f"Feedback routing error for {sender}: {e}", exc_info=True)
+        return False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
