@@ -92,7 +92,7 @@ def _send_reminder(phone: str, session: dict, reminder_num: int):
         from feedback.sheets import update_master_feedback
         update_master_feedback(complaint_id, {
             "Reminder Count": reminder_num,
-            "Last Reminder At": now,
+            "Last Reminder Sent At": now,
         })
     except Exception as e:
         logger.error(f"Failed to update reminder in sheet: {e}")
@@ -109,7 +109,7 @@ def _mark_no_response(phone: str, session: dict):
         update_master_feedback(complaint_id, {
             "Feedback Status": "No Response",
             "Reminder Count": session.get("reminderCount", 2),
-            "Last Reminder At": session.get("lastReminderAt", ""),
+            "Last Reminder Sent At": session.get("lastReminderAt", ""),
         })
     except Exception as e:
         logger.error(f"Failed to mark No Response in sheet: {e}")

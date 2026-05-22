@@ -66,11 +66,16 @@ def _get_spreadsheet():
     return _get_client().open_by_key(FEEDBACK_SHEET_ID)
 
 
-def _get_worksheet(sheet_name: str):
-    """Get a specific worksheet by name."""
+def _get_worksheet(sheet_name: str, auto_create: bool = False):
+    """Get a specific worksheet by name. Optionally auto-create if missing."""
     try:
         return _get_spreadsheet().worksheet(sheet_name)
     except gspread.exceptions.WorksheetNotFound:
+        if auto_create:
+            logger.info(f"Worksheet '{sheet_name}' not found — creating it")
+            ss = _get_spreadsheet()
+            ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=26)
+            return ws
         logger.error(f"Worksheet '{sheet_name}' not found in spreadsheet")
         raise
 
@@ -224,15 +229,15 @@ def append_escalation(escalation_data: dict) -> bool:
         Tenant Comment, Escalation Reason, Escalation Status, Action Taken
     """
     try:
-        ws = _get_worksheet(ESCALATIONS_SHEET_NAME)
+        ws = _get_worksheet(ESCALATIONS_SHEET_NAME, auto_create=True)
         headers = ws.row_values(1)
         
         if not headers:
             # Create headers if sheet is empty
             headers = [
-                "Timestamp", "Complaint ID", "Building", "Client Name",
+                "Timestamp", "Complaint ID", "Building", "Client Name / User",
                 "Unit No", "Complaint Nature", "Complaint Details",
-                "Overall Score", "Sentiment", "Tenant Comment",
+                "Overall Score", "Sentiment", "Customer Remarks",
                 "Escalation Reason", "Escalation Status", "Action Taken"
             ]
             ws.append_row(headers)
@@ -267,7 +272,7 @@ def save_session_to_sheet(session: dict) -> bool:
     Used as backup for in-memory session store.
     """
     try:
-        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME)
+        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
         headers = ws.row_values(1)
         
         if not headers:
@@ -331,7 +336,7 @@ def save_session_to_sheet(session: dict) -> bool:
 def remove_session_from_sheet(complaint_id: str) -> bool:
     """Remove a completed session from the Pending Feedback sheet."""
     try:
-        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME)
+        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
         headers = ws.row_values(1)
         complaint_col = _get_col_index(headers, "Complaint ID")
         
@@ -358,7 +363,7 @@ def load_pending_sessions() -> list:
     Used on startup to restore in-memory state.
     """
     try:
-        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME)
+        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
         records = ws.get_all_records()
         
         sessions = []
