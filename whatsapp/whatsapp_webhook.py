@@ -305,7 +305,7 @@ def handle_whatsapp_message():
 
                     # ── Dispatch to background thread to prevent Meta webhook timeout ─
                     if msg_type == "interactive":
-                        threading.Thread(target=_handle_interactive, args=(sender, message), daemon=True).start()
+                        threading.Thread(target=_handle_interactive, args=(sender, message), daemon=False).start()
 
                     # ── Voice note (audio) ─────────────────────────────────────
                     elif msg_type == "audio":

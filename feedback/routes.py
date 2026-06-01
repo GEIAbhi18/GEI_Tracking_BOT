@@ -84,7 +84,7 @@ def api_initiate_feedback():
         except Exception as e:
             logger.error(f"Error in background feedback initiation: {e}")
             
-    threading.Thread(target=_run_bg, args=(data,), daemon=True).start()
+    threading.Thread(target=_run_bg, args=(data,), daemon=False).start()
     
     # Return immediately so the Apps Script doesn't time out
     return jsonify({"status": "queued", "message": "Feedback initiation queued for background processing."}), 200
