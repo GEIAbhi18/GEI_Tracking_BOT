@@ -451,12 +451,11 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
     # Check for clear/reset command (works from both text and voice)
     if text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
         try:
-            from feedback.session_store import remove_session
+            from feedback.session_store import force_clear_session
             from core.conversation_state import clear_state
             from core.context_manager import clear_context
-            from whatsapp.task_assignment import send_text
             
-            remove_session(sender)
+            force_clear_session(sender)
             clear_state(sender)
             clear_context(sender)
             send_text(sender, "Chat history and active feedback sessions have been cleared! 🧹")

@@ -94,13 +94,11 @@ def send_flow_template(
                     "type": "body",
                     "parameters": [
                         {"type": "text", "text": client_name},
-                        {"type": "text", "text": complaint_id},
-                        {"type": "text", "text": complaint_nature},
-                        {"type": "text", "text": str(unit_no)},
                     ],
                 },
                 {
                     "type": "button",
+
                     "sub_type": "flow",
                     "index": "0",
                     "parameters": [
