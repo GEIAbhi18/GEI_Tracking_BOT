@@ -7,6 +7,7 @@ Called periodically by APScheduler (every 15 minutes).
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 
 from feedback.config import (
@@ -89,12 +90,15 @@ def check_and_send_reminders():
         if reminder_count >= MAX_REMINDERS:
             # Already sent max reminders — mark as No Response
             _mark_no_response(phone, session)
+            time.sleep(3)  # Space out Sheets API writes between sessions
             continue
 
         # Check if reminder is due (every REMINDER_INTERVAL_HOURS after sent)
         next_reminder_due_at = reminder_interval_seconds * (reminder_count + 1)
         if elapsed >= next_reminder_due_at:
             _send_reminder(phone, session, reminder_count + 1)
+            time.sleep(3)  # Space out Sheets API writes between sessions
+
 
 
 def _send_reminder(phone: str, session: dict, reminder_num: int):

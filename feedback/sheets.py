@@ -31,29 +31,39 @@ logger = logging.getLogger(__name__)
 
 # ── Google Sheets Auth ───────────────────────────────────────────────────────
 import time
+import threading
 # pyrefly: ignore [missing-import]
 import gspread.exceptions
 
 _gc = None  # Cached gspread client
 _ss = None  # Cached Spreadsheet
 _worksheets = {}  # Cached Worksheets
+_sheets_lock = threading.Lock()  # Serialise all Sheets API calls to avoid concurrent 429s
 
 
 def _retry_on_429(func, *args, **kwargs):
-    """Execute a function and retry on Google Sheets API 429 quota limit error with backoff."""
+    """Execute func with serialisation + exponential-backoff retry on HTTP 429."""
     max_retries = 5
-    backoff = 1.0  # start with 1 second
-    for attempt in range(max_retries):
-        try:
-            return func(*args, **kwargs)
-        except gspread.exceptions.APIError as e:
-            if getattr(e, "response", None) is not None and e.response.status_code == 429:
-                logger.warning(f"Google Sheets API 429 rate limit exceeded. Retrying in {backoff}s... (Attempt {attempt+1}/{max_retries})")
-                time.sleep(backoff)
-                backoff *= 2.0  # exponential backoff
-            else:
-                raise
-    return func(*args, **kwargs)
+    backoff = 2.0  # start with 2 seconds
+    with _sheets_lock:  # Only one Sheets call at a time across all threads
+        for attempt in range(max_retries):
+            try:
+                return func(*args, **kwargs)
+            except gspread.exceptions.APIError as e:
+                status = None
+                if getattr(e, "response", None) is not None:
+                    status = e.response.status_code
+                if status == 429:
+                    logger.warning(
+                        f"Google Sheets API 429 rate limit exceeded. "
+                        f"Retrying in {backoff}s... (Attempt {attempt+1}/{max_retries})"
+                    )
+                    time.sleep(backoff)
+                    backoff *= 2.0  # exponential backoff
+                else:
+                    raise
+        # Final attempt after max retries
+        return func(*args, **kwargs)
 
 
 def _get_client() -> gspread.Client:

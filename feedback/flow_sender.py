@@ -32,6 +32,14 @@ def _post_wa(payload: dict) -> bool:
     }
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=15)
+        if r.status_code == 400:
+            # Log the full error body — most likely cause: Flow is in DRAFT (not published)
+            logger.error(
+                f"WA Flow API 400 Bad Request. "
+                f"If your WhatsApp Flow is in DRAFT mode, publish it first. "
+                f"Full response: {r.text[:500]}"
+            )
+            return False
         logger.info(f"WA Flow API {r.status_code}: {r.text[:300]}")
         r.raise_for_status()
         return True
