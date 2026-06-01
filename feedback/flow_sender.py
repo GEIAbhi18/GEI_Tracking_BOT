@@ -82,6 +82,9 @@ def send_flow_template(
         logger.error("WHATSAPP_FLOW_TEMPLATE_NAME not configured")
         return False
 
+    # Bundle the context into the single {{1}} variable allowed by the Meta template
+    bundled_text = f"{client_name} (Complaint: {complaint_id} — {complaint_nature})"
+
     payload = {
         "messaging_product": "whatsapp",
         "to": phone,
@@ -93,7 +96,7 @@ def send_flow_template(
                 {
                     "type": "body",
                     "parameters": [
-                        {"type": "text", "text": client_name},
+                        {"type": "text", "text": bundled_text},
                     ],
                 },
                 {
