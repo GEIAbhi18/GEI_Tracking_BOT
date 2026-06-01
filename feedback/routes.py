@@ -74,10 +74,20 @@ def api_initiate_feedback():
             "message": f"Missing required fields: {', '.join(missing)}"
         }), 400
     
-    result = initiate_feedback(data)
+    import threading
     
-    status_code = 200 if result["status"] in ("ok", "queued") else 500
-    return jsonify(result), status_code
+    # Run the Google Sheets logic in the background to prevent Gunicorn timeouts
+    # due to rate limits holding up the request for over 120 seconds.
+    def _run_bg(payload):
+        try:
+            initiate_feedback(payload)
+        except Exception as e:
+            logger.error(f"Error in background feedback initiation: {e}")
+            
+    threading.Thread(target=_run_bg, args=(data,), daemon=True).start()
+    
+    # Return immediately so the Apps Script doesn't time out
+    return jsonify({"status": "queued", "message": "Feedback initiation queued for background processing."}), 200
 
 
 @feedback_bp.route("/status", methods=["GET"])
