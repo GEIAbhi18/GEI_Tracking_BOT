@@ -122,6 +122,7 @@ def handle_flow_response(phone: str, response_data: dict) -> bool:
 
     if not session:
         logger.warning(f"Flow response received from {phone} but no active session found — ignoring")
+        _send_wa(phone, "This feedback session has expired or was already cleared. Thank you!")
         return False
 
     complaint_id = session.get("complaintId", "")
@@ -181,20 +182,10 @@ def handle_feedback_reply(phone: str, text: str) -> bool:
         _handle_cancel(phone, session)
         return True
 
-    # Active Flow session — send the Flow template again instead of a text reminder
+    # Active Flow session — let the user talk to the normal bot!
+    # They can click the Flow button whenever they want.
     if stage == STAGE_FLOW_SENT:
-        try:
-            from feedback.flow_sender import send_flow_template
-            send_flow_template(
-                phone=phone,
-                client_name=session.get("clientName", ""),
-                complaint_id=session.get("complaintId", ""),
-                complaint_nature=session.get("complaintNature", ""),
-                unit_no=session.get("unitNo", ""),
-            )
-        except Exception as e:
-            logger.error(f"Error resending Flow template during active reply for {session.get('complaintId')}: {e}")
-        return True
+        return False
 
     return True
 
