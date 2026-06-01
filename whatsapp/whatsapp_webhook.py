@@ -38,12 +38,20 @@ app = Flask(__name__)
 from feedback.routes import feedback_bp
 app.register_blueprint(feedback_bp)
 
-# ── Restore feedback sessions from sheet on startup ─────────────────────────
-try:
-    from feedback.session_store import restore_sessions_from_sheet
-    restore_sessions_from_sheet()
-except Exception as _fb_init_err:
-    logging.warning(f"Feedback session restore skipped: {_fb_init_err}")
+# ── Restore feedback sessions from sheet (background — does NOT block startup) ─
+def _restore_sessions_bg():
+    """Runs 10s after startup so Flask binds port first, then restores sessions."""
+    import time as _time
+    _time.sleep(10)
+    try:
+        from feedback.session_store import restore_sessions_from_sheet
+        restore_sessions_from_sheet()
+        logging.info("Feedback sessions restored from sheet.")
+    except Exception as _fb_init_err:
+        logging.warning(f"Feedback session restore skipped: {_fb_init_err}")
+
+threading.Thread(target=_restore_sessions_bg, daemon=True, name="session-restore").start()
+
 
 # ── Background Scheduler (shared for all cron jobs) ─────────────────────────
 import pytz
