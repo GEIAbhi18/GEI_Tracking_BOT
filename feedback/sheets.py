@@ -5,7 +5,7 @@ All read/write operations to Google Sheets:
   - MASTER sheet (update feedback columns)
   - Building sheets (GEBB1/GEBB2/GETT)
   - ESCALATIONS sheet (append rows)
-  - Pending Feedback sheet (session backup)
+  - Pending Feedback sheet (session backup — source of truth for reminders)
 
 Uses gspread with service account credentials from environment variables.
 """
@@ -117,7 +117,7 @@ def find_complaint_row(complaint_id: str, sheet_name: str = None) -> tuple:
         return None, None, None
 
 
-def _get_col_index(headers: list, col_name: str) -> int | None:
+def _get_col_index(headers, col_name):
     """Get 1-indexed column number from header name (case-insensitive, partial match)."""
     col_name_lower = col_name.strip().lower()
     for i, h in enumerate(headers, 1):
@@ -136,15 +136,13 @@ def update_master_feedback(complaint_id: str, feedback_data: dict) -> bool:
     
     feedback_data keys (column names):
       - Feedback Status
-      - Feedback Received At
-      - Overall Feedback Score
+      - Feedback Sent At / Feedback Received At
       - Score Q1 / Score Q2 / Score Q3
+      - Overall Feedback Score
       - Sentiment
-      - Tenant Comment
-      - Escalation Status
-      - Escalation Reason
-      - Reminder Count
-      - Last Reminder At
+      - Customer Remarks
+      - Escalation Status / Escalation Reason
+      - Reminder Count / Last Reminder Sent At
     """
     try:
         ws, row, headers = find_complaint_row(complaint_id)
@@ -209,7 +207,7 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
 def mark_feedback_sent(complaint_id: str, timestamp: str) -> bool:
     """
     Mark Feedback Status = 'Sent' and record Feedback Sent At in the MASTER sheet.
-    Called when Message A is sent to client.
+    Called when Flow template is sent to client.
     """
     return update_master_feedback(complaint_id, {
         "Feedback Status": "Sent",
@@ -224,9 +222,9 @@ def append_escalation(escalation_data: dict) -> bool:
     Append a new row to the ESCALATIONS sheet.
     
     escalation_data keys:
-      - Timestamp, Complaint ID, Building, Client Name, Unit No,
+      - Timestamp, Complaint ID, Building, Client Name / User, Unit No,
         Complaint Nature, Complaint Details, Overall Score, Sentiment,
-        Tenant Comment, Escalation Reason, Escalation Status, Action Taken
+        Customer Remarks, Escalation Reason, Escalation Status, Action Taken
     """
     try:
         ws = _get_worksheet(ESCALATIONS_SHEET_NAME, auto_create=True)
@@ -266,6 +264,14 @@ def append_escalation(escalation_data: dict) -> bool:
 
 # ── Pending Feedback Sheet Operations ────────────────────────────────────────
 
+# Column headers for the Pending Feedback sheet
+PENDING_HEADERS = [
+    "Phone", "Complaint ID", "Building", "Client Name", "Unit No",
+    "Complaint Nature", "Row Index", "Sent At", "Reminder Count",
+    "Last Reminder At", "Status",
+]
+
+
 def save_session_to_sheet(session: dict) -> bool:
     """
     Save/update a feedback session to the Pending Feedback sheet.
@@ -276,56 +282,47 @@ def save_session_to_sheet(session: dict) -> bool:
         headers = ws.row_values(1)
         
         if not headers:
-            headers = [
-                "Complaint ID", "Building", "Client Phone", "Client Name",
-                "Unit No", "Complaint Nature", "Closed At", "Session Started",
-                "Stage", "Score Q1", "Score Q2", "Score Q3", "Tenant Comment",
-                "Feedback Sent At", "Reminder Count", "Last Reminder At",
-                "Invalid Attempts", "Updated At"
-            ]
+            headers = PENDING_HEADERS
             ws.append_row(headers)
         
-        # Check if row exists
-        complaint_col = _get_col_index(headers, "Complaint ID")
-        if complaint_col:
-            col_values = ws.col_values(complaint_col)
-            existing_row = None
+        phone = session.get("clientPhone", "")
+        complaint_id = session.get("complaintId", "")
+        
+        # Check if row exists (by phone number)
+        phone_col = _get_col_index(headers, "Phone")
+        existing_row = None
+        if phone_col:
+            col_values = ws.col_values(phone_col)
             for row_idx, val in enumerate(col_values, 1):
-                if val.strip() == session.get("complaintId", "").strip():
+                if val.strip() == phone.strip():
                     existing_row = row_idx
                     break
         
         row_data = [
-            session.get("complaintId", ""),
+            phone,
+            complaint_id,
             session.get("building", ""),
-            session.get("clientPhone", ""),
             session.get("clientName", ""),
-            session.get("unitNo", ""),
+            str(session.get("unitNo", "")),
             session.get("complaintNature", ""),
-            session.get("closedAt", ""),
-            str(session.get("sessionStarted", False)),
-            session.get("stage", ""),
-            str(session.get("score_q1", "")) if session.get("score_q1") is not None else "",
-            str(session.get("score_q2", "")) if session.get("score_q2") is not None else "",
-            str(session.get("score_q3", "")) if session.get("score_q3") is not None else "",
-            session.get("tenant_comment", ""),
+            str(session.get("rowIndex", "")),
             session.get("feedbackSentAt", ""),
             str(session.get("reminderCount", 0)),
-            session.get("lastReminderAt", ""),
-            str(session.get("invalidAttempts", 0)),
-            datetime.now().isoformat(),
+            session.get("lastReminderAt", "") or "",
+            session.get("status", "sent"),
         ]
         
         if existing_row:
             # Update existing row
             cell_list = []
             for col_idx, value in enumerate(row_data, 1):
-                cell_list.append(gspread.Cell(existing_row, col_idx, value))
+                if col_idx <= len(headers):
+                    cell_list.append(gspread.Cell(existing_row, col_idx, value))
             ws.update_cells(cell_list)
         else:
             ws.append_row(row_data, value_input_option="USER_ENTERED")
         
-        logger.info(f"Session saved to sheet for complaint {session.get('complaintId')}")
+        logger.info(f"Session saved to Pending Feedback sheet for {complaint_id}")
         return True
         
     except Exception as e:
@@ -347,7 +344,7 @@ def remove_session_from_sheet(complaint_id: str) -> bool:
         for row_idx, val in enumerate(col_values, 1):
             if val.strip() == complaint_id.strip():
                 ws.delete_rows(row_idx)
-                logger.info(f"Removed session from sheet: {complaint_id}")
+                logger.info(f"Removed session from Pending Feedback sheet: {complaint_id}")
                 return True
         
         return False
@@ -357,10 +354,54 @@ def remove_session_from_sheet(complaint_id: str) -> bool:
         return False
 
 
+def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str) -> bool:
+    """Update reminder count and last reminder timestamp in Pending Feedback sheet."""
+    try:
+        ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
+        headers = ws.row_values(1)
+        
+        phone_col = _get_col_index(headers, "Phone")
+        if not phone_col:
+            return False
+        
+        col_values = ws.col_values(phone_col)
+        target_row = None
+        for row_idx, val in enumerate(col_values, 1):
+            if val.strip() == phone.strip():
+                target_row = row_idx
+                break
+        
+        if not target_row:
+            logger.warning(f"Phone {phone} not found in Pending Feedback sheet for reminder update")
+            return False
+        
+        # Update Reminder Count and Last Reminder At columns
+        cells_to_update = []
+        
+        reminder_col = _get_col_index(headers, "Reminder Count")
+        if reminder_col:
+            cells_to_update.append(gspread.Cell(target_row, reminder_col, str(count)))
+        
+        last_reminder_col = _get_col_index(headers, "Last Reminder At")
+        if last_reminder_col:
+            cells_to_update.append(gspread.Cell(target_row, last_reminder_col, last_reminder_at))
+        
+        if cells_to_update:
+            ws.update_cells(cells_to_update)
+            logger.info(f"Updated reminder count for {phone}: count={count}")
+        
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error updating reminder count for {phone}: {e}", exc_info=True)
+        return False
+
+
 def load_pending_sessions() -> list:
     """
     Load all pending sessions from the Pending Feedback sheet.
-    Used on startup to restore in-memory state.
+    Used on startup to restore in-memory state, and by reminder cron
+    as the single source of truth.
     """
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
@@ -368,27 +409,28 @@ def load_pending_sessions() -> list:
         
         sessions = []
         for rec in records:
+            phone = str(rec.get("Phone", "") or rec.get("Client Phone", "")).strip()
+            complaint_id = str(rec.get("Complaint ID", "")).strip()
+            status = str(rec.get("Status", "sent")).strip().lower()
+            
+            if not complaint_id or status == "done":
+                continue
+            
             session = {
-                "complaintId": str(rec.get("Complaint ID", "")),
+                "complaintId": complaint_id,
                 "building": str(rec.get("Building", "")),
-                "clientPhone": str(rec.get("Client Phone", "")),
+                "clientPhone": phone,
                 "clientName": str(rec.get("Client Name", "")),
                 "unitNo": str(rec.get("Unit No", "")),
                 "complaintNature": str(rec.get("Complaint Nature", "")),
-                "closedAt": str(rec.get("Closed At", "")),
-                "sessionStarted": str(rec.get("Session Started", "")).lower() == "true",
-                "stage": str(rec.get("Stage", "awaiting_start")),
-                "score_q1": int(rec["Score Q1"]) if rec.get("Score Q1") and str(rec["Score Q1"]).isdigit() else None,
-                "score_q2": int(rec["Score Q2"]) if rec.get("Score Q2") and str(rec["Score Q2"]).isdigit() else None,
-                "score_q3": int(rec["Score Q3"]) if rec.get("Score Q3") and str(rec["Score Q3"]).isdigit() else None,
-                "tenant_comment": str(rec.get("Tenant Comment", "")) or None,
-                "feedbackSentAt": str(rec.get("Feedback Sent At", "")),
+                "rowIndex": str(rec.get("Row Index", "")),
+                "stage": "flow_sent",  # All pending sessions are in flow_sent stage
+                "feedbackSentAt": str(rec.get("Sent At", "") or rec.get("Feedback Sent At", "")),
                 "reminderCount": int(rec["Reminder Count"]) if rec.get("Reminder Count") and str(rec["Reminder Count"]).isdigit() else 0,
-                "lastReminderAt": str(rec.get("Last Reminder At", "")),
-                "invalidAttempts": int(rec["Invalid Attempts"]) if rec.get("Invalid Attempts") and str(rec["Invalid Attempts"]).isdigit() else 0,
+                "lastReminderAt": str(rec.get("Last Reminder At", "")) or None,
+                "status": status or "sent",
             }
-            if session["complaintId"] and session["stage"] != "done":
-                sessions.append(session)
+            sessions.append(session)
         
         logger.info(f"Loaded {len(sessions)} pending sessions from sheet")
         return sessions

@@ -11,6 +11,11 @@
  * 3. Set BOT_URL and API_KEY below
  * 4. Run setupTrigger() once to create the 5-minute cron
  * 5. Authorize the script when prompted
+ *
+ * ⚠️ IMPORTANT: Do NOT call any function as a bare statement at file scope.
+ *    Only use the "Run" button in Apps Script editor to execute functions.
+ *    Bare calls like `testFeedbackTrigger()` at file scope will cause
+ *    double-execution and 400 errors.
  */
 
 // ── CONFIGURATION ────────────────────────────────────────────────────────────
@@ -19,16 +24,25 @@ const API_KEY = "84kRVwKiBZrjJL2loRWXlhh_u6AJp_b6Wq_OKsbm250";  // Must match FE
 const MASTER_SHEET_NAME = "MASTER";
 
 // ── Column name mappings (adjust if your headers differ) ─────────────────────
-const COL_COMPLAINT_ID    = "Complaint ID";
-const COL_STATUS          = "Status";
-const COL_FEEDBACK_STATUS = "Feedback Status";
-const COL_FEEDBACK_SENT   = "Feedback Sent At";
-const COL_CLIENT_PHONE    = "Client Phone";
-const COL_CLIENT_NAME     = "Client Name / User";
-const COL_UNIT_NO         = "Unit No";
+const COL_COMPLAINT_ID     = "Complaint ID";
+const COL_STATUS           = "Status";
+const COL_FEEDBACK_STATUS  = "Feedback Status";
+const COL_FEEDBACK_SENT    = "Feedback Sent At";
+const COL_CLIENT_PHONE     = "Client Phone";
+const COL_CLIENT_NAME      = "Client Name / User";
+const COL_UNIT_NO          = "Unit No";
 const COL_COMPLAINT_NATURE = "Complaint Nature";
-const COL_CLOSED_AT       = "Closed At";
-const COL_BUILDING        = "Building";
+const COL_COMPLAINT_DETAILS = "Complaint Details";
+const COL_CLOSED_AT        = "Closed At";
+const COL_BUILDING         = "Building";
+
+
+/**
+ * Helper: Get current IST timestamp formatted as yyyy-MM-dd HH:mm:ss
+ */
+function getNowDateTime() {
+  return Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
+}
 
 
 /**
@@ -86,8 +100,12 @@ function checkAndInitiateFeedback() {
       clientName: clientName,
       unitNo: String(data[row][colIdx[COL_UNIT_NO]] || "").trim(),
       complaintNature: String(data[row][colIdx[COL_COMPLAINT_NATURE]] || "").trim(),
+      complaintDetails: colIdx[COL_COMPLAINT_DETAILS] !== undefined
+        ? String(data[row][colIdx[COL_COMPLAINT_DETAILS]] || "").trim()
+        : "",
       closedAt: String(data[row][colIdx[COL_CLOSED_AT]] || "").trim(),
       building: String(data[row][colIdx[COL_BUILDING]] || "").trim(),
+      rowIndex: row + 1,
     };
     
     // Call bot API
@@ -104,8 +122,7 @@ function checkAndInitiateFeedback() {
       sheet.getRange(sheetRow, fbStatusCol).setValue("Sent");
       
       if (fbSentCol) {
-        const now = Utilities.formatDate(new Date(), "Asia/Kolkata", "yyyy-MM-dd HH:mm:ss");
-        sheet.getRange(sheetRow, fbSentCol).setValue(now);
+        sheet.getRange(sheetRow, fbSentCol).setValue(getNowDateTime());
       }
       
       initiated++;
@@ -183,18 +200,53 @@ function setupTrigger() {
 /**
  * Manual test: Trigger feedback for a specific complaint.
  * Edit the payload below and run from Apps Script editor.
+ * 
+ * ⚠️ DO NOT call this function at file scope (outside any function).
+ *    Only use the "Run" button in Apps Script editor.
  */
 function testFeedbackTrigger() {
   const testPayload = {
-    complaintId: "B1-00032",
-    clientPhone: "7982990892",
-    clientName: "Sumit Singh Rawat",
-    unitNo: "301",
+    complaintId: "B1-00039",
+    clientPhone: "+917717754421",
+    clientName: "GEI Test",
+    unitNo: "01",
     complaintNature: "BMS",
+    complaintDetails: "Test complaint",
     closedAt: "2026-05-18 09:40",
     building: "GEBB1",
+    rowIndex: 5,
   };
   
   const success = callFeedbackAPI(testPayload);
   Logger.log(success ? "✅ Test successful" : "❌ Test failed");
+}
+
+
+/**
+ * Admin: Clear a stale session for a phone number.
+ * Use this if a test session is blocking new feedback.
+ * 
+ * Usage: Edit the phone number below and run from Apps Script editor.
+ */
+function clearStaleSession() {
+  const phone = "917717754421";  // ← Edit this phone number
+  
+  const url = `${BOT_URL}/api/feedback/session?phone=${phone}`;
+  
+  const options = {
+    method: "delete",
+    headers: {
+      "X-API-Key": API_KEY,
+    },
+    muteHttpExceptions: true,
+  };
+  
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const code = response.getResponseCode();
+    const body = response.getContentText();
+    Logger.log(`Clear session [${code}]: ${body}`);
+  } catch (e) {
+    Logger.log(`Error clearing session: ${e.message}`);
+  }
 }

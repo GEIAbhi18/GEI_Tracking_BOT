@@ -56,7 +56,7 @@ def send_text(to: str, body: str) -> bool:
     return _post_wa(payload)
 
 
-def send_interactive_buttons(to: str, body: str, buttons: list[dict]) -> bool:
+def send_interactive_buttons(to: str, body: str, buttons: list) -> bool:
     """
     Send an interactive button message.
     buttons: [{"id": "BUTTON_ID", "title": "Button Label"}, ...]
@@ -170,7 +170,7 @@ def update_task_assignment(task_id: str, **fields) -> bool:
 
 # ── Persistent WhatsApp state (survives Render restarts) ─────────────────────
 
-def get_wa_state(phone: str) -> dict | None:
+def get_wa_state(phone: str):
     """Get pending WA conversation state for a phone number."""
     try:
         r = _get_supabase().table("wa_task_states").select("*").eq("whatsapp_number", phone).execute()
@@ -308,7 +308,7 @@ def handle_text_reply(sender_phone: str, text: str) -> bool:
 # INTERNAL FLOW HANDLERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_kanav_number(task: dict) -> str | None:
+def _get_kanav_number(task: dict):
     """Extract Kanav's WhatsApp number from a task's assigned_by_user field."""
     try:
         creator = task.get("assigned_by_user") or {}

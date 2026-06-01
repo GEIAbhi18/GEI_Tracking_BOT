@@ -35,30 +35,43 @@ FEEDBACK_API_KEY = os.getenv("FEEDBACK_API_KEY", "")
 META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 
-# ── Reminder Timing (in seconds) ─────────────────────────────────────────────
-REMINDER_1_DELAY_SECONDS = int(os.getenv("FEEDBACK_REMINDER_1_DELAY", str(6 * 3600)))   # 6 hours
-REMINDER_2_DELAY_SECONDS = int(os.getenv("FEEDBACK_REMINDER_2_DELAY", str(12 * 3600)))  # 12 hours
+# ── WhatsApp Flow Config (NEW) ──────────────────────────────────────────────
+WHATSAPP_FLOW_ID = os.getenv("WHATSAPP_FLOW_ID", "")
+WHATSAPP_FLOW_TEMPLATE_NAME = os.getenv("WHATSAPP_FLOW_TEMPLATE_NAME", "gei_feedback_request")
+
+# ── Reminder Timing ─────────────────────────────────────────────────────────
+REMINDER_INTERVAL_HOURS = int(os.getenv("REMINDER_INTERVAL_HOURS", "6"))
+MAX_REMINDERS = int(os.getenv("MAX_REMINDERS", "2"))
+
+# Legacy env vars (still supported for backward compat)
+REMINDER_1_DELAY_SECONDS = int(os.getenv("FEEDBACK_REMINDER_1_DELAY", str(REMINDER_INTERVAL_HOURS * 3600)))
+REMINDER_2_DELAY_SECONDS = int(os.getenv("FEEDBACK_REMINDER_2_DELAY", str(REMINDER_INTERVAL_HOURS * 2 * 3600)))
 
 # ── Escalation Keywords ─────────────────────────────────────────────────────
 NEGATIVE_KEYWORDS = [
     "delay", "poor", "unresolved", "rude", "dissatisfied", "bad", "slow",
     "late", "not resolved", "issue persists", "worst", "terrible", "never",
-    "pathetic", "ignored", "useless"
+    "pathetic", "ignored", "useless", "horrible", "no response",
+    "not fixed", "still broken", "disgusting",
 ]
 
 # ── Feedback Flow Stages ─────────────────────────────────────────────────────
+# WhatsApp Flows: only two active stages (template sent → done)
+STAGE_FLOW_SENT = "flow_sent"
+STAGE_DONE = "done"
+
+# Legacy stages (kept for backward compat during migration)
 STAGE_AWAITING_START = "awaiting_start"
 STAGE_Q1 = "q1"
 STAGE_Q2 = "q2"
 STAGE_Q3 = "q3"
 STAGE_Q4 = "q4"
-STAGE_DONE = "done"
 
 # ── Valid Score Values ───────────────────────────────────────────────────────
 VALID_SCORES = {"1", "2", "3", "4", "5"}
 
-# ── Max Invalid Attempts ─────────────────────────────────────────────────────
+# ── Max Invalid Attempts (legacy — not used with Flows) ─────────────────────
 MAX_INVALID_ATTEMPTS = 3
 
 # ── Cron Interval for Reminder Check (seconds) ──────────────────────────────
-REMINDER_CRON_INTERVAL = int(os.getenv("FEEDBACK_REMINDER_CRON_INTERVAL", "300"))  # 5 min
+REMINDER_CRON_INTERVAL = int(os.getenv("FEEDBACK_REMINDER_CRON_INTERVAL", "900"))  # 15 min

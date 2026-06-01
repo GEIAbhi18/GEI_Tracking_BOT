@@ -2,26 +2,33 @@
 Feedback Session Store
 ======================
 In-memory session management with Google Sheets backup.
+Updated for WhatsApp Flows — simplified session structure.
 """
 
 import logging
 import threading
 from datetime import datetime
-from typing import Optional
-from feedback.config import STAGE_AWAITING_START, STAGE_DONE
+from typing import Optional, Dict, List
+from feedback.config import STAGE_FLOW_SENT, STAGE_DONE
 
 logger = logging.getLogger(__name__)
 
-_sessions: dict[str, dict] = {}
+_sessions = {}  # type: Dict[str, dict]
 _lock = threading.Lock()
-_pending_queue: dict[str, list] = {}
+_pending_queue = {}  # type: Dict[str, List[dict]]
 _queue_lock = threading.Lock()
 
 
 def normalize_phone(phone: str) -> str:
+    """
+    Normalize phone number to format: 91XXXXXXXXXX (no +, no spaces/dashes).
+    - 10-digit Indian number → prepend 91
+    - Already has +91 → strip +
+    - International numbers → strip + only
+    """
     if not phone:
         return ""
-    phone = phone.strip().replace(" ", "").replace("-", "")
+    phone = str(phone).strip().replace(" ", "").replace("-", "")
     if phone.startswith("+"):
         phone = phone[1:]
     if len(phone) == 10 and phone.isdigit():
@@ -30,8 +37,13 @@ def normalize_phone(phone: str) -> str:
 
 
 def create_session(complaint_data: dict) -> dict:
+    """
+    Create a new feedback session dict from complaint data.
+    With WhatsApp Flows, we no longer track individual scores in the session.
+    Scores arrive all at once when the Flow form is submitted.
+    """
     phone = normalize_phone(complaint_data.get("clientPhone", ""))
-    now = datetime.now().isoformat()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     return {
         "complaintId": complaint_data.get("complaintId", ""),
         "building": complaint_data.get("building", ""),
@@ -39,17 +51,14 @@ def create_session(complaint_data: dict) -> dict:
         "clientName": complaint_data.get("clientName", ""),
         "unitNo": complaint_data.get("unitNo", ""),
         "complaintNature": complaint_data.get("complaintNature", ""),
+        "complaintDetails": complaint_data.get("complaintDetails", ""),
         "closedAt": complaint_data.get("closedAt", ""),
-        "sessionStarted": False,
-        "stage": STAGE_AWAITING_START,
-        "score_q1": None,
-        "score_q2": None,
-        "score_q3": None,
-        "tenant_comment": None,
+        "rowIndex": complaint_data.get("rowIndex", ""),
+        "stage": STAGE_FLOW_SENT,
         "feedbackSentAt": now,
         "reminderCount": 0,
         "lastReminderAt": None,
-        "invalidAttempts": 0,
+        "status": "sent",
     }
 
 
@@ -89,6 +98,33 @@ def has_active_session(phone: str) -> bool:
         return session is not None and session.get("stage") != STAGE_DONE
 
 
+def force_clear_session(phone: str) -> bool:
+    """
+    Force-clear a session for a phone number (admin/debug use).
+    Removes from both in-memory store and pending queue.
+    Returns True if a session was found and cleared.
+    """
+    phone = normalize_phone(phone)
+    found = False
+
+    with _lock:
+        if phone in _sessions:
+            complaint_id = _sessions[phone].get("complaintId")
+            del _sessions[phone]
+            found = True
+            if complaint_id:
+                _remove_from_sheet_async(complaint_id)
+
+    with _queue_lock:
+        if phone in _pending_queue:
+            _pending_queue.pop(phone, None)
+            found = True
+
+    if found:
+        logger.info(f"Force-cleared session for {phone}")
+    return found
+
+
 def enqueue_complaint(phone: str, complaint_data: dict):
     phone = normalize_phone(phone)
     with _queue_lock:
@@ -114,6 +150,7 @@ def has_pending_complaints(phone: str) -> bool:
 
 
 def restore_sessions_from_sheet():
+    """Restore sessions from Google Sheets 'Pending Feedback' tab on startup."""
     try:
         from feedback.sheets import load_pending_sessions
         sessions = load_pending_sessions()

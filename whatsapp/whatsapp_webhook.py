@@ -46,8 +46,117 @@ except Exception as _fb_init_err:
     logging.warning(f"Feedback session restore skipped: {_fb_init_err}")
 
 # ── Background Scheduler (shared for all cron jobs) ─────────────────────────
+import pytz
+from config import TIMEZONE
 from apscheduler.schedulers.background import BackgroundScheduler
-_bg_scheduler = BackgroundScheduler()
+
+try:
+    _wa_tz = pytz.timezone(TIMEZONE or "Asia/Kolkata")
+except Exception:
+    _wa_tz = pytz.timezone("Asia/Kolkata")
+
+_bg_scheduler = BackgroundScheduler(timezone=_wa_tz)
+
+
+def whatsapp_daily_report_job():
+    """Sends the daily PDF report and daily updates summary to Kanav on WhatsApp at 6 PM."""
+    logging.info("Running WhatsApp daily report job (6 PM)...")
+    try:
+        from db import supabase
+        from core.intent_handlers import generate_pdf_report
+        from whatsapp.task_assignment import send_text, _send_document_wa
+        import datetime
+        
+        # 1. Resolve Kanav's WhatsApp number
+        res = supabase.table("users").select("whatsapp_number").eq("name", "Kanav").execute()
+        if not res.data or not res.data[0].get("whatsapp_number"):
+            logging.error("WhatsApp daily report: Kanav has no whatsapp_number configured")
+            return
+        
+        kanav_wa = res.data[0]["whatsapp_number"]
+        
+        # 2. Generate PDF and send
+        try:
+            pdf_path = generate_pdf_report()
+            _send_document_wa(kanav_wa, pdf_path)
+            logging.info(f"WhatsApp daily PDF report sent to Kanav ({kanav_wa})")
+        except Exception as pdf_err:
+            logging.error(f"Error generating/sending daily PDF report on WhatsApp: {pdf_err}")
+            
+        # 3. Generate multiline updates text summary and send
+        try:
+            today = datetime.date.today().isoformat()
+            upds = supabase.table("daily_updates").select("*, projects(name), tasks(name), users(name)").gte("timestamp", today).execute()
+            if upds.data:
+                from collections import defaultdict
+                grouped = defaultdict(list)
+                for u in upds.data: 
+                    grouped[u.get("projects", {}).get("name", "Unknown")].append(u)
+                
+                report = "📝 *Daily Updates Summary*\n\n"
+                for p, lu in grouped.items():
+                    report += f"*{p}*\n"
+                    for u in lu:
+                        report += f"- {u.get('tasks', {}).get('name', 'Task')} ({u['progress']}%) by {u.get('users', {}).get('name', 'User')}\n"
+                        if u.get('blocker') and u['blocker'].lower() not in ["no blocker", "none"]: 
+                            report += f"  🛑 Blocker: {u['blocker']}\n"
+                    report += "\n"
+                
+                send_text(kanav_wa, report)
+                logging.info(f"WhatsApp daily update summary sent to Kanav ({kanav_wa})")
+        except Exception as txt_err:
+            logging.error(f"Error generating/sending daily text report on WhatsApp: {txt_err}")
+            
+    except Exception as e:
+        logging.error(f"Error in whatsapp_daily_report_job: {e}", exc_info=True)
+
+
+def whatsapp_employee_reminder_job():
+    """Sends a reminder to employees (e.g. Asif) at 5 PM if they haven't sent any update today."""
+    logging.info("Running WhatsApp employee reminder job (5 PM)...")
+    try:
+        from db import supabase, get_active_users_with_tasks, get_tasks_for_user
+        from whatsapp.task_assignment import send_text
+        import datetime
+        
+        # 1. Get all active users with pending tasks
+        users = get_active_users_with_tasks()
+        if not users:
+            logging.info("No active users with tasks for reminder")
+            return
+            
+        today = datetime.date.today().isoformat()
+        
+        for user in users:
+            wa_num = user.get("whatsapp_number")
+            if not wa_num:
+                continue
+                
+            # 2. Check if user has updated any tasks today (updates or daily_updates)
+            # Check updates table
+            upds_res = supabase.table("updates").select("id").eq("employee_id", user["id"]).gte("timestamp", today).execute()
+            # Check daily_updates table
+            dupds_res = supabase.table("daily_updates").select("id").eq("user_id", user["id"]).gte("timestamp", today).execute()
+            
+            if not upds_res.data and not dupds_res.data:
+                # No updates today! Send reminder.
+                tasks = get_tasks_for_user(user["id"])
+                active_tasks = [t for t in tasks if t["status"] != "completed"]
+                if not active_tasks:
+                    continue
+                    
+                msg = f"Hi {user['name']} 👋\n"
+                msg += "You haven't updated any tasks today. Please share updates on your ongoing tasks:\n\n"
+                for i, t in enumerate(active_tasks, 1):
+                    p_name = t["projects"]["name"] if t.get("projects") else "No Project"
+                    msg += f"{i}. {t['name']} - {p_name}\n"
+                msg += "\nReply with updates in natural language or record a voice note."
+                
+                send_text(wa_num, msg)
+                logging.info(f"WhatsApp employee reminder sent to {user['name']} ({wa_num})")
+    except Exception as e:
+        logging.error(f"Error in whatsapp_employee_reminder_job: {e}", exc_info=True)
+
 
 # ── Feedback reminder cron ───────────────────────────────────────────────────
 try:
@@ -63,6 +172,36 @@ try:
     logging.info(f"Feedback reminder cron registered (every {REMINDER_CRON_INTERVAL}s)")
 except Exception as _cron_err:
     logging.warning(f"Feedback reminder cron failed to register: {_cron_err}")
+
+# ── WhatsApp Daily Report Job (6 PM Mon-Sat) ──────────────────────────
+try:
+    _bg_scheduler.add_job(
+        whatsapp_daily_report_job,
+        'cron',
+        day_of_week='mon-sat',
+        hour=18,
+        minute=0,
+        id='whatsapp_daily_report',
+        replace_existing=True,
+    )
+    logging.info("WhatsApp daily report job scheduled at 6:00 PM (Mon-Sat)")
+except Exception as _report_sched_err:
+    logging.warning(f"WhatsApp daily report job failed to schedule: {_report_sched_err}")
+
+# ── WhatsApp Employee Inactivity Reminder (5 PM Mon-Sat) ─────────────
+try:
+    _bg_scheduler.add_job(
+        whatsapp_employee_reminder_job,
+        'cron',
+        day_of_week='mon-sat',
+        hour=17,
+        minute=0,
+        id='whatsapp_employee_reminder',
+        replace_existing=True,
+    )
+    logging.info("WhatsApp employee reminder job scheduled at 5:00 PM (Mon-Sat)")
+except Exception as _rem_sched_err:
+    logging.warning(f"WhatsApp employee reminder job failed to schedule: {_rem_sched_err}")
 
 # ── Keep-Alive Self-Ping (prevents Render free-tier sleep) ───────────────────
 _RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://gei-whatsapp-tracking-bot.onrender.com")
@@ -91,6 +230,7 @@ logging.info(f"Keep-alive self-ping registered (every {_KEEP_ALIVE_INTERVAL}s �
 # ── Start the scheduler ─────────────────────────────────────────────────────
 _bg_scheduler.start()
 logging.info("Background scheduler started")
+
 
 # ── Logging ──────────────────────────────────────────────────────────────────
 logging.basicConfig(level=logging.INFO)
@@ -208,7 +348,11 @@ def _try_feedback_route(sender: str, text: str) -> bool:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _handle_interactive(sender: str, message: dict):
-    """Route interactive button replies to the task assignment module."""
+    """
+    Route interactive messages:
+      - button_reply → task assignment module
+      - nfm_reply    → WhatsApp Flow feedback response
+    """
     try:
         interactive = message.get("interactive", {})
         i_type = interactive.get("type")
@@ -217,11 +361,54 @@ def _handle_interactive(sender: str, message: dict):
             button_id = interactive["button_reply"]["id"]
             logger.info(f"Button reply from {sender}: {button_id}")
             handle_button_reply(sender, button_id)
+
+        elif i_type == "nfm_reply":
+            # ── WhatsApp Flow form submission ─────────────────────────
+            _handle_flow_response(sender, interactive)
+
         else:
             logger.warning(f"Unhandled interactive type '{i_type}' from {sender}")
 
     except (KeyError, TypeError) as e:
-        logger.error(f"Error parsing interactive message from {sender}: {e}")
+        logger.error(f"Error parsing interactive message from {sender}: {e}", exc_info=True)
+
+
+def _handle_flow_response(sender: str, interactive: dict):
+    """
+    Handle a WhatsApp Flow form submission (nfm_reply).
+    
+    The Flow form data arrives as:
+      message.interactive.nfm_reply.response_json = JSON string
+      containing: { score_q1, score_q2, score_q3, tenant_comment }
+    """
+    import json
+    try:
+        nfm_reply = interactive.get("nfm_reply", {})
+        response_json_str = nfm_reply.get("response_json", "{}")
+        
+        # Parse the response JSON string
+        if isinstance(response_json_str, str):
+            response_data = json.loads(response_json_str)
+        else:
+            response_data = response_json_str
+        
+        logger.info(f"Flow response from {sender}: {response_data}")
+        
+        # Route to feedback engine
+        from feedback.engine import handle_flow_response
+        handled = handle_flow_response(sender, response_data)
+        
+        if handled:
+            logger.info(f"Flow response processed successfully for {sender}")
+        else:
+            logger.warning(f"Flow response from {sender} — no active session found")
+    
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse Flow response JSON from {sender}: {e}")
+    except ImportError:
+        logger.warning("Feedback module not available — cannot process Flow response")
+    except Exception as e:
+        logger.error(f"Error handling Flow response from {sender}: {e}", exc_info=True)
 
 
 def _handle_text(sender: str, text: str, voice_note: bool = False):
@@ -636,7 +823,7 @@ def _handle_voice_undo(sender: str):
 # VOICE NOTE UNDO HELPERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _capture_pre_update_snapshot(sender: str, transcript: str) -> dict | None:
+def _capture_pre_update_snapshot(sender: str, transcript: str):
     """
     Before processing a voice note, capture the current state of the
     most likely task being updated. This allows UNDO to restore it.

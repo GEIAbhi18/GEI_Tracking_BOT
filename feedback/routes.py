@@ -2,8 +2,10 @@
 Feedback API Routes
 ===================
 Flask routes for the feedback bot:
-  - POST /api/feedback/initiate — triggered by Google Apps Script
-  - GET  /api/feedback/status   — check session status (debug/admin)
+  - POST   /api/feedback/initiate       — triggered by Google Apps Script
+  - GET    /api/feedback/status          — check session status (debug/admin)
+  - GET    /api/feedback/sessions        — list all active sessions (admin)
+  - DELETE /api/feedback/session         — force-clear a stale session (admin)
 """
 
 import logging
@@ -11,7 +13,10 @@ from flask import Blueprint, request, jsonify
 
 from feedback.config import FEEDBACK_API_KEY
 from feedback.engine import initiate_feedback
-from feedback.session_store import get_session, normalize_phone, get_all_active_sessions
+from feedback.session_store import (
+    get_session, normalize_phone, get_all_active_sessions,
+    force_clear_session,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,8 +52,10 @@ def api_initiate_feedback():
         "clientName": "Sumit Singh Rawat",
         "unitNo": "301",
         "complaintNature": "BMS",
+        "complaintDetails": "BMS panel issue",
         "closedAt": "2026-05-18 09:40",
-        "building": "GEBB1"
+        "building": "GEBB1",
+        "rowIndex": 5
     }
     """
     if not _verify_api_key():
@@ -95,7 +102,7 @@ def api_feedback_status():
                     "stage": session.get("stage"),
                     "clientName": session.get("clientName"),
                     "reminderCount": session.get("reminderCount"),
-                    "sessionStarted": session.get("sessionStarted"),
+                    "feedbackSentAt": session.get("feedbackSentAt"),
                 }
             })
         return jsonify({"status": "not_found", "message": "No active session"}), 404
@@ -120,7 +127,39 @@ def api_active_sessions():
                 "stage": s.get("stage"),
                 "building": s.get("building"),
                 "reminderCount": s.get("reminderCount"),
+                "feedbackSentAt": s.get("feedbackSentAt"),
             }
             for s in sessions
         ]
     })
+
+
+@feedback_bp.route("/session", methods=["DELETE"])
+def api_clear_session():
+    """
+    Force-clear a stale feedback session.
+    Query param: phone (required)
+    
+    Use this to unblock a phone number that has a stuck session.
+    Example: DELETE /api/feedback/session?phone=917717754421
+    """
+    if not _verify_api_key():
+        return jsonify({"status": "error", "message": "Unauthorized"}), 401
+    
+    phone = request.args.get("phone", "")
+    if not phone:
+        return jsonify({"status": "error", "message": "Provide ?phone= query param"}), 400
+    
+    cleared = force_clear_session(phone)
+    
+    if cleared:
+        logger.info(f"Admin cleared session for {phone}")
+        return jsonify({
+            "status": "ok",
+            "message": f"Session cleared for {normalize_phone(phone)}"
+        })
+    
+    return jsonify({
+        "status": "not_found",
+        "message": f"No active session for {normalize_phone(phone)}"
+    }), 404

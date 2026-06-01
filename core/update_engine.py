@@ -8,7 +8,8 @@ from core.message_parser import parse_message as rule_based_parse_message
 import core.intent_handlers as handlers
 from db import (
     get_all_tasks, get_projects, get_user_by_telegram_id, create_ticket,
-    update_user_activity, remove_blocker, create_project_db, add_task, save_note
+    update_user_activity, remove_blocker, create_project_db, add_task, save_note,
+    add_blocker, update_task_image
 )
 from core.utils import parse_human_date, resolve_project, resolve_task_from_list
 from core.error_messages import (
@@ -1081,7 +1082,7 @@ async def process_update_message(text: str, user_id: int, images: list, send_rep
 
 def _trigger_wa_task_assignment(task_id: str, task_name: str, project_name: str,
                                  due_date: str, creator_telegram_id: int,
-                                 creator_db_id: str | None):
+                                 creator_db_id=None):
     """
     Fires the WhatsApp task assignment flow ONLY when the creator is Kanav.
     Called synchronously from the create_task flow after DB insert succeeds.
