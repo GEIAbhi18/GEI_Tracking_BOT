@@ -11,7 +11,9 @@ Uses gspread with service account credentials from environment variables.
 """
 
 import logging
+# pyrefly: ignore [missing-import]
 import gspread
+# pyrefly: ignore [missing-import]
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 
@@ -28,8 +30,30 @@ from feedback.config import (
 logger = logging.getLogger(__name__)
 
 # ── Google Sheets Auth ───────────────────────────────────────────────────────
+import time
+# pyrefly: ignore [missing-import]
+import gspread.exceptions
 
 _gc = None  # Cached gspread client
+_ss = None  # Cached Spreadsheet
+_worksheets = {}  # Cached Worksheets
+
+
+def _retry_on_429(func, *args, **kwargs):
+    """Execute a function and retry on Google Sheets API 429 quota limit error with backoff."""
+    max_retries = 5
+    backoff = 1.0  # start with 1 second
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except gspread.exceptions.APIError as e:
+            if getattr(e, "response", None) is not None and e.response.status_code == 429:
+                logger.warning(f"Google Sheets API 429 rate limit exceeded. Retrying in {backoff}s... (Attempt {attempt+1}/{max_retries})")
+                time.sleep(backoff)
+                backoff *= 2.0  # exponential backoff
+            else:
+                raise
+    return func(*args, **kwargs)
 
 
 def _get_client() -> gspread.Client:
@@ -63,21 +87,34 @@ def _get_client() -> gspread.Client:
 
 def _get_spreadsheet():
     """Open the feedback spreadsheet by ID."""
-    return _get_client().open_by_key(FEEDBACK_SHEET_ID)
+    global _ss
+    if _ss is None:
+        def open_ss():
+            return _get_client().open_by_key(FEEDBACK_SHEET_ID)
+        _ss = _retry_on_429(open_ss)
+    return _ss
 
 
 def _get_worksheet(sheet_name: str, auto_create: bool = False):
-    """Get a specific worksheet by name. Optionally auto-create if missing."""
-    try:
-        return _get_spreadsheet().worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        if auto_create:
-            logger.info(f"Worksheet '{sheet_name}' not found — creating it")
-            ss = _get_spreadsheet()
-            ws = ss.add_worksheet(title=sheet_name, rows=1000, cols=26)
-            return ws
-        logger.error(f"Worksheet '{sheet_name}' not found in spreadsheet")
-        raise
+    """Get a specific worksheet by name, caching it to avoid API calls."""
+    global _worksheets
+    if sheet_name in _worksheets:
+        return _worksheets[sheet_name]
+
+    def fetch_ws():
+        try:
+            return _get_spreadsheet().worksheet(sheet_name)
+        except gspread.exceptions.WorksheetNotFound:
+            if auto_create:
+                logger.info(f"Worksheet '{sheet_name}' not found — creating it")
+                ss = _get_spreadsheet()
+                return ss.add_worksheet(title=sheet_name, rows=1000, cols=26)
+            logger.error(f"Worksheet '{sheet_name}' not found in spreadsheet")
+            raise
+
+    ws = _retry_on_429(fetch_ws)
+    _worksheets[sheet_name] = ws
+    return ws
 
 
 # ── MASTER Sheet Operations ─────────────────────────────────────────────────
@@ -90,7 +127,7 @@ def find_complaint_row(complaint_id: str, sheet_name: str = None) -> tuple:
     target_sheet = sheet_name or MASTER_SHEET_NAME
     try:
         ws = _get_worksheet(target_sheet)
-        headers = ws.row_values(1)
+        headers = _retry_on_429(ws.row_values, 1)
         
         # Find the Complaint ID column
         complaint_col = None
@@ -104,9 +141,9 @@ def find_complaint_row(complaint_id: str, sheet_name: str = None) -> tuple:
             return None, None, None
         
         # Find the row with this complaint ID
-        col_values = ws.col_values(complaint_col)
+        col_values = _retry_on_429(ws.col_values, complaint_col)
         for row_idx, val in enumerate(col_values, 1):
-            if val.strip() == complaint_id.strip():
+            if val.strip().lower() == complaint_id.strip().lower():
                 return ws, row_idx, headers
         
         logger.warning(f"Complaint ID '{complaint_id}' not found in {target_sheet}")
@@ -159,7 +196,7 @@ def update_master_feedback(complaint_id: str, feedback_data: dict) -> bool:
                 logger.warning(f"Column '{col_name}' not found in MASTER headers")
         
         if cells_to_update:
-            ws.update_cells(cells_to_update)
+            _retry_on_429(ws.update_cells, cells_to_update)
             logger.info(f"Updated MASTER sheet for complaint {complaint_id}: {len(cells_to_update)} columns")
             return True
         
@@ -193,7 +230,7 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
                 cells_to_update.append(gspread.Cell(row, col_idx, str(value) if value is not None else ""))
         
         if cells_to_update:
-            ws.update_cells(cells_to_update)
+            _retry_on_429(ws.update_cells, cells_to_update)
             logger.info(f"Updated {sheet_name} sheet for complaint {complaint_id}")
             return True
         
@@ -228,7 +265,7 @@ def append_escalation(escalation_data: dict) -> bool:
     """
     try:
         ws = _get_worksheet(ESCALATIONS_SHEET_NAME, auto_create=True)
-        headers = ws.row_values(1)
+        headers = _retry_on_429(ws.row_values, 1)
         
         if not headers:
             # Create headers if sheet is empty
@@ -238,7 +275,7 @@ def append_escalation(escalation_data: dict) -> bool:
                 "Overall Score", "Sentiment", "Customer Remarks",
                 "Escalation Reason", "Escalation Status", "Action Taken"
             ]
-            ws.append_row(headers)
+            _retry_on_429(ws.append_row, headers)
         
         row = []
         for h in headers:
@@ -253,7 +290,7 @@ def append_escalation(escalation_data: dict) -> bool:
             if not matched:
                 row.append("")
         
-        ws.append_row(row, value_input_option="USER_ENTERED")
+        _retry_on_429(ws.append_row, row, value_input_option="USER_ENTERED")
         logger.info(f"Escalation appended for complaint {escalation_data.get('Complaint ID')}")
         return True
         
@@ -279,11 +316,11 @@ def save_session_to_sheet(session: dict) -> bool:
     """
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
-        headers = ws.row_values(1)
+        headers = _retry_on_429(ws.row_values, 1)
         
         if not headers:
             headers = PENDING_HEADERS
-            ws.append_row(headers)
+            _retry_on_429(ws.append_row, headers)
         
         phone = session.get("clientPhone", "")
         complaint_id = session.get("complaintId", "")
@@ -292,7 +329,7 @@ def save_session_to_sheet(session: dict) -> bool:
         phone_col = _get_col_index(headers, "Phone")
         existing_row = None
         if phone_col:
-            col_values = ws.col_values(phone_col)
+            col_values = _retry_on_429(ws.col_values, phone_col)
             for row_idx, val in enumerate(col_values, 1):
                 if val.strip() == phone.strip():
                     existing_row = row_idx
@@ -318,9 +355,9 @@ def save_session_to_sheet(session: dict) -> bool:
             for col_idx, value in enumerate(row_data, 1):
                 if col_idx <= len(headers):
                     cell_list.append(gspread.Cell(existing_row, col_idx, value))
-            ws.update_cells(cell_list)
+            _retry_on_429(ws.update_cells, cell_list)
         else:
-            ws.append_row(row_data, value_input_option="USER_ENTERED")
+            _retry_on_429(ws.append_row, row_data, value_input_option="USER_ENTERED")
         
         logger.info(f"Session saved to Pending Feedback sheet for {complaint_id}")
         return True
@@ -334,16 +371,16 @@ def remove_session_from_sheet(complaint_id: str) -> bool:
     """Remove a completed session from the Pending Feedback sheet."""
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
-        headers = ws.row_values(1)
+        headers = _retry_on_429(ws.row_values, 1)
         complaint_col = _get_col_index(headers, "Complaint ID")
         
         if not complaint_col:
             return False
         
-        col_values = ws.col_values(complaint_col)
+        col_values = _retry_on_429(ws.col_values, complaint_col)
         for row_idx, val in enumerate(col_values, 1):
             if val.strip() == complaint_id.strip():
-                ws.delete_rows(row_idx)
+                _retry_on_429(ws.delete_rows, row_idx)
                 logger.info(f"Removed session from Pending Feedback sheet: {complaint_id}")
                 return True
         
@@ -358,13 +395,13 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
     """Update reminder count and last reminder timestamp in Pending Feedback sheet."""
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
-        headers = ws.row_values(1)
+        headers = _retry_on_429(ws.row_values, 1)
         
         phone_col = _get_col_index(headers, "Phone")
         if not phone_col:
             return False
         
-        col_values = ws.col_values(phone_col)
+        col_values = _retry_on_429(ws.col_values, phone_col)
         target_row = None
         for row_idx, val in enumerate(col_values, 1):
             if val.strip() == phone.strip():
@@ -387,7 +424,7 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
             cells_to_update.append(gspread.Cell(target_row, last_reminder_col, last_reminder_at))
         
         if cells_to_update:
-            ws.update_cells(cells_to_update)
+            _retry_on_429(ws.update_cells, cells_to_update)
             logger.info(f"Updated reminder count for {phone}: count={count}")
         
         return True
@@ -405,7 +442,7 @@ def load_pending_sessions() -> list:
     """
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
-        records = ws.get_all_records()
+        records = _retry_on_429(ws.get_all_records)
         
         sessions = []
         for rec in records:

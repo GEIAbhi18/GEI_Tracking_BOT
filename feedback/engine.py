@@ -181,12 +181,19 @@ def handle_feedback_reply(phone: str, text: str) -> bool:
         _handle_cancel(phone, session)
         return True
 
-    # Active Flow session — remind user to use the Flow button
+    # Active Flow session — send the Flow template again instead of a text reminder
     if stage == STAGE_FLOW_SENT:
-        _send_wa(phone, feedback_in_progress_reply(
-            session.get("clientName", ""),
-            session.get("complaintId", ""),
-        ))
+        try:
+            from feedback.flow_sender import send_flow_template
+            send_flow_template(
+                phone=phone,
+                client_name=session.get("clientName", ""),
+                complaint_id=session.get("complaintId", ""),
+                complaint_nature=session.get("complaintNature", ""),
+                unit_no=session.get("unitNo", ""),
+            )
+        except Exception as e:
+            logger.error(f"Error resending Flow template during active reply for {session.get('complaintId')}: {e}")
         return True
 
     return True

@@ -307,6 +307,22 @@ def handle_whatsapp_message():
                     elif msg_type == "text":
                         text = message.get("text", {}).get("body", "").strip()
                         if text:
+                            # ── Check for clear/reset command first ───────
+                            if text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
+                                try:
+                                    from feedback.session_store import remove_session
+                                    from core.conversation_state import clear_state
+                                    from core.context_manager import clear_context
+                                    from whatsapp.task_assignment import send_text
+                                    
+                                    remove_session(sender)
+                                    clear_state(sender)
+                                    clear_context(sender)
+                                    send_text(sender, "Chat history and active feedback sessions have been cleared! 🧹")
+                                    continue
+                                except Exception as clear_err:
+                                    logger.error(f"Error clearing WhatsApp state for {sender}: {clear_err}")
+
                             # ── Feedback-first routing ────────────────────
                             if _try_feedback_route(sender, text):
                                 continue
@@ -424,6 +440,22 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         text: The message text (typed or transcribed from voice)
         voice_note: True if this text originated from a voice note transcription
     """
+    # Check for clear/reset command (works from both text and voice)
+    if text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
+        try:
+            from feedback.session_store import remove_session
+            from core.conversation_state import clear_state
+            from core.context_manager import clear_context
+            from whatsapp.task_assignment import send_text
+            
+            remove_session(sender)
+            clear_state(sender)
+            clear_context(sender)
+            send_text(sender, "Chat history and active feedback sessions have been cleared! 🧹")
+            return
+        except Exception as clear_err:
+            logger.error(f"Error clearing WhatsApp state in _handle_text for {sender}: {clear_err}")
+
     # 0. Check for UNDO command (works from both text and voice)
     if text.strip().upper() == "UNDO" and not voice_note:
         _handle_voice_undo(sender)

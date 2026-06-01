@@ -102,8 +102,18 @@ def _send_reminder(phone: str, session: dict, reminder_num: int):
     complaint_id = session["complaintId"]
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    msg = reminder_message(session.get("clientName", ""), complaint_id)
-    _send_wa(phone, msg)
+    try:
+        from feedback.flow_sender import send_flow_template
+        send_flow_template(
+            phone=phone,
+            client_name=session.get("clientName", ""),
+            complaint_id=complaint_id,
+            complaint_nature=session.get("complaintNature", ""),
+            unit_no=session.get("unitNo", ""),
+        )
+    except Exception as e:
+        logger.error(f"Failed to resend Flow template in reminder for {complaint_id}: {e}")
+
 
     session["reminderCount"] = reminder_num
     session["lastReminderAt"] = now
