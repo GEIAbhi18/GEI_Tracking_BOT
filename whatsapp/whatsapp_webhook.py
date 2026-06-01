@@ -303,38 +303,41 @@ def handle_whatsapp_message():
                     sender = message.get("from", "")
                     msg_type = message.get("type", "")
 
-                    # ── Interactive button reply ──────────────────────────────
+                    # ── Dispatch to background thread to prevent Meta webhook timeout ─
                     if msg_type == "interactive":
-                        _handle_interactive(sender, message)
+                        threading.Thread(target=_handle_interactive, args=(sender, message), daemon=True).start()
 
                     # ── Voice note (audio) ─────────────────────────────────────
                     elif msg_type == "audio":
-                        _handle_audio(sender, message)
+                        threading.Thread(target=_handle_audio, args=(sender, message), daemon=True).start()
 
                     # ── Plain text ────────────────────────────────────────────
                     elif msg_type == "text":
                         text = message.get("text", {}).get("body", "").strip()
                         if text:
-                            # ── Check for clear/reset command first ───────
-                            if text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
-                                try:
-                                    from feedback.session_store import remove_session
-                                    from core.conversation_state import clear_state
-                                    from core.context_manager import clear_context
-                                    from whatsapp.task_assignment import send_text
-                                    
-                                    remove_session(sender)
-                                    clear_state(sender)
-                                    clear_context(sender)
-                                    send_text(sender, "Chat history and active feedback sessions have been cleared! 🧹")
-                                    continue
-                                except Exception as clear_err:
-                                    logger.error(f"Error clearing WhatsApp state for {sender}: {clear_err}")
+                            def _process_text_bg(sender_num, msg_text):
+                                # ── Check for clear/reset command first ───────
+                                if msg_text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
+                                    try:
+                                        from feedback.session_store import force_clear_session
+                                        from core.conversation_state import clear_state
+                                        from core.context_manager import clear_context
+                                        from whatsapp.task_assignment import send_text
+                                        
+                                        force_clear_session(sender_num)
+                                        clear_state(sender_num)
+                                        clear_context(sender_num)
+                                        send_text(sender_num, "Chat history and active feedback sessions have been cleared! 🧹")
+                                        return
+                                    except Exception as clear_err:
+                                        logger.error(f"Error clearing WhatsApp state for {sender_num}: {clear_err}")
 
-                            # ── Feedback-first routing ────────────────────
-                            if _try_feedback_route(sender, text):
-                                continue
-                            _handle_text(sender, text)
+                                # ── Feedback-first routing ────────────────────
+                                if _try_feedback_route(sender_num, msg_text):
+                                    return
+                                _handle_text(sender_num, msg_text)
+                            
+                            threading.Thread(target=_process_text_bg, args=(sender, text), daemon=True).start()
 
                     else:
                         logger.info(f"Unsupported message type '{msg_type}' from {sender}")
