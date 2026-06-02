@@ -153,15 +153,15 @@ def _send_reminder(phone: str, session: dict, reminder_num: int):
     except Exception as e:
         logger.error(f"Failed to update reminder count in sheet: {e}")
 
-    # Also update MASTER sheet
+    # Update building sheet (GEBB1 / GEBB2 / GETT)
     try:
-        from feedback.sheets import update_master_feedback
-        update_master_feedback(complaint_id, {
+        from feedback.sheets import update_building_sheet_feedback
+        update_building_sheet_feedback(complaint_id, session.get("building", ""), {
             "Reminder Count": reminder_num,
             "Last Reminder Sent At": now,
         })
     except Exception as e:
-        logger.error(f"Failed to update reminder in MASTER sheet: {e}")
+        logger.error(f"Failed to update reminder in building sheet: {e}")
 
     logger.info(f"Reminder {reminder_num} sent for {complaint_id} → {phone}")
 
@@ -171,14 +171,14 @@ def _mark_no_response(phone: str, session: dict):
     complaint_id = session.get("complaintId", "")
 
     try:
-        from feedback.sheets import update_master_feedback
-        update_master_feedback(complaint_id, {
+        from feedback.sheets import update_building_sheet_feedback
+        update_building_sheet_feedback(complaint_id, session.get("building", ""), {
             "Feedback Status": "No Response",
             "Reminder Count": session.get("reminderCount", MAX_REMINDERS),
             "Last Reminder Sent At": session.get("lastReminderAt", ""),
         })
     except Exception as e:
-        logger.error(f"Failed to mark No Response in sheet: {e}")
+        logger.error(f"Failed to mark No Response in building sheet: {e}")
 
     remove_session(phone)
     logger.info(f"Marked No Response for {complaint_id} (max reminders reached)")

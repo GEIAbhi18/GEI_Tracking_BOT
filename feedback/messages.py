@@ -14,7 +14,7 @@ def message_b(client_name: str, complaint_id: str) -> str:
         f"officially recorded by the Good Earth Team.\n\n"
         f"Your response helps us serve you better and improve "
         f"our facility services continuously.\n\n"
-        f"— *Good Earth Imaging Facilities Team* 🏢"
+        f"— *Good Earth Infra Facilites Team* 🏢"
     )
 
 
@@ -26,7 +26,7 @@ def reminder_message(client_name: str, complaint_id: str) -> str:
         f"*{complaint_id}* is pending.\n\n"
         f"Your opinion helps us serve you better. Please tap the "
         f"button in our previous message to share your feedback.\n\n"
-        f"— Good Earth Facilities Team 🏢"
+        f"— Good Earth Infra Team 🏢"
     )
 
 

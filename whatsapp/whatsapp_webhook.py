@@ -419,7 +419,7 @@ def _handle_flow_response(sender: str, interactive: dict):
     
     The Flow form data arrives as:
       message.interactive.nfm_reply.response_json = JSON string
-      containing: { score_q1, score_q2, score_q3, tenant_comment }
+      containing: { resolution_rating, facility_team_rating, overall_rating, comments }
     """
     import json
     try:

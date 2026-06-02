@@ -81,12 +81,16 @@ def initiate_feedback(complaint_data: dict) -> dict:
     except Exception as e:
         logger.error(f"Flow template send error for {complaint_id}: {e}", exc_info=True)
 
-    # Mark feedback sent in MASTER sheet
+    # Mark feedback sent in building sheet (GEBB1 / GEBB2 / GETT)
     try:
-        from feedback.sheets import mark_feedback_sent
-        mark_feedback_sent(complaint_id, session["feedbackSentAt"])
+        from feedback.sheets import update_building_sheet_feedback
+        update_building_sheet_feedback(complaint_id, session.get("building", ""), {
+            "Feedback Status": "Sent",
+            "Feedback Sent At": session["feedbackSentAt"],
+            "Reminder Count": "0",
+        })
     except Exception as e:
-        logger.error(f"Failed to mark feedback sent in sheet: {e}")
+        logger.error(f"Failed to mark feedback sent in building sheet: {e}")
 
     # Also write session to Pending Feedback sheet (backup)
     try:
@@ -112,7 +116,8 @@ def handle_flow_response(phone: str, response_data: dict) -> bool:
     Args:
         phone: Sender's normalized phone number
         response_data: Parsed JSON from message.interactive.nfm_reply.response_json
-                       Expected keys: score_q1, score_q2, score_q3, tenant_comment
+                       Expected keys: resolution_rating, facility_team_rating,
+                       overall_rating, comments (matching the WhatsApp Flow form)
 
     Returns:
         True if handled successfully, False if no active session
@@ -128,15 +133,16 @@ def handle_flow_response(phone: str, response_data: dict) -> bool:
     complaint_id = session.get("complaintId", "")
 
     # Extract scores from Flow response
+    # Keys must match the WhatsApp Flow form field names exactly
     try:
-        score_q1 = int(response_data.get("score_q1", 0))
-        score_q2 = int(response_data.get("score_q2", 0))
-        score_q3 = int(response_data.get("score_q3", 0))
+        score_q1 = int(response_data.get("resolution_rating", 0))
+        score_q2 = int(response_data.get("facility_team_rating", 0))
+        score_q3 = int(response_data.get("overall_rating", 0))
     except (ValueError, TypeError) as e:
         logger.error(f"Invalid score data in Flow response for {complaint_id}: {e}")
         score_q1 = score_q2 = score_q3 = 0
 
-    tenant_comment = str(response_data.get("tenant_comment", "") or "").strip()
+    tenant_comment = str(response_data.get("comments", "") or "").strip()
     if not tenant_comment:
         tenant_comment = "No comment"
 
@@ -196,14 +202,14 @@ def _handle_cancel(phone: str, session: dict):
     """Client sent STOP or CANCEL."""
     _send_wa(phone, session_cancelled())
 
-    # Mark as No Response in sheet
+    # Mark as No Response in building sheet
     try:
-        from feedback.sheets import update_master_feedback
-        update_master_feedback(session["complaintId"], {
+        from feedback.sheets import update_building_sheet_feedback
+        update_building_sheet_feedback(session["complaintId"], session.get("building", ""), {
             "Feedback Status": "No Response",
         })
     except Exception as e:
-        logger.error(f"Failed to mark cancelled in sheet: {e}")
+        logger.error(f"Failed to mark cancelled in building sheet: {e}")
 
     remove_session(phone)
     logger.info(f"Feedback cancelled for {session['complaintId']}")
@@ -256,27 +262,24 @@ def _complete_feedback(phone: str, session: dict,
 
     should_escalate = low_score or negative_comment
 
-    # 4. Write to MASTER sheet
+    # 4. Write to building sheet (GEBB1 / GEBB2 / GETT)
+    #    Column names must match the actual sheet headers exactly.
     feedback_data = {
         "Feedback Status": "Received",
         "Feedback Received At": now,
-        "Score Q1": score_q1,
-        "Score Q2": score_q2,
-        "Score Q3": score_q3,
-        "Overall Feedback Score": overall_score,
+        "Resolution Score": score_q1,
+        "Professionalism Score": score_q2,
+        "Overall Feedback Score": score_q3,
+        "Remarks": tenant_comment,
         "Sentiment": sentiment,
-        "Customer Remarks": tenant_comment,
-        "Escalation Status": escalation_status,
-        "Escalation Reason": escalation_reason,
     }
 
     try:
         from feedback.sheets import (
-            update_master_feedback, update_building_sheet_feedback,
+            update_building_sheet_feedback,
             append_escalation,
         )
 
-        update_master_feedback(complaint_id, feedback_data)
         update_building_sheet_feedback(
             complaint_id, session.get("building", ""), feedback_data
         )
