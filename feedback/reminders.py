@@ -87,17 +87,25 @@ def check_and_send_reminders():
 
         elapsed = (now - sent_time).total_seconds()
 
+        # Auto-expire sessions older than 72 hours — they should not
+        # keep blocking the phone number forever.
+        if elapsed > 72 * 3600:
+            logger.info(
+                f"Auto-expiring ancient session {complaint_id} "
+                f"(age: {elapsed/3600:.1f}h)"
+            )
+            _mark_no_response(phone, session)
+            continue
+
         if reminder_count >= MAX_REMINDERS:
             # Already sent max reminders — mark as No Response
             _mark_no_response(phone, session)
-            time.sleep(3)  # Space out Sheets API writes between sessions
             continue
 
         # Check if reminder is due (every REMINDER_INTERVAL_HOURS after sent)
         next_reminder_due_at = reminder_interval_seconds * (reminder_count + 1)
         if elapsed >= next_reminder_due_at:
             _send_reminder(phone, session, reminder_count + 1)
-            time.sleep(3)  # Space out Sheets API writes between sessions
 
 
 

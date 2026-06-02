@@ -7,7 +7,7 @@ Updated for WhatsApp Flows — simplified session structure.
 
 import logging
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List
 from feedback.config import STAGE_FLOW_SENT, STAGE_DONE
 
@@ -76,6 +76,7 @@ def set_session(phone: str, session: dict):
 
 
 def remove_session(phone: str):
+    """Remove session from memory AND from the Pending Feedback sheet (synchronous)."""
     phone = normalize_phone(phone)
     complaint_id = None
     with _lock:
@@ -83,7 +84,9 @@ def remove_session(phone: str):
             complaint_id = _sessions[phone].get("complaintId")
             del _sessions[phone]
     if complaint_id:
-        _remove_from_sheet_async(complaint_id)
+        # Synchronous removal — guarantees sheet is cleaned before returning.
+        # This prevents stale sessions from being restored on server restart.
+        _remove_from_sheet_sync(complaint_id)
 
 
 def get_all_active_sessions() -> list:
@@ -101,7 +104,9 @@ def has_active_session(phone: str) -> bool:
 def force_clear_session(phone: str) -> bool:
     """
     Force-clear a session for a phone number (admin/debug use).
-    Removes from both in-memory store and pending queue.
+    Removes from in-memory store and Pending Feedback sheet.
+    Does NOT clear the pending queue — use force_clear_and_process_next()
+    if you also want to process queued complaints.
     Returns True if a session was found and cleared.
     """
     phone = normalize_phone(phone)
@@ -113,15 +118,29 @@ def force_clear_session(phone: str) -> bool:
             del _sessions[phone]
             found = True
             if complaint_id:
-                _remove_from_sheet_async(complaint_id)
-
-    with _queue_lock:
-        if phone in _pending_queue:
-            _pending_queue.pop(phone, None)
-            found = True
+                _remove_from_sheet_sync(complaint_id)
 
     if found:
         logger.info(f"Force-cleared session for {phone}")
+    return found
+
+
+def force_clear_and_process_next(phone: str) -> bool:
+    """
+    Force-clear a session and then process the next queued complaint.
+    Used by admin endpoints and CLEAR command.
+    """
+    found = force_clear_session(phone)
+    if found:
+        # Process next queued complaint (if any)
+        next_complaint = dequeue_next_complaint(phone)
+        if next_complaint:
+            logger.info(f"Processing next queued complaint after force-clear for {phone}")
+            try:
+                from feedback.engine import initiate_feedback
+                initiate_feedback(next_complaint)
+            except Exception as e:
+                logger.error(f"Failed to process next queued complaint for {phone}: {e}")
     return found
 
 
@@ -149,19 +168,70 @@ def has_pending_complaints(phone: str) -> bool:
         return bool(_pending_queue.get(phone))
 
 
+# Maximum age for sessions — sessions older than this are auto-expired on restore
+_MAX_SESSION_AGE_HOURS = 72
+
+
 def restore_sessions_from_sheet():
-    """Restore sessions from Google Sheets 'Pending Feedback' tab on startup."""
+    """Restore sessions from Google Sheets 'Pending Feedback' tab on startup.
+    Sessions older than _MAX_SESSION_AGE_HOURS are auto-expired (marked No Response).
+    """
     try:
         from feedback.sheets import load_pending_sessions
         sessions = load_pending_sessions()
+        now = datetime.now()
+        restored = 0
+        expired = 0
+
         with _lock:
             for s in sessions:
                 phone = normalize_phone(s.get("clientPhone", ""))
-                if phone and s.get("stage") != STAGE_DONE:
-                    _sessions[phone] = s
-        logger.info(f"Restored {len(sessions)} sessions from sheet backup")
+                if not phone or s.get("stage") == STAGE_DONE:
+                    continue
+
+                # Check session age — auto-expire stale sessions
+                sent_at_str = s.get("feedbackSentAt", "")
+                if sent_at_str:
+                    try:
+                        sent_time = datetime.strptime(str(sent_at_str), "%Y-%m-%d %H:%M:%S")
+                        age_hours = (now - sent_time).total_seconds() / 3600
+                        if age_hours > _MAX_SESSION_AGE_HOURS:
+                            logger.info(
+                                f"Auto-expiring stale session {s.get('complaintId')} "
+                                f"(age: {age_hours:.1f}h > {_MAX_SESSION_AGE_HOURS}h)"
+                            )
+                            expired += 1
+                            # Mark as expired in background — don't block startup
+                            threading.Thread(
+                                target=_expire_stale_session,
+                                args=(phone, s),
+                                daemon=True,
+                            ).start()
+                            continue
+                    except (ValueError, TypeError):
+                        pass  # Can't parse date — restore it anyway
+
+                _sessions[phone] = s
+                restored += 1
+
+        logger.info(f"Restored {restored} sessions from sheet backup ({expired} auto-expired)")
     except Exception as e:
         logger.error(f"Failed to restore sessions from sheet: {e}", exc_info=True)
+
+
+def _expire_stale_session(phone: str, session: dict):
+    """Mark a stale session as No Response and remove from sheets."""
+    complaint_id = session.get("complaintId", "")
+    try:
+        from feedback.sheets import update_master_feedback, remove_session_from_sheet
+        update_master_feedback(complaint_id, {
+            "Feedback Status": "No Response",
+            "Reminder Count": session.get("reminderCount", 0),
+        })
+        remove_session_from_sheet(complaint_id)
+        logger.info(f"Stale session {complaint_id} marked as No Response and removed")
+    except Exception as e:
+        logger.error(f"Failed to expire stale session {complaint_id}: {e}")
 
 
 def _backup_session_async(session: dict):

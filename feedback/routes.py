@@ -9,13 +9,14 @@ Flask routes for the feedback bot:
 """
 
 import logging
+import threading
 from flask import Blueprint, request, jsonify
 
 from feedback.config import FEEDBACK_API_KEY
 from feedback.engine import initiate_feedback
 from feedback.session_store import (
     get_session, normalize_phone, get_all_active_sessions,
-    force_clear_session,
+    force_clear_and_process_next,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,20 +75,32 @@ def api_initiate_feedback():
             "message": f"Missing required fields: {', '.join(missing)}"
         }), 400
     
-    import threading
+    # Run initiate_feedback in a background thread but wait briefly for the
+    # result so we can return the real status to Apps Script.  The Sheets
+    # write-back inside initiate_feedback is the slow part (rate-limited),
+    # so we cap the wait at 25 s — well within Gunicorn's 120 s timeout and
+    # Apps Script's 30 s UrlFetchApp limit.
+    result_holder = {}
     
-    # Run the Google Sheets logic in the background to prevent Gunicorn timeouts
-    # due to rate limits holding up the request for over 120 seconds.
     def _run_bg(payload):
         try:
-            initiate_feedback(payload)
+            result_holder["result"] = initiate_feedback(payload)
         except Exception as e:
-            logger.error(f"Error in background feedback initiation: {e}")
+            logger.error(f"Error in feedback initiation: {e}", exc_info=True)
+            result_holder["result"] = {"status": "error", "message": str(e)}
             
-    threading.Thread(target=_run_bg, args=(data,), daemon=False).start()
+    t = threading.Thread(target=_run_bg, args=(data,), daemon=False)
+    t.start()
+    t.join(timeout=25)  # Wait up to 25 s for the result
     
-    # Return immediately so the Apps Script doesn't time out
-    return jsonify({"status": "queued", "message": "Feedback initiation queued for background processing."}), 200
+    if t.is_alive():
+        # Still running (Sheets API is slow) — return queued
+        logger.warning(f"initiate_feedback still running after 25s for {data.get('complaintId')}")
+        return jsonify({"status": "queued", "message": "Feedback initiation is processing."}), 200
+    
+    result = result_holder.get("result", {"status": "error", "message": "Unknown error"})
+    status_code = 200 if result.get("status") in ("ok", "queued") else 500
+    return jsonify(result), status_code
 
 
 @feedback_bp.route("/status", methods=["GET"])
@@ -160,7 +173,7 @@ def api_clear_session():
     if not phone:
         return jsonify({"status": "error", "message": "Provide ?phone= query param"}), 400
     
-    cleared = force_clear_session(phone)
+    cleared = force_clear_and_process_next(phone)
     
     if cleared:
         logger.info(f"Admin cleared session for {phone}")

@@ -304,17 +304,25 @@ def _complete_feedback(phone: str, session: dict,
         logger.error(f"Sheet write-back failed for {complaint_id}: {e}", exc_info=True)
 
     # 6. Send Thank You (Message B)
-    _send_wa(phone, message_b(session["clientName"], complaint_id))
+    try:
+        _send_wa(phone, message_b(session["clientName"], complaint_id))
+    except Exception as e:
+        logger.error(f"Failed to send thank-you for {complaint_id}: {e}")
+
     logger.info(
         f"Feedback completed for {complaint_id}: "
         f"Q1={score_q1} Q2={score_q2} Q3={score_q3} "
         f"overall={overall_score} sentiment={sentiment}"
     )
 
-    # Clean up session
-    remove_session(phone)
+    # 7. Clean up session — MUST happen even if sheet writes failed above.
+    #    remove_session() is synchronous and removes from both memory + Pending Feedback sheet.
+    try:
+        remove_session(phone)
+    except Exception as e:
+        logger.error(f"Failed to remove session for {complaint_id}: {e}")
 
-    # Check for next pending complaint
+    # 8. Check for next pending complaint
     _start_next_pending(phone)
 
 
@@ -324,3 +332,4 @@ def _start_next_pending(phone: str):
     if next_complaint:
         logger.info(f"Starting next queued feedback for {phone}: {next_complaint.get('complaintId')}")
         initiate_feedback(next_complaint)
+
