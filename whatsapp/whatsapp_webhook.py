@@ -176,6 +176,8 @@ try:
         seconds=REMINDER_CRON_INTERVAL,
         id='feedback_reminders',
         replace_existing=True,
+        max_instances=2,     # Let APScheduler allow overlap — our own lock handles it
+        coalesce=True,       # Collapse missed runs into one
     )
     logging.info(f"Feedback reminder cron registered (every {REMINDER_CRON_INTERVAL}s)")
 except Exception as _cron_err:

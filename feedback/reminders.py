@@ -8,6 +8,7 @@ Called periodically by APScheduler (every 15 minutes).
 
 import logging
 import time
+import threading
 from datetime import datetime, timedelta
 
 from feedback.config import (
@@ -23,6 +24,9 @@ from feedback.messages import reminder_message
 
 logger = logging.getLogger(__name__)
 
+# Non-blocking lock — prevents concurrent runs without APScheduler's noisy WARNING
+_reminder_running = threading.Lock()
+
 
 def _send_wa(phone: str, text: str):
     """Send a WhatsApp message."""
@@ -31,6 +35,17 @@ def _send_wa(phone: str, text: str):
 
 
 def check_and_send_reminders():
+    """Entry point called by APScheduler. Skips silently if previous run is still active."""
+    if not _reminder_running.acquire(blocking=False):
+        logger.debug("Reminder check skipped — previous run still in progress")
+        return
+    try:
+        _check_and_send_reminders_impl()
+    finally:
+        _reminder_running.release()
+
+
+def _check_and_send_reminders_impl():
     """
     Check all active sessions and send reminders if due.
 
