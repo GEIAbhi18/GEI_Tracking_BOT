@@ -38,19 +38,7 @@ app = Flask(__name__)
 from feedback.routes import feedback_bp
 app.register_blueprint(feedback_bp)
 
-# ── Restore feedback sessions from sheet (background — does NOT block startup) ─
-def _restore_sessions_bg():
-    """Runs 10s after startup so Flask binds port first, then restores sessions."""
-    import time as _time
-    _time.sleep(10)
-    try:
-        from feedback.session_store import restore_sessions_from_sheet
-        restore_sessions_from_sheet()
-        logging.info("Feedback sessions restored from sheet.")
-    except Exception as _fb_init_err:
-        logging.warning(f"Feedback session restore skipped: {_fb_init_err}")
-
-threading.Thread(target=_restore_sessions_bg, daemon=True, name="session-restore").start()
+# ── Session restore + scheduler start are deferred — see _deferred_startup() below ─
 
 
 # ── Background Scheduler (shared for all cron jobs) ─────────────────────────
@@ -237,9 +225,32 @@ _bg_scheduler.add_job(
 )
 logging.info(f"Keep-alive self-ping registered (every {_KEEP_ALIVE_INTERVAL}s → {_RENDER_URL}/health)")
 
-# ── Start the scheduler ─────────────────────────────────────────────────────
-_bg_scheduler.start()
-logging.info("Background scheduler started")
+
+# ── Deferred Startup ────────────────────────────────────────────────────────
+# Start scheduler + restore sessions AFTER gunicorn binds the port.
+# This ensures Render's health check can respond immediately on deploy.
+def _deferred_startup():
+    import time as _time
+    _time.sleep(10)  # give gunicorn time to bind the port
+
+    # 1. Start the background scheduler
+    try:
+        _bg_scheduler.start()
+        logging.info("Background scheduler started (deferred)")
+    except Exception as _sched_err:
+        logging.error(f"Failed to start scheduler: {_sched_err}", exc_info=True)
+
+    # 2. Restore feedback sessions from Google Sheet
+    try:
+        from feedback.session_store import restore_sessions_from_sheet
+        restore_sessions_from_sheet()
+        logging.info("Feedback sessions restored from sheet.")
+    except Exception as _fb_err:
+        logging.warning(f"Feedback session restore skipped: {_fb_err}")
+
+
+threading.Thread(target=_deferred_startup, daemon=True, name="deferred-startup").start()
+logging.info("Deferred startup scheduled (scheduler + session restore in ~10s)")
 
 
 # ── Logging ──────────────────────────────────────────────────────────────────

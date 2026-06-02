@@ -1,8 +1,28 @@
 from supabase import create_client, Client
 from config import SUPABASE_URL, SUPABASE_KEY
 from datetime import datetime, timedelta
+import threading as _threading
 
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+class _LazySupabase:
+    """Lazy-init wrapper: creates the Supabase client on first use instead of
+    at import time, so gunicorn can bind the port without waiting for a
+    network round-trip to Supabase during module import."""
+    _client: Client = None
+    _lock = _threading.Lock()
+
+    def _init(self):
+        if self._client is None:
+            with self._lock:
+                if self._client is None:  # double-checked locking
+                    type(self)._client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        return self._client
+
+    def __getattr__(self, name):
+        return getattr(self._init(), name)
+
+
+supabase: Client = _LazySupabase()  # type: ignore[assignment]
 
 def _apply_project_task_numbers(tasks):
     if not tasks:
