@@ -132,6 +132,12 @@ async def handle_multi_update_confirmation(text, user_id, state, send_reply_func
     if choice == "yes":
         updates = state.get("pending_updates", [])
         u_info = get_user_by_telegram_id(user_id)
+        if not u_info:
+            try:
+                from whatsapp.task_assignment import get_user_by_whatsapp
+                u_info = get_user_by_whatsapp(str(user_id))
+            except Exception:
+                pass
         u_uuid = u_info['id'] if u_info else None
         
         from datetime import datetime

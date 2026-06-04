@@ -6,16 +6,29 @@ Updated for WhatsApp Flows — conversational Q&A messages removed.
 """
 
 
-def message_b(client_name: str, complaint_id: str) -> str:
+def message_b(client_name: str, complaint_id: str, sheet_updated: bool = True) -> str:
     """Thank You message sent after successful Flow form submission."""
-    return (
-        f"🙏 Thank you, {client_name}!\n\n"
-        f"Your feedback for complaint *{complaint_id}* has been "
-        f"officially recorded by the Good Earth Team.\n\n"
-        f"Your response helps us serve you better and improve "
-        f"our facility services continuously.\n\n"
-        f"— *Good Earth Infra Facilites Team* 🏢"
-    )
+    if sheet_updated:
+        return (
+            f"🙏 Thank you, {client_name}!\n\n"
+            f"Your feedback for complaint *{complaint_id}* has been "
+            f"officially recorded and our records have been updated. ✅\n\n"
+            f"Your feedback session is now *complete*.\n\n"
+            f"Your response helps us serve you better and improve "
+            f"our facility services continuously.\n\n"
+            f"— *Good Earth Infra Facilities Team* 🏢"
+        )
+    else:
+        return (
+            f"🙏 Thank you, {client_name}!\n\n"
+            f"Your feedback for complaint *{complaint_id}* has been "
+            f"received. ✅\n\n"
+            f"Your feedback session is now *complete*. "
+            f"Our team will update the records shortly.\n\n"
+            f"Your response helps us serve you better and improve "
+            f"our facility services continuously.\n\n"
+            f"— *Good Earth Infra Facilities Team* 🏢"
+        )
 
 
 def reminder_message(client_name: str, complaint_id: str) -> str:

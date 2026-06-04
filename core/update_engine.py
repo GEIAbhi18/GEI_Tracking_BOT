@@ -19,6 +19,22 @@ from core.error_messages import (
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_user_ue(user_id):
+    """Resolve user by telegram_id first, then fall back to whatsapp_number.
+    (Separate copy to avoid circular import with intent_handlers.)"""
+    u_info = get_user_by_telegram_id(user_id)
+    if u_info:
+        return u_info
+    try:
+        from whatsapp.task_assignment import get_user_by_whatsapp
+        u_info = get_user_by_whatsapp(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+    return None
+
 async def handle_message(text: str, user_id: int, images: list, send_reply_func):
     """
     Main message handler implementing the audit-compliant architecture:
@@ -649,7 +665,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             projects = get_projects()
             match = resolve_project(pq, projects)
                 
-            u_info = get_user_by_telegram_id(user_id)
+            u_info = _resolve_user_ue(user_id)
             if not match:
                 await send_reply_func(friendly_project_not_found(pq))
             elif not u_info:
@@ -665,7 +681,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
 
     elif action == "create_project":
         if step == "waiting_for_name":
-            u_info = get_user_by_telegram_id(user_id)
+            u_info = _resolve_user_ue(user_id)
             uid = u_info['id'] if u_info else None
             create_project_db(text, created_by=uid)
             clear_state(user_id)
@@ -891,8 +907,8 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             success = save_note(t_id, text)
             if not success:
                 # Create a placeholder update to hold the note
-                from db import save_update, get_user_by_telegram_id
-                u_info = get_user_by_telegram_id(user_id)
+                from db import save_update
+                u_info = _resolve_user_ue(user_id)
                 save_update(t_id, 0, "None", [], u_info['id'] if u_info else None)
                 save_note(t_id, text)
                 
@@ -942,7 +958,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     except:
                         progress = match.get('progress', 0) or 0
                     
-                    u_info = get_user_by_telegram_id(user_id)
+                    u_info = _resolve_user_ue(user_id)
                     emp_uuid = u_info['id'] if u_info else None
                     save_update(match['id'], progress, "None", img, emp_uuid, new_deadline=deadline)
                     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
@@ -973,7 +989,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 match = next((t for t in tasks if t['id'] == task_id), None)
                 if match:
                     add_blocker(match['id'], description)
-                    u_info = get_user_by_telegram_id(user_id)
+                    u_info = _resolve_user_ue(user_id)
                     save_update(match['id'], match.get('progress', 0), description, img, u_info['id'] if u_info else None)
                     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_blocker")
                     await send_reply_func(f"Blocker added successfully 🛑\nTask: {match['name']}\nIssue: {description}")

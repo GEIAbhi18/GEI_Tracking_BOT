@@ -17,6 +17,31 @@ from core.error_messages import (
 
 logger = logging.getLogger(__name__)
 
+
+def _resolve_user(user_id):
+    """Resolve a user by telegram_id first, then fall back to whatsapp_number.
+    
+    WhatsApp users pass their phone number (e.g. 919xxxxxxxxx) as user_id,
+    which won't match the telegram_id column. This helper ensures WhatsApp
+    users are correctly identified and linked to their updates.
+    """
+    # 1. Try Telegram ID (works for Telegram users)
+    u_info = get_user_by_telegram_id(user_id)
+    if u_info:
+        return u_info
+    
+    # 2. Fallback: try WhatsApp number (works for WhatsApp users)
+    try:
+        from whatsapp.task_assignment import get_user_by_whatsapp
+        u_info = get_user_by_whatsapp(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+    
+    return None
+
+
 async def handle_task_update(entities, user_id, context, send_reply_func, images=None):
     task_name = entities.get("task_name")
     progress = entities.get("progress")
@@ -497,7 +522,7 @@ def build_grouped_tasks_list_py(tasks):
     return msg.strip()
 
 async def handle_query_tasks(entities, user_id, context, send_reply_func):
-    u_info = get_user_by_telegram_id(user_id)
+    u_info = _resolve_user(user_id)
     filters = entities.get("query_filters") or {}
     
     # Same logic as JS: check if all tasks were requested
@@ -699,7 +724,7 @@ async def handle_reply_ticket(entities, user_id, context, send_reply_func):
     tickets = get_open_tickets()
     if ticket_index and 1 <= ticket_index <= len(tickets):
         target_ticket = tickets[ticket_index - 1]
-        u_info = get_user_by_telegram_id(user_id)
+        u_info = _resolve_user(user_id)
         if u_info:
             add_ticket_message(target_ticket['id'], u_info['id'], reply_msg)
             await send_reply_func(f"✅ Reply added to Ticket {ticket_index}.")
@@ -1075,20 +1100,10 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
     # Resolve creator's DB UUID (needed for WA assignment flow)
     creator_db_id = None
     try:
-        creator_info = get_user_by_telegram_id(user_id)
+        creator_info = _resolve_user(user_id)
         creator_db_id = creator_info['id'] if creator_info else None
     except Exception:
         pass
-
-    # For WhatsApp users: try resolving by phone number if telegram lookup failed
-    if not creator_db_id:
-        try:
-            from whatsapp.task_assignment import get_user_by_whatsapp
-            wa_user = get_user_by_whatsapp(str(user_id))
-            if wa_user:
-                creator_db_id = wa_user['id']
-        except Exception:
-            pass
 
     # Resolve project — try project_name_extracted first, then task_name as fallback
     project_query = entities.get("project_name_extracted") or entities.get("project_name") or entities.get("task_name")
@@ -1193,7 +1208,7 @@ async def handle_view_projects(entities, user_id, context, send_reply_func):
     await send_reply_func(msg)
 
 async def handle_greeting(entities, user_id, context, send_reply_func):
-    u_info = get_user_by_telegram_id(user_id)
+    u_info = _resolve_user(user_id)
     name = u_info['name'] if u_info else "there"
     role = u_info['role'] if u_info else "normal"
     
@@ -1297,7 +1312,7 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     except:
         progress = match.get('progress', 0) or 0
         
-    u_info = get_user_by_telegram_id(user_id)
+    u_info = _resolve_user(user_id)
     emp_uuid = u_info['id'] if u_info else None
     
     save_update(match['id'], progress, "None", images or [], emp_uuid, new_deadline=deadline)
@@ -1350,7 +1365,7 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     add_blocker(match['id'], description)
     
     # Also log an update in history
-    u_info = get_user_by_telegram_id(user_id)
+    u_info = _resolve_user(user_id)
     save_update(match['id'], match.get('progress', 0), description, images or [], u_info['id'] if u_info else None)
     
     # Update Context

@@ -270,19 +270,31 @@ def _complete_feedback(phone: str, session: dict,
         "Resolution Score": score_q1,
         "Professionalism Score": score_q2,
         "Overall Feedback Score": score_q3,
+        "Average Score": overall_score,
         "Remarks": tenant_comment,
         "Sentiment": sentiment,
+        "Escalation Status": escalation_status,
+        "Escalation Reason": escalation_reason,
     }
 
+    sheet_write_ok = False
     try:
         from feedback.sheets import (
             update_building_sheet_feedback,
+            update_master_feedback,
             append_escalation,
         )
 
+        # 4a. Write to building sheet (GEBB1 / GEBB2 / GETT)
         update_building_sheet_feedback(
             complaint_id, session.get("building", ""), feedback_data
         )
+
+        # 4b. Write to MASTER sheet (was missing — MASTER stayed at "Sent" forever)
+        update_master_feedback(complaint_id, feedback_data)
+
+        sheet_write_ok = True
+        logger.info(f"Sheet write-back completed for {complaint_id}")
 
         # 5. Write escalation if needed
         if should_escalate:
@@ -306,9 +318,9 @@ def _complete_feedback(phone: str, session: dict,
     except Exception as e:
         logger.error(f"Sheet write-back failed for {complaint_id}: {e}", exc_info=True)
 
-    # 6. Send Thank You (Message B)
+    # 6. Send Thank You (Message B) — ALWAYS send, even if sheet write failed
     try:
-        _send_wa(phone, message_b(session["clientName"], complaint_id))
+        _send_wa(phone, message_b(session["clientName"], complaint_id, sheet_write_ok))
     except Exception as e:
         logger.error(f"Failed to send thank-you for {complaint_id}: {e}")
 
