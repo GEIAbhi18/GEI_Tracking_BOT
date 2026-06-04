@@ -185,33 +185,49 @@ def restore_sessions_from_sheet():
 
         with _lock:
             for s in sessions:
-                phone = normalize_phone(s.get("clientPhone", ""))
-                if not phone or s.get("stage") == STAGE_DONE:
+                phone = normalize_phone(s.get("Phone", ""))
+                if not phone or s.get("Status") == STAGE_DONE:
                     continue
 
+                # Reconstruct session dict mapping sheet headers to internal camelCase keys
+                session_dict = {
+                    "clientPhone": phone,
+                    "complaintId": s.get("Complaint ID", ""),
+                    "building": s.get("Building", ""),
+                    "clientName": s.get("Client Name", ""),
+                    "unitNo": s.get("Unit No", ""),
+                    "complaintNature": s.get("Complaint Nature", ""),
+                    "rowIndex": s.get("Row Index", ""),
+                    "feedbackSentAt": s.get("Sent At", ""),
+                    "reminderCount": int(s.get("Reminder Count", 0) or 0),
+                    "lastReminderAt": s.get("Last Reminder At", ""),
+                    "status": s.get("Status", "sent"),
+                    "stage": STAGE_FLOW_SENT,
+                }
+
                 # Check session age — auto-expire stale sessions
-                sent_at_str = s.get("feedbackSentAt", "")
+                sent_at_str = session_dict.get("feedbackSentAt", "")
                 if sent_at_str:
                     try:
                         sent_time = datetime.strptime(str(sent_at_str), "%Y-%m-%d %H:%M:%S")
                         age_hours = (now - sent_time).total_seconds() / 3600
                         if age_hours > _MAX_SESSION_AGE_HOURS:
                             logger.info(
-                                f"Auto-expiring stale session {s.get('complaintId')} "
+                                f"Auto-expiring stale session {session_dict.get('complaintId')} "
                                 f"(age: {age_hours:.1f}h > {_MAX_SESSION_AGE_HOURS}h)"
                             )
                             expired += 1
                             # Mark as expired in background — don't block startup
                             threading.Thread(
                                 target=_expire_stale_session,
-                                args=(phone, s),
+                                args=(phone, session_dict),
                                 daemon=True,
                             ).start()
                             continue
                     except (ValueError, TypeError):
                         pass  # Can't parse date — restore it anyway
 
-                _sessions[phone] = s
+                _sessions[phone] = session_dict
                 restored += 1
 
         logger.info(f"Restored {restored} sessions from sheet backup ({expired} auto-expired)")
