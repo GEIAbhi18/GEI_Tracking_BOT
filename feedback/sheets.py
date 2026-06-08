@@ -124,6 +124,10 @@ def _get_worksheet(sheet_name: str, auto_create: bool = False):
     if sheet_name in _worksheets:
         return _worksheets[sheet_name]
 
+    # Pre-fetch the spreadsheet so the lock inside _get_spreadsheet() is acquired and released
+    # before we lock again for fetch_ws.
+    _get_spreadsheet()
+
     def fetch_ws():
         try:
             return _get_spreadsheet().worksheet(sheet_name)
