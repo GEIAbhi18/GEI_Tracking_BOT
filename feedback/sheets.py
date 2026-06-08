@@ -42,28 +42,41 @@ _sheets_lock = threading.Lock()  # Serialise all Sheets API calls to avoid concu
 
 
 def _retry_on_429(func, *args, **kwargs):
-    """Execute func with serialisation + exponential-backoff retry on HTTP 429."""
+    """Execute func with serialisation + exponential-backoff retry on HTTP 429.
+
+    Lock is acquired only for the actual API call and released BEFORE sleeping
+    on 429 backoff so other threads can make progress.
+    Lock acquisition has a 30-second timeout to prevent infinite blocking.
+    """
     max_retries = 5
     backoff = 2.0  # start with 2 seconds
-    with _sheets_lock:  # Only one Sheets call at a time across all threads
-        for attempt in range(max_retries):
-            try:
-                return func(*args, **kwargs)
-            except gspread.exceptions.APIError as e:
-                status = None
-                if getattr(e, "response", None) is not None:
-                    status = e.response.status_code
-                if status == 429:
-                    logger.warning(
-                        f"Google Sheets API 429 rate limit exceeded. "
-                        f"Retrying in {backoff}s... (Attempt {attempt+1}/{max_retries})"
-                    )
-                    time.sleep(backoff)
-                    backoff *= 2.0  # exponential backoff
-                else:
-                    raise
-        # Final attempt after max retries
-        return func(*args, **kwargs)
+    for attempt in range(max_retries + 1):  # +1 for the final attempt
+        acquired = _sheets_lock.acquire(timeout=30)
+        if not acquired:
+            logger.error(
+                f"Sheets lock timeout (30s) — could not acquire lock for "
+                f"{getattr(func, '__name__', func)}. Another operation is blocking."
+            )
+            raise RuntimeError("Google Sheets lock acquisition timed out after 30s")
+        try:
+            result = func(*args, **kwargs)
+            return result
+        except gspread.exceptions.APIError as e:
+            status = None
+            if getattr(e, "response", None) is not None:
+                status = e.response.status_code
+            if status == 429 and attempt < max_retries:
+                logger.warning(
+                    f"Google Sheets API 429 rate limit exceeded. "
+                    f"Retrying in {backoff}s... (Attempt {attempt+1}/{max_retries})"
+                )
+            else:
+                raise
+        finally:
+            _sheets_lock.release()  # Always release before sleeping
+        # Sleep OUTSIDE the lock so other threads can proceed
+        time.sleep(backoff)
+        backoff *= 2.0  # exponential backoff
 
 
 def _get_client() -> gspread.Client:

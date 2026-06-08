@@ -22,6 +22,7 @@ import threading
 # Ensure project root is in sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+# pyrefly: ignore [missing-import]
 from flask import Flask, request, jsonify
 from core.logic import process_user_message
 from core.error_messages import friendly_system_error
@@ -44,6 +45,7 @@ app.register_blueprint(feedback_bp)
 # ── Background Scheduler (shared for all cron jobs) ─────────────────────────
 import pytz
 from config import TIMEZONE
+# pyrefly: ignore [missing-import]
 from apscheduler.schedulers.background import BackgroundScheduler
 
 try:
@@ -298,6 +300,8 @@ def handle_whatsapp_message():
         if not body:
             return jsonify({"status": "no data"}), 200
 
+        # print(flush=True) guarantees visibility on Render — logger.info is often invisible
+        print(f"[WEBHOOK] POST /webhook received", flush=True)
         logger.info(f"Incoming WA payload: {str(body)[:500]}")
 
         for entry in body.get("entry", []):
@@ -306,18 +310,23 @@ def handle_whatsapp_message():
 
                 # ── Skip delivery/read status updates ────────────────────────
                 if value.get("statuses"):
+                    print(f"[WEBHOOK] Skipping status update (delivery/read receipt)", flush=True)
                     continue
 
                 messages = value.get("messages", [])
                 if not messages:
+                    print(f"[WEBHOOK] No messages in this change entry", flush=True)
                     continue
 
                 for message in messages:
                     sender = message.get("from", "")
                     msg_type = message.get("type", "")
+                    print(f"[WEBHOOK] Message from={sender} type={msg_type}", flush=True)
 
                     # ── Dispatch to background thread to prevent Meta webhook timeout ─
                     if msg_type == "interactive":
+                        i_type = message.get("interactive", {}).get("type", "unknown")
+                        print(f"[WEBHOOK] Interactive sub-type={i_type} from {sender} — dispatching to background", flush=True)
                         threading.Thread(target=_handle_interactive, args=(sender, message), daemon=False).start()
 
                     # ── Voice note (audio) ─────────────────────────────────────
@@ -359,6 +368,7 @@ def handle_whatsapp_message():
 
     except Exception as e:
         logger.error(f"Webhook error: {e}", exc_info=True)
+        print(f"[WEBHOOK] EXCEPTION: {e}", flush=True)
         return jsonify({"status": "error"}), 200
 
 
@@ -396,6 +406,7 @@ def _handle_interactive(sender: str, message: dict):
     try:
         interactive = message.get("interactive", {})
         i_type = interactive.get("type")
+        print(f"[INTERACTIVE] Processing type={i_type} from {sender}", flush=True)
 
         if i_type == "button_reply":
             button_id = interactive["button_reply"]["id"]
@@ -404,13 +415,18 @@ def _handle_interactive(sender: str, message: dict):
 
         elif i_type == "nfm_reply":
             # ── WhatsApp Flow form submission ─────────────────────────
+            print(f"[INTERACTIVE] nfm_reply detected from {sender} — routing to feedback engine", flush=True)
             _handle_flow_response(sender, interactive)
 
         else:
             logger.warning(f"Unhandled interactive type '{i_type}' from {sender}")
+            print(f"[INTERACTIVE] UNKNOWN type '{i_type}' from {sender}", flush=True)
 
-    except (KeyError, TypeError) as e:
-        logger.error(f"Error parsing interactive message from {sender}: {e}", exc_info=True)
+    except Exception as e:
+        # CRITICAL FIX: Was only catching (KeyError, TypeError) — any other
+        # exception silently killed the thread with zero log output.
+        logger.error(f"Error in _handle_interactive from {sender}: {e}", exc_info=True)
+        print(f"[INTERACTIVE] EXCEPTION from {sender}: {type(e).__name__}: {e}", flush=True)
 
 
 def _handle_flow_response(sender: str, interactive: dict):
@@ -425,6 +441,7 @@ def _handle_flow_response(sender: str, interactive: dict):
     try:
         nfm_reply = interactive.get("nfm_reply", {})
         response_json_str = nfm_reply.get("response_json", "{}")
+        print(f"[FLOW] Raw response_json from {sender}: {response_json_str[:500]}", flush=True)
         
         # Parse the response JSON string
         if isinstance(response_json_str, str):
@@ -432,23 +449,30 @@ def _handle_flow_response(sender: str, interactive: dict):
         else:
             response_data = response_json_str
         
+        print(f"[FLOW] Parsed response from {sender}: {response_data}", flush=True)
         logger.info(f"Flow response from {sender}: {response_data}")
         
         # Route to feedback engine
         from feedback.engine import handle_flow_response
+        print(f"[FLOW] Calling handle_flow_response for {sender}...", flush=True)
         handled = handle_flow_response(sender, response_data)
         
         if handled:
+            print(f"[FLOW] ✅ Flow response processed successfully for {sender}", flush=True)
             logger.info(f"Flow response processed successfully for {sender}")
         else:
+            print(f"[FLOW] ⚠️ No active session found for {sender}", flush=True)
             logger.warning(f"Flow response from {sender} — no active session found")
     
     except json.JSONDecodeError as e:
         logger.error(f"Failed to parse Flow response JSON from {sender}: {e}")
-    except ImportError:
-        logger.warning("Feedback module not available — cannot process Flow response")
+        print(f"[FLOW] JSON PARSE ERROR from {sender}: {e}", flush=True)
+    except ImportError as e:
+        logger.warning(f"Feedback module not available — cannot process Flow response: {e}")
+        print(f"[FLOW] IMPORT ERROR: {e}", flush=True)
     except Exception as e:
         logger.error(f"Error handling Flow response from {sender}: {e}", exc_info=True)
+        print(f"[FLOW] EXCEPTION from {sender}: {type(e).__name__}: {e}", flush=True)
 
 
 def _handle_text(sender: str, text: str, voice_note: bool = False):
