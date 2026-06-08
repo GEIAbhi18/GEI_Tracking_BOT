@@ -78,6 +78,7 @@ def initiate_feedback(complaint_data: dict) -> dict:
             complaint_id=session["complaintId"],
             complaint_nature=session["complaintNature"],
             unit_no=session["unitNo"],
+            complaint_details=session.get("complaintDetails", ""),
         )
         if not sent:
             print(f"[FEEDBACK] ⚠️ Flow template send FAILED for {complaint_id} → {phone}", flush=True)

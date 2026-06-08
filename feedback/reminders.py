@@ -137,6 +137,7 @@ def _send_reminder(phone: str, session: dict, reminder_num: int):
             complaint_id=complaint_id,
             complaint_nature=session.get("complaintNature", ""),
             unit_no=session.get("unitNo", ""),
+            complaint_details=session.get("complaintDetails", ""),
         )
     except Exception as e:
         logger.error(f"Failed to resend Flow template in reminder for {complaint_id}: {e}")

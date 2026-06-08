@@ -54,6 +54,7 @@ def send_flow_template(
     complaint_id: str,
     complaint_nature: str,
     unit_no: str,
+    complaint_details: str = "",
 ) -> bool:
     """
     Send the gei_feedback_request WhatsApp template message with Flow button.
@@ -96,6 +97,8 @@ def send_flow_template(
         f"Client Name: {client_name}\n"
         f"Number: {phone}\n"
         f"Unit No: {unit_no}\n"
+        f"Nature: {complaint_nature}\n"
+        f"Sub Nature: {complaint_details}\n"
         f"Closed At: {closed_at}"
     )
 
