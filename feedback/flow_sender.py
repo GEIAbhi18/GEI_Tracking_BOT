@@ -82,8 +82,22 @@ def send_flow_template(
         logger.error("WHATSAPP_FLOW_TEMPLATE_NAME not configured")
         return False
 
+    from datetime import datetime
+    import pytz
+    
+    ist = pytz.timezone('Asia/Kolkata')
+    closed_at = datetime.now(ist).strftime("%d-%m-%Y %I:%M %p")
+
     # Bundle the context into the single {{1}} variable allowed by the Meta template
-    bundled_text = f"{client_name} (Complaint: {complaint_id} — {complaint_nature})"
+    bundled_text = (
+        f"{client_name},\n"
+        f"A complaint has been successfully resolved in FacTech.\n\n"
+        f"Complaint ID: {complaint_id}\n"
+        f"Client Name: {client_name}\n"
+        f"Number: {phone}\n"
+        f"Unit No: {unit_no}\n"
+        f"Closed At: {closed_at}"
+    )
 
     payload = {
         "messaging_product": "whatsapp",
