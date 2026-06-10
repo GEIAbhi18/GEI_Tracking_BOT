@@ -240,8 +240,19 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
     Same logic as update_master_feedback but targets the building sheet.
     """
     sheet_name = BUILDING_SHEETS.get(building)
+    
     if not sheet_name:
-        logger.warning(f"No sheet mapping for building '{building}'")
+        # Fallback: Infer building from complaint_id prefix if the building parameter is invalid
+        prefix = str(complaint_id).split('-')[0].upper()
+        if prefix == 'B1':
+            sheet_name = BUILDING_SHEETS.get('GEBB1')
+        elif prefix == 'B2':
+            sheet_name = BUILDING_SHEETS.get('GEBB2')
+        elif prefix in ('TT', 'T1'):
+            sheet_name = BUILDING_SHEETS.get('GETT')
+            
+    if not sheet_name:
+        logger.warning(f"No sheet mapping for building '{building}' and complaint_id '{complaint_id}'")
         return False
     
     try:

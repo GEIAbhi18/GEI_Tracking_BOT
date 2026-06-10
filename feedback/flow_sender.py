@@ -89,17 +89,14 @@ def send_flow_template(
     ist = pytz.timezone('Asia/Kolkata')
     closed_at = datetime.now(ist).strftime("%d-%m-%Y %I:%M %p")
 
-    # Bundle the context into the single {{1}} variable allowed by the Meta template
+    # Bundle the context into the single {{1}} variable allowed by the Meta template (no newlines allowed)
     bundled_text = (
-        f"{client_name},\n"
-        f"A complaint has been successfully resolved in FacTech.\n\n"
-        f"Complaint ID: {complaint_id}\n"
-        f"Client Name: {client_name}\n"
-        f"Number: {phone}\n"
-        f"Unit No: {unit_no}\n"
-        f"Nature: {complaint_nature}\n"
-        f"Sub Nature: {complaint_details}\n"
-        f"Closed At: {closed_at}"
+        f"{client_name}, a complaint has been resolved in FacTech. "
+        f"ID: {complaint_id} | "
+        f"Unit: {unit_no} | "
+        f"Nature: {complaint_nature} | "
+        f"Sub Nature: {complaint_details} | "
+        f"Closed: {closed_at}"
     )
 
     payload = {
