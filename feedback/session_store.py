@@ -204,6 +204,29 @@ def restore_sessions_from_sheet():
                     "status": s.get("Status", "sent"),
                     "stage": STAGE_FLOW_SENT,
                 }
+                
+                # --- FIX SWAPPED IN EXISTING SESSIONS ---
+                c_id_raw = session_dict["complaintId"]
+                bld_raw = session_dict["building"]
+                if c_id_raw.isdigit() and len(c_id_raw) >= 10 and ('-' in bld_raw):
+                    real_complaint = bld_raw
+                    prefix = real_complaint.split('-')[0].upper()
+                    if prefix == 'B1':
+                        real_building = 'GEBB1'
+                    elif prefix == 'B2':
+                        real_building = 'GEBB2'
+                    elif prefix in ('TT', 'T1'):
+                        real_building = 'GETT'
+                    else:
+                        real_building = bld_raw
+                        
+                    logger.warning(f"Auto-correcting swapped fields on restore: phone={c_id_raw}, complaintId={real_complaint}, building={real_building}")
+                    session_dict["clientPhone"] = c_id_raw
+                    session_dict["complaintId"] = real_complaint
+                    session_dict["building"] = real_building
+                    # If the phone was stored under phone properly, maybe only complaintId and building were swapped. 
+                    # The logic above overwrites clientPhone with the number from complaintId, which is correct based on the bug.
+                # ----------------------------------------
 
                 # Check session age — auto-expire stale sessions
                 sent_at_str = session_dict.get("feedbackSentAt", "")

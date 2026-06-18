@@ -239,6 +239,24 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
     Update feedback columns in the building-specific sheet (GEBB1/GEBB2/GETT).
     Same logic as update_master_feedback but targets the building sheet.
     """
+    
+    # --- FIX SWAPPED ARGUMENTS (Safeguard for lingering bad sessions) ---
+    c_id_raw = str(complaint_id)
+    bld_raw = str(building)
+    if c_id_raw.isdigit() and len(c_id_raw) >= 10 and ('-' in bld_raw):
+        logger.warning(f"update_building_sheet_feedback: swapped arguments detected. complaint_id={c_id_raw}, building={bld_raw}")
+        complaint_id = bld_raw
+        prefix = complaint_id.split('-')[0].upper()
+        if prefix == 'B1':
+            building = 'GEBB1'
+        elif prefix == 'B2':
+            building = 'GEBB2'
+        elif prefix in ('TT', 'T1'):
+            building = 'GETT'
+        else:
+            building = bld_raw
+    # --------------------------------------------------------------------
+
     sheet_name = BUILDING_SHEETS.get(building)
     
     if not sheet_name:

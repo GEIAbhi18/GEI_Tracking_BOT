@@ -47,6 +47,31 @@ def initiate_feedback(complaint_data: dict) -> dict:
 
     Returns: {"status": "ok"/"queued"/"error", "message": str}
     """
+    # --- Fix swapped fields from Google Apps Script ---
+    c_id_raw = str(complaint_data.get("complaintId", "")).strip()
+    bld_raw = str(complaint_data.get("building", "")).strip()
+    
+    if c_id_raw.isdigit() and len(c_id_raw) >= 10 and ('-' in bld_raw):
+        real_phone = c_id_raw
+        real_complaint = bld_raw
+        
+        prefix = real_complaint.split('-')[0].upper()
+        if prefix == 'B1':
+            real_building = "GEBB1"
+        elif prefix == 'B2':
+            real_building = "GEBB2"
+        elif prefix in ('TT', 'T1'):
+            real_building = "GETT"
+        else:
+            real_building = bld_raw
+            
+        logger.warning(f"Auto-correcting swapped fields in initiate_feedback: phone={real_phone}, complaintId={real_complaint}, building={real_building}")
+        
+        complaint_data["clientPhone"] = real_phone
+        complaint_data["complaintId"] = real_complaint
+        complaint_data["building"] = real_building
+    # --------------------------------------------------
+
     phone = normalize_phone(complaint_data.get("clientPhone", ""))
     complaint_id = complaint_data.get("complaintId", "")
 
