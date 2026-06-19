@@ -244,7 +244,7 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
     c_id_raw = str(complaint_id)
     bld_raw = str(building)
     if c_id_raw.isdigit() and len(c_id_raw) >= 10 and ('-' in bld_raw):
-        logger.warning(f"update_building_sheet_feedback: swapped arguments detected. complaint_id={c_id_raw}, building={bld_raw}")
+        logger.debug(f"update_building_sheet_feedback: auto-correcting swapped arguments. complaint_id={c_id_raw}, building={bld_raw}")
         complaint_id = bld_raw
         prefix = complaint_id.split('-')[0].upper()
         if prefix == 'B1':
@@ -509,9 +509,33 @@ def load_pending_sessions() -> list:
             if not complaint_id or status == "done":
                 continue
             
+            building = str(rec.get("Building", ""))
+
+            # --- Fix swapped fields in stale Pending Feedback rows ---
+            if complaint_id.isdigit() and len(complaint_id) >= 10 and ('-' in building):
+                real_complaint = building
+                prefix = real_complaint.split('-')[0].upper()
+                if prefix == 'B1':
+                    real_building = 'GEBB1'
+                elif prefix == 'B2':
+                    real_building = 'GEBB2'
+                elif prefix in ('TT', 'T1'):
+                    real_building = 'GETT'
+                else:
+                    real_building = building
+
+                logger.info(
+                    f"Auto-correcting swapped fields in pending session: "
+                    f"phone={complaint_id}, complaintId={real_complaint}, building={real_building}"
+                )
+                phone = complaint_id if not phone else phone
+                complaint_id = real_complaint
+                building = real_building
+            # --------------------------------------------------------
+
             session = {
                 "complaintId": complaint_id,
-                "building": str(rec.get("Building", "")),
+                "building": building,
                 "clientPhone": phone,
                 "clientName": str(rec.get("Client Name", "")),
                 "unitNo": str(rec.get("Unit No", "")),
