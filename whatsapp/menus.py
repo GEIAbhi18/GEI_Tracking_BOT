@@ -5,9 +5,20 @@ def send_main_menu(to: str, user: dict):
     role = user.get("role", "Guest")
     
     if role == "Guest":
-        from whatsapp.ux import send_text
-        send_text(to, "Welcome to GEI! We are currently operating exclusively through our internal portal. If you need assistance, please contact support.")
-        return True
+        from whatsapp.ux import send_list_message
+        rows = [
+            {"id": "guest_office", "title": "🏢 Office Spaces"},
+            {"id": "guest_retail", "title": "🛍️ Retail Spaces"},
+            {"id": "guest_leasing", "title": "🤝 Leasing Options"},
+            {"id": "guest_about", "title": "ℹ️ About Us"},
+            {"id": "guest_careers", "title": "💼 Careers"}
+        ]
+        if user.get("original_role") == "Developer":
+            rows.append({"id": "menu_admin", "title": "⚙️ System Admin (Exit Guest)"})
+            
+        sections = [{"title": "Explore GEI", "rows": rows}]
+        return send_list_message(to, "Welcome to Good Earth Infra! 🌍\n\nWe specialize in premium commercial real estate, office & retail spaces in Gurugram.\n\nHow can we help you today?", "Explore Options", sections)
+
         
     rows = [
         {"id": "menu_team_tasks", "title": "📋 Team Tasks"},
@@ -20,7 +31,7 @@ def send_main_menu(to: str, user: dict):
     if role in ["Director", "Developer"]:
         rows.append({"id": "menu_analytics", "title": "📈 Analytics"})
         
-    if role == "Developer":
+    if role == "Developer" or user.get("original_role") == "Developer":
         rows.append({"id": "menu_admin", "title": "⚙️ System Admin"})
         
     sections = [{"title": "Main Menu", "rows": rows}]

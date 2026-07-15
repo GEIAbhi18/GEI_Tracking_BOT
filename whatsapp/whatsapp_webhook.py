@@ -546,7 +546,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
 
     # 1. Check WA State Machine for Multi-Step flows
     from db import supabase
-    state_res = supabase.table("wa_task_states").select("*").eq("phone", sender).execute()
+    state_res = supabase.table("wa_task_states").select("*").eq("whatsapp_number", sender).execute()
     if state_res.data:
         wa_state = state_res.data[0]
         action = wa_state.get("action")
@@ -556,7 +556,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             from tasks.timeline import add_timeline_event
             user_id = supabase.table("users").select("id").eq("whatsapp_number", sender).execute().data[0]["id"]
             add_timeline_event(task_id, user_id, "Note added", note=text)
-            supabase.table("wa_task_states").delete().eq("phone", sender).execute()
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
             from whatsapp.ux import send_text
             send_text(sender, "✅ Note added successfully!")
             return
@@ -573,7 +573,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                     return
                     
                 orchestrate_set_reminder({"id": user_id}, task_id, parsed_time)
-                supabase.table("wa_task_states").delete().eq("phone", sender).execute()
+                supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
                 from whatsapp.ux import send_text
                 send_text(sender, f"✅ Reminder set successfully for: {parsed_time}")
             except Exception as e:
@@ -581,11 +581,34 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 send_text(sender, f"Failed to set reminder: {e}")
             return
             
-        elif action == "WAITING_FOR_TASK_TITLE":
-            # Just an example implementation branch
-            supabase.table("wa_task_states").delete().eq("phone", sender).execute()
+        elif action in ["WAITING_FOR_PERSONAL_TASK_TITLE", "WAITING_FOR_TEAM_TASK_TITLE"]:
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
             from whatsapp.ux import send_text
-            send_text(sender, f"Got it! Task '{text}' creation flow will continue...")
+            
+            task_type = "PERSONAL" if action == "WAITING_FOR_PERSONAL_TASK_TITLE" else "PROJECT"
+            try:
+                from db import add_task
+                from auth.middleware import authenticate_whatsapp_request
+                
+                # Fetch the correct user considering impersonation
+                user_info = authenticate_whatsapp_request(sender)
+                user_id = user_info["id"] if user_info else None
+                
+                new_task = add_task(
+                    project_id=None,
+                    name=text,
+                    assigned_by=user_id,
+                    assigned_to=user_id if task_type == "PERSONAL" else None,
+                    task_type=task_type
+                )
+                
+                if new_task:
+                    send_text(sender, f"✅ {task_type.capitalize()} Task '{text}' created successfully!")
+                else:
+                    send_text(sender, "Failed to create task in the database. Contact an admin.")
+            except Exception as e:
+                logger.error(f"Error creating task: {e}")
+                send_text(sender, "An error occurred while creating the task.")
             return
 
 

@@ -557,27 +557,36 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
     # Not Kanav "all tasks"
     target_user_id = u_info['id'] if u_info else None
     
-    # If explicitly targeting kanav or asif but we are not there, try strictly checking logic
     tasks = get_all_tasks()
-    if explicit_assignee == 'kanav':
-        tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'kanav']
-    elif explicit_assignee == 'asif':
-        tasks = [t for t in tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif') or not t.get('assigned_to_user')]
-    elif (requester == 'Asif' and not explicit_assignee and not is_all):
-        # Only restrict to self if they specifically said 'my tasks' or didn't use 'view all'
-        # Actually standard 'show tasks' for Asif we will now show everything if they want a common view
-        # But for strictly personal lists we use this:
-        if "my tasks" in raw_message:
-            tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif']
-        else:
-            # Default to showing everything since the user asked if 'anyone' sees all
-            pass 
-    elif target_user_id and u_info and u_info['role'] != 'director' and not is_all:
-        tasks = get_tasks_for_user(target_user_id)
+    
+    if "show team tasks" in raw_message:
+        # Show all tasks that are not strictly personal, or show everything
+        tasks = [t for t in tasks if t.get('task_type') != 'PERSONAL']
+        
+    elif "show my personal tasks" in raw_message:
+        # Show only personal tasks created by the user
+        tasks = [t for t in tasks if t.get('task_type') == 'PERSONAL' and str(t.get('created_by')) == str(target_user_id)]
+        
+    else:
+        # Legacy/other filtering
+        if explicit_assignee == 'kanav':
+            tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'kanav']
+        elif explicit_assignee == 'asif':
+            tasks = [t for t in tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif') or not t.get('assigned_to_user')]
+        elif (requester == 'Asif' and not explicit_assignee and not is_all):
+            if "my tasks" in raw_message:
+                tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif']
+        elif target_user_id and u_info and u_info['role'] != 'director' and not is_all:
+            tasks = get_tasks_for_user(target_user_id)
 
     filtered = filter_tasks(tasks, filters)
     if not filtered:
-        await send_reply_func("No tasks found matching that criteria — try 'show my tasks' to see everything.")
+        if "my personal tasks" in raw_message or explicit_assignee == str(requester).lower():
+            await send_reply_func("No tasks assigned to you and no personal tasks.")
+        elif "team tasks" in raw_message:
+            await send_reply_func("There are no team tasks available.")
+        else:
+            await send_reply_func("No tasks found matching that criteria — try 'show my tasks' to see everything.")
         return
         
     msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"

@@ -28,16 +28,108 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
     # ── Main Menu Routing ────────────────────────────────────────────────────
     if button_id.startswith("menu_"):
         if button_id == "menu_team_tasks":
-            send_text(sender_phone, "Fetching your Team Tasks...")
-            # Trigger list team tasks logic
+            from whatsapp.ux import send_text
+            import asyncio
+            from core.logic import process_user_message
+            async def _send_reply(text=None, document=None, target_user_id=None):
+                if text: send_text(sender_phone, text)
+            asyncio.run(process_user_message(sender_phone, "show team tasks", _send_reply))
+            
         elif button_id == "menu_my_tasks":
-            send_text(sender_phone, "Fetching your Personal Tasks...")
-            # Trigger list personal tasks logic
+            from whatsapp.ux import send_text
+            import asyncio
+            from core.logic import process_user_message
+            async def _send_reply(text=None, document=None, target_user_id=None):
+                if text: send_text(sender_phone, text)
+            asyncio.run(process_user_message(sender_phone, "show my personal tasks", _send_reply))
+            
         elif button_id == "menu_create_task":
-            send_text(sender_phone, "What is the title of the new task?")
-            set_wa_state(sender_phone, "WAITING_FOR_TASK_TITLE")
+            from whatsapp.ux import send_interactive_buttons
+            buttons = [
+                {"id": "create_task_personal", "title": "Personal Task"},
+                {"id": "create_task_team", "title": "Team Task"}
+            ]
+            send_interactive_buttons(sender_phone, "What type of task do you want to create?", buttons)
+            
+        elif button_id == "menu_admin":
+            if user.get("role") != "Developer" and user.get("original_role") != "Developer":
+                send_text(sender_phone, "You do not have permission to access System Admin.")
+                return
+            from whatsapp.ux import send_list_message
+            sections = [{"title": "Switch User", "rows": [
+                {"id": "admin_switch_asif", "title": "Asif (Project Team)"},
+                {"id": "admin_switch_abhijeet", "title": "Abhijeet (Tech)"},
+                {"id": "admin_switch_kanav", "title": "Kanav (Director)"},
+                {"id": "admin_switch_guest", "title": "Guest (External)"}
+            ]}]
+            send_list_message(sender_phone, "Admin Panel: Select a user to impersonate for testing.", "Select User", sections)
+            
+        elif button_id == "menu_notifications":
+            send_text(sender_phone, "🔔 *Notifications*\n\nYou currently have no new notifications. Activity on your assigned tasks will appear here.")
+            
+        elif button_id == "menu_analytics":
+            send_text(sender_phone, "📈 *Analytics*\n\nYour dashboard is being generated. This feature is currently in Beta and will show your weekly task velocity soon!")
+            
         else:
             send_text(sender_phone, f"You selected: {button_id} (Coming soon)")
+        return
+        
+    # ── Admin Switch Routing ─────────────────────────────────────────────────
+    if button_id.startswith("admin_switch_"):
+        if user.get("role") != "Developer" and user.get("original_role") != "Developer":
+            send_text(sender_phone, "Unauthorized.")
+            return
+            
+        target = button_id.replace("admin_switch_", "")
+        target_id = None
+        
+        if target == "guest":
+            target_id = "00000000-0000-0000-0000-000000000000"
+        else:
+            from db import supabase
+            # Find the target user by name
+            r = supabase.table("users").select("id").ilike("name", f"%{target}%").execute()
+            if r.data:
+                target_id = r.data[0]["id"]
+                
+        if target_id:
+            # Note: We must update the REAL user's record, which means if they are already impersonating,
+            # user['id'] is the impersonated ID. We need the real ID.
+            real_id = user.get("real_user_id", user["id"])
+            
+            # If Kanav is switching back to Kanav, clear it
+            if target == "kanav":
+                supabase.table("users").update({"impersonating_user_id": None}).eq("id", real_id).execute()
+                send_text(sender_phone, f"✅ Switched back to your normal profile (Kanav).")
+            else:
+                supabase.table("users").update({"impersonating_user_id": target_id}).eq("id", real_id).execute()
+                send_text(sender_phone, f"✅ You are now testing as: {target.capitalize()}. \nSend 'menu' to see their view.")
+        else:
+            send_text(sender_phone, f"Could not find user '{target}' in the database.")
+        return
+        
+    # ── Create Task Routing ──────────────────────────────────────────────────
+    if button_id.startswith("create_task_"):
+        if button_id == "create_task_personal":
+            send_text(sender_phone, "What is the title of your new Personal Task?")
+            set_wa_state(sender_phone, "WAITING_FOR_PERSONAL_TASK_TITLE")
+        elif button_id == "create_task_team":
+            send_text(sender_phone, "What is the title of the new Team Task?")
+            set_wa_state(sender_phone, "WAITING_FOR_TEAM_TASK_TITLE")
+        return
+
+    # ── Guest Menu Routing ───────────────────────────────────────────────────
+    if button_id.startswith("guest_"):
+        if button_id == "guest_office":
+            send_text(sender_phone, "🏢 *Office Spaces*\n\nExplore premium office spaces designed for business growth & success in Gurugram. From startups to enterprises, we offer state-of-the-art facilities.\n\nVisit: https://goodearthinfra.in/office")
+        elif button_id == "guest_retail":
+            send_text(sender_phone, "🛍️ *Retail Spaces*\n\nDiscover prime retail locations that attract high footfall and provide maximum visibility for your brand.\n\nVisit: https://goodearthinfra.in/retail")
+        elif button_id == "guest_leasing":
+            send_text(sender_phone, "🤝 *Leasing Options*\n\nFlexible leasing terms tailored to your business needs. Get in touch with our leasing experts today.\n\nVisit: https://goodearthinfra.in/leasing")
+        elif button_id == "guest_about":
+            send_text(sender_phone, "ℹ️ *About Good Earth Infra*\n\nFormerly Galaxy Group, we specialize in the sale & leasing of commercial spaces in Gurugram, building landmarks of tomorrow.\n\nVisit: https://goodearthinfra.in/about-us")
+        elif button_id == "guest_careers":
+            send_text(sender_phone, "💼 *Careers*\n\nJoin our dynamic team and build a rewarding career in commercial real estate.\n\nVisit: https://goodearthinfra.in/careers")
         return
         
     # ── Task Actions Routing ─────────────────────────────────────────────────
