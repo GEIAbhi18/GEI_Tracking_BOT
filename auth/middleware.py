@@ -26,28 +26,16 @@ def authenticate_whatsapp_request(sender_phone: str):
             impersonated_id = user.get("impersonating_user_id")
             from db import get_user_by_id
             
-            # Special case for testing as a brand new Guest
-            if impersonated_id == "00000000-0000-0000-0000-000000000000":
-                logger.info(f"Developer {sender_phone} is impersonating a Guest")
-                user = {
-                    "id": impersonated_id,
-                    "name": "Guest Tester",
-                    "whatsapp_number": sender_phone,
-                    "role": "Guest",
-                    "real_user_id": user["id"],
-                    "original_role": user.get("role")
-                }
+            impersonated_user = get_user_by_id(impersonated_id)
+            if impersonated_user:
+                logger.info(f"Developer {sender_phone} is impersonating {impersonated_user.get('name')}")
+                # Keep the real whatsapp number so they can receive messages if any code uses user['whatsapp_number']
+                impersonated_user["whatsapp_number"] = sender_phone
+                impersonated_user["real_user_id"] = user["id"]
+                impersonated_user["original_role"] = user.get("role")
+                user = impersonated_user
             else:
-                impersonated_user = get_user_by_id(impersonated_id)
-                if impersonated_user:
-                    logger.info(f"Developer {sender_phone} is impersonating {impersonated_user.get('name')}")
-                    # Keep the real whatsapp number so they can receive messages if any code uses user['whatsapp_number']
-                    impersonated_user["whatsapp_number"] = sender_phone
-                    impersonated_user["real_user_id"] = user["id"]
-                    impersonated_user["original_role"] = user.get("role")
-                    user = impersonated_user
-                else:
-                    logger.warning(f"Impersonated user {impersonated_id} not found, falling back to real user.")
+                logger.warning(f"Impersonated user {impersonated_id} not found, falling back to real user.")
 
         # Resolve permissions
         user_role = user.get("role", Role.GUEST.value)
