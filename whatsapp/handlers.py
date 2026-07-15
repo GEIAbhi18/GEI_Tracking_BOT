@@ -1,7 +1,7 @@
 import logging
 from auth.context import get_current_user
 from tasks.service import orchestrate_status_update
-from whatsapp.ux import send_text
+from whatsapp.ux import send_text, send_interactive_buttons, send_list_message
 from db import supabase
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,6 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
     # ── Main Menu Routing ────────────────────────────────────────────────────
     if button_id.startswith("menu_"):
         if button_id == "menu_team_tasks":
-            from whatsapp.ux import send_text
             import asyncio
             from core.logic import process_user_message
             async def _send_reply(text=None, document=None, target_user_id=None):
@@ -36,7 +35,6 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
             asyncio.run(process_user_message(sender_phone, "show team tasks", _send_reply))
             
         elif button_id == "menu_my_tasks":
-            from whatsapp.ux import send_text
             import asyncio
             from core.logic import process_user_message
             async def _send_reply(text=None, document=None, target_user_id=None):
@@ -44,7 +42,6 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
             asyncio.run(process_user_message(sender_phone, "show my personal tasks", _send_reply))
             
         elif button_id == "menu_create_task":
-            from whatsapp.ux import send_interactive_buttons
             buttons = [
                 {"id": "create_task_personal", "title": "Personal Task"},
                 {"id": "create_task_team", "title": "Team Task"}
@@ -55,7 +52,6 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
             if user.get("role") != "Developer" and user.get("original_role") != "Developer":
                 send_text(sender_phone, "You do not have permission to access System Admin.")
                 return
-            from whatsapp.ux import send_list_message
             sections = [{"title": "Switch User", "rows": [
                 {"id": "admin_switch_asif", "title": "Asif (Project Team)"},
                 {"id": "admin_switch_abhijeet", "title": "Abhijeet (Tech)"},
@@ -86,7 +82,6 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
         if target == "guest":
             target_id = "00000000-0000-0000-0000-000000000000"
         else:
-            from db import supabase
             # Find the target user by name
             r = supabase.table("users").select("id").ilike("name", f"%{target}%").execute()
             if r.data:
