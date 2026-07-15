@@ -39,12 +39,12 @@ def _mock_send_text(phone, text):
     return True
 
 
-def test_pass(name):
+def mark_pass(name):
     RESULTS.append(("✅", name))
     print(f"  ✅ {name}")
 
 
-def test_fail(name, reason):
+def mark_fail(name, reason):
     RESULTS.append(("❌", f"{name}: {reason}"))
     print(f"  ❌ {name}: {reason}")
 
@@ -75,9 +75,9 @@ def run_tests():
             all_pass = False
 
     if all_pass:
-        test_pass("Phone normalization")
+        mark_pass("Phone normalization")
     else:
-        test_fail("Phone normalization", "Some cases failed")
+        mark_fail("Phone normalization", "Some cases failed")
 
     # ── Test 2: Session Creation ─────────────────────────────────────────
     print("\n── Test 2: Session Creation ──")
@@ -100,19 +100,19 @@ def run_tests():
 
     session = create_session(test_data)
     if session["complaintId"] == "TEST-001":
-        test_pass("Session created with correct complaint ID")
+        mark_pass("Session created with correct complaint ID")
     else:
-        test_fail("Session creation", f"Got {session['complaintId']}")
+        mark_fail("Session creation", f"Got {session['complaintId']}")
 
     if session["stage"] == STAGE_FLOW_SENT:
-        test_pass("Session stage is 'flow_sent'")
+        mark_pass("Session stage is 'flow_sent'")
     else:
-        test_fail("Session stage", f"Got {session['stage']}")
+        mark_fail("Session stage", f"Got {session['stage']}")
 
     if session["clientPhone"] == "917717754421":
-        test_pass("Session phone normalized correctly")
+        mark_pass("Session phone normalized correctly")
     else:
-        test_fail("Session phone", f"Got {session['clientPhone']}")
+        mark_fail("Session phone", f"Got {session['clientPhone']}")
 
     # ── Test 3: Session Store (in-memory) ────────────────────────────────
     print("\n── Test 3: Session Store (in-memory) ──")
@@ -127,14 +127,14 @@ def run_tests():
 
     retrieved = get_session(phone)
     if retrieved and retrieved["complaintId"] == "TEST-001":
-        test_pass("Session stored and retrieved correctly")
+        mark_pass("Session stored and retrieved correctly")
     else:
-        test_fail("Session retrieval", f"Got {retrieved}")
+        mark_fail("Session retrieval", f"Got {retrieved}")
 
     if has_active_session(phone):
-        test_pass("has_active_session returns True")
+        mark_pass("has_active_session returns True")
     else:
-        test_fail("has_active_session", "Returned False")
+        mark_fail("has_active_session", "Returned False")
 
     # ── Test 4: Flow Response Processing ─────────────────────────────────
     print("\n── Test 4: Flow Response Processing ──")
@@ -172,22 +172,22 @@ def run_tests():
     handled = handle_flow_response(phone, flow_response)
 
     if handled:
-        test_pass("handle_flow_response returned True")
+        mark_pass("handle_flow_response returned True")
     else:
-        test_fail("handle_flow_response", "Returned False — session not found!")
+        mark_fail("handle_flow_response", "Returned False — session not found!")
 
     # Check thank-you message was sent
     thank_you_msgs = [m for m in WA_MESSAGES_SENT if "Thank you" in m["text"] or "thank you" in m["text"].lower()]
     if thank_you_msgs:
-        test_pass(f"Thank-you message sent to {thank_you_msgs[0]['phone']}")
+        mark_pass(f"Thank-you message sent to {thank_you_msgs[0]['phone']}")
     else:
-        test_fail("Thank-you message", f"Not sent! Messages captured: {WA_MESSAGES_SENT}")
+        mark_fail("Thank-you message", f"Not sent! Messages captured: {WA_MESSAGES_SENT}")
 
     # Check session was cleaned up
     if not has_active_session(phone):
-        test_pass("Session cleaned up after completion")
+        mark_pass("Session cleaned up after completion")
     else:
-        test_fail("Session cleanup", "Session still active!")
+        mark_fail("Session cleanup", "Session still active!")
 
     # ── Test 5: Score Calculation & Sentiment ────────────────────────────
     print("\n── Test 5: Score Calculation & Sentiment ──")
@@ -219,9 +219,9 @@ def run_tests():
             all_pass = False
 
     if all_pass:
-        test_pass("Score calculation & sentiment logic")
+        mark_pass("Score calculation & sentiment logic")
     else:
-        test_fail("Score calculation", "Some cases failed")
+        mark_fail("Score calculation", "Some cases failed")
 
     # ── Test 6: Escalation Logic ─────────────────────────────────────────
     print("\n── Test 6: Escalation Logic ──")
@@ -257,9 +257,9 @@ def run_tests():
             all_pass = False
 
     if all_pass:
-        test_pass("Escalation logic")
+        mark_pass("Escalation logic")
     else:
-        test_fail("Escalation logic", "Some cases failed")
+        mark_fail("Escalation logic", "Some cases failed")
 
     # ── Test 7: Config / Env Vars ────────────────────────────────────────
     print("\n── Test 7: Environment Variables ──")
@@ -290,9 +290,9 @@ def run_tests():
             all_set = False
 
     if all_set:
-        test_pass("All required env vars set")
+        mark_pass("All required env vars set")
     else:
-        test_fail("Environment variables", "Some vars missing")
+        mark_fail("Environment variables", "Some vars missing")
 
     # ── Test 8: Google Sheets Connectivity (optional) ────────────────────
     if os.getenv("TEST_SHEETS") == "1":
@@ -300,14 +300,14 @@ def run_tests():
         try:
             from feedback.sheets import _get_client, _get_spreadsheet, _get_worksheet
             client = _get_client()
-            test_pass(f"Google Sheets client created for {GOOGLE_SERVICE_ACCOUNT_EMAIL[:30]}...")
+            mark_pass(f"Google Sheets client created for {GOOGLE_SERVICE_ACCOUNT_EMAIL[:30]}...")
 
             ss = _get_spreadsheet()
-            test_pass(f"Spreadsheet opened: {ss.title}")
+            mark_pass(f"Spreadsheet opened: {ss.title}")
 
             ws = _get_worksheet("MASTER")
             headers = ws.row_values(1)
-            test_pass(f"MASTER sheet headers ({len(headers)} columns): {headers[:5]}...")
+            mark_pass(f"MASTER sheet headers ({len(headers)} columns): {headers[:5]}...")
 
             # Check required columns exist
             required_cols = ["Complaint ID", "Feedback Status"]
@@ -316,10 +316,10 @@ def run_tests():
                 if found:
                     print(f"  ✓ Column '{col}' found")
                 else:
-                    test_fail(f"Column check", f"'{col}' NOT FOUND in MASTER headers: {headers}")
+                    mark_fail(f"Column check", f"'{col}' NOT FOUND in MASTER headers: {headers}")
 
         except Exception as e:
-            test_fail("Google Sheets connectivity", str(e))
+            mark_fail("Google Sheets connectivity", str(e))
     else:
         print("\n── Test 8: Google Sheets (SKIPPED — set TEST_SHEETS=1 to enable) ──")
 

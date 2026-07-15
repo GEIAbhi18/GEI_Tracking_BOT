@@ -37,6 +37,8 @@ def _apply_project_task_numbers(tasks):
         p_tasks.sort(key=lambda x: x.get('created_at') or str(x.get('id')))
         for idx, t in enumerate(p_tasks):
             t['project_task_number'] = idx + 1
+            if 'title' in t:
+                t['name'] = t['title']
             
     return tasks
 
@@ -48,9 +50,21 @@ def get_tasks_for_project(project_id):
     response = supabase.table("tasks").select("*").eq("project_id", project_id).execute()
     return _apply_project_task_numbers(response.data)
 
-def get_all_tasks():
+def get_all_tasks(user_id=None):
     response = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").execute()
-    return _apply_project_task_numbers(response.data)
+    tasks = _apply_project_task_numbers(response.data)
+    
+    filtered_tasks = []
+    for t in tasks:
+        if t.get('task_type') == 'PERSONAL':
+            if not user_id:
+                continue
+            if str(t.get('created_by')) != str(user_id) and str(t.get('assigned_to')) != str(user_id):
+                continue
+        filtered_tasks.append(t)
+        
+    return filtered_tasks
+
 
 def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None):
     from rag import calculate_rag
@@ -104,21 +118,34 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
         task_update_data["deadline"] = new_deadline
     
     if int(progress) >= 100:
-        task_update_data["status"] = "completed"
+        task_update_data["status"] = "Completed"
         task_update_data["actual_end_date"] = datetime.now().isoformat()
         
     supabase.table("tasks").update(task_update_data).eq("id", task_id).execute()
+    
+    # Notify Notification Engine
+    try:
+        from notifications.dispatcher import dispatch_task_event
+        if int(progress) >= 100:
+            dispatch_task_event(task_id, "Completed")
+        elif int(progress) > 0 and int(progress) < 100:
+            # We don't have exact previous state, so we just assume it's in progress/started
+            dispatch_task_event(task_id, "Started")
+    except Exception as e:
+        import logging
+        logging.error(f"Failed to dispatch task event: {e}")
+        
     return response.data
 
 def get_todays_updates():
     today = datetime.now().date().isoformat()
-    response = supabase.table("updates").select("*, tasks(name, deadline, projects(id, name))").gte("timestamp", today).execute()
+    response = supabase.table("updates").select("*, tasks(title, deadline, projects(id, name))").gte("timestamp", today).execute()
     return response.data
 
 def get_upcoming_deadlines():
     today = datetime.now().date()
     tomorrow = (datetime.now() + timedelta(days=1)).date()
-    response = supabase.table("tasks").select("*, projects(name)").gte("deadline", today.isoformat()).lte("deadline", tomorrow.isoformat()).neq("status", "completed").execute()
+    response = supabase.table("tasks").select("*, projects(name)").gte("deadline", today.isoformat()).lte("deadline", tomorrow.isoformat()).neq("status", "Completed").execute()
     return response.data
 
 def create_ticket(created_by, project_id, task_id=None, message=""):
@@ -148,11 +175,12 @@ def create_project_db(name, created_by=None):
     resp = supabase.table("projects").insert(data).execute()
     return resp.data[0] if resp.data else None
 
-def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None):
+def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None, task_type="PROJECT"):
     data = {
         "project_id": project_id,
-        "name": name,
-        "status": "pending"
+        "title": name,
+        "status": "Pending",
+        "task_type": task_type
     }
     if assigned_to:
         data["assigned_to"] = assigned_to
@@ -164,7 +192,18 @@ def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None,
         data["assigned_by"] = assigned_by
     try:
         resp = supabase.table("tasks").insert(data).execute()
-        return resp.data[0] if resp.data else None
+        new_task = resp.data[0] if resp.data else None
+        
+        # Notify Notification Engine
+        if new_task:
+            try:
+                from notifications.dispatcher import dispatch_task_event
+                dispatch_task_event(new_task['id'], "Assigned" if assigned_to else "Follow-up Created")
+            except Exception as e:
+                import logging
+                logging.error(f"Failed to dispatch task event on create: {e}")
+                
+        return new_task
     except Exception as e:
         import logging
         logging.error(f"Error adding task: {e}")
@@ -193,7 +232,7 @@ def add_ticket_message(ticket_id, sender_id, message_text, image_url=None):
     supabase.table("ticket_messages").insert(data).execute()
 
 def get_open_tickets():
-    response = supabase.table("tickets").select("*, projects(name), tasks(name), users!created_by(name)").eq("status", "open").execute()
+    response = supabase.table("tickets").select("*, projects(name), tasks(title), users!created_by(name)").eq("status", "open").execute()
     result = []
     for t in response.data:
         msgs = supabase.table("ticket_messages").select("message_text, users!sender_id(name)").eq("ticket_id", t["id"]).order("timestamp", desc=False).execute()
@@ -222,18 +261,18 @@ def get_user_by_name(name):
     return r.data[0] if r.data else None
 
 def get_tasks_for_user(user_uuid):
-    response = supabase.table("tasks").select("*, projects(name)").eq("assigned_to", user_uuid).execute()
     # We apply project task numbering globally first to be safe, but since this is filtered,
     # it might only number the returned subset. To truly get correct project block numbers,
     # we would need to fetch all tasks. The instruction says "When fetching tasks for a project... assign numbers".
     # For now, we fetch ALL tasks to assign numbers properly, then filter.
-    all_tasks = get_all_tasks()
+    all_tasks = get_all_tasks(user_id=user_uuid)
     user_tasks = [t for t in all_tasks if t.get('assigned_to') == user_uuid]
     return user_tasks
 
+
 def get_active_users_with_tasks():
     # Get users who have pending tasks
-    tasks = supabase.table("tasks").select("assigned_to").neq("status", "completed").execute()
+    tasks = supabase.table("tasks").select("assigned_to").neq("status", "Completed").execute()
     uids = list(set([t['assigned_to'] for t in tasks.data if t.get('assigned_to')]))
     if not uids: return []
     
@@ -242,7 +281,7 @@ def get_active_users_with_tasks():
 
 def complete_task(task_id):
     data = {
-        "status": "completed",
+        "status": "Completed",
         "progress": 100,
         "actual_end_date": datetime.now().isoformat()
     }
@@ -292,7 +331,7 @@ def save_note(task_id, note_text):
 
 def get_task_by_name(task_name):
     # Basic partial match
-    response = supabase.table("tasks").select("*, projects(name)").ilike("name", f"%{task_name}%").execute()
+    response = supabase.table("tasks").select("*, projects(name)").ilike("title", f"%{task_name}%").execute()
     return response.data
 
 def update_task_image(task_id, images):
@@ -320,3 +359,46 @@ def update_task_dates(task_id, start_date=None, deadline=None):
         
     response = supabase.table("tasks").update(data).eq("id", task_id).execute()
     return response.data[0] if response.data else None
+
+def get_or_create_user_by_whatsapp(whatsapp_number):
+    try:
+        r = supabase.table("users").select("*").eq("whatsapp_number", whatsapp_number).execute()
+        if r.data:
+            return r.data[0]
+            
+        # User not found, create as Guest
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Creating new Guest user for {whatsapp_number}")
+        
+        new_user = {
+            "name": f"User {whatsapp_number[-4:]}",
+            "whatsapp_number": whatsapp_number,
+            "role": "Guest"
+        }
+        create_res = supabase.table("users").insert(new_user).execute()
+        return create_res.data[0] if create_res.data else None
+    except Exception as e:
+        import logging
+        logging.error(f"get_or_create_user_by_whatsapp error: {e}")
+        return None
+
+def archive_task(task_id: str):
+    response = supabase.table("tasks").update({"is_archived": True}).eq("id", task_id).execute()
+    return response.data
+
+def restore_task(task_id: str):
+    response = supabase.table("tasks").update({"is_archived": False}).eq("id", task_id).execute()
+    return response.data
+
+def delete_task(task_id: str):
+    response = supabase.table("tasks").delete().eq("id", task_id).execute()
+    return response.data
+
+def set_task_reminder(task_id: str, reminder_time: str):
+    response = supabase.table("tasks").update({"reminder_time": reminder_time}).eq("id", task_id).execute()
+    return response.data
+
+def bulk_update_tasks(task_ids: list, update_data: dict):
+    response = supabase.table("tasks").update(update_data).in_("id", task_ids).execute()
+    return response.data

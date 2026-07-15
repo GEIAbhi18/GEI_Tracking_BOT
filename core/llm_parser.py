@@ -3,7 +3,7 @@ import json
 import requests
 from typing import List, Dict, Optional
 from config import GEMINI_API_KEY, OPENROUTER_API_KEY, GROQCLOUD_API_KEY, LLM_PROVIDER
-from core.schemas import IntentResponse
+from core.schemas import MultiIntentResponse
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +11,17 @@ SYSTEM_PROMPT = """
 You are an AI assistant for a construction task management system.
 
 ROLE:
-You classify user messages into intents and extract structured data.
+You classify user messages into intents and extract structured data. You MUST support multiple intents from a single message if the user asks for multiple actions.
 
 INSTRUCTIONS:
-* Identify the user intent
-* Extract all relevant entities
-* Return structured JSON only
-* If a message follows a task update and provides context (e.g., "reason for delay", "additional details"), it should be treated as a potential note.
-* Support shorthand task references like "3-1" or "3.1" where 3 is the project index and 1 is the task index.
+* Identify all user intents in the message.
+* Extract all relevant entities for each intent.
+* Return structured JSON only.
+* The root of the JSON MUST be an object with an "intents" array.
+* If a message follows a task update and provides context, it should be treated as a potential note.
+* Support shorthand task references like "3-1" or "3.1".
+* If the user assigns a task to someone by name (e.g., "for Vikash"), set 'assigned_to' to that name.
+* If the user specifies the task is a personal reminder (e.g., "remind me to...", "personal task"), set 'is_personal' to true.
 
 ALLOWED INTENTS:
 * task_update: For progress updates (e.g., "60% done", "3-1 60%")
@@ -28,13 +31,13 @@ ALLOWED INTENTS:
 * query_tasks: To list, find, or search tasks. Use this for ALL task listing requests by date, status, or blockers.
 * query_blockers: To see current blockers
 * greeting: For simple greetings
-* create_task: For adding new tasks
+* create_task: For adding new tasks or personal reminders
 * create_project: For adding new projects
 * create_ticket: For raising issues
 * view_projects: For listing projects
 * view_tickets: For showing open tickets
 * trigger_reminder_user: To manually ping a user for updates (e.g., "ask asif", "send updates to asif")
-* get_task_detail: To see full information about a specific task (e.g., "show task 1", "task 1 info", "details for task waterproofing")
+* get_task_detail: To see full information about a specific task
 * edit_date: To change start date or deadline of a task
 * create_note: To manually add a note to a specific task
 * help: For assistance
@@ -44,117 +47,67 @@ FILTER RULES:
 * status: MUST be one of "pending", "completed", or "all" (default)
 * Use "pending" for: "ongoing", "in progress", "incomplete", "unfinished"
 * Use "completed" for: "finished", "done", "closed", "marked as complete"
-* Use "overdue" for: "delayed", "late", "behind schedule"
 
 FEW-SHOT EXAMPLES:
 Example 1:
 User: "complete task 2"
-Output: {"intent": "complete_task", "task_reference": "task 2", "confidence": 0.95}
+Output: {"intents": [{"intent": "complete_task", "task_reference": "task 2", "confidence": 0.95}]}
 
-Example 2:
-User: "add blocker no material found"
-Output: {"intent": "add_blocker", "blocker_text": "no material found", "confidence": 0.9}
+Example 2 (Multiple intents):
+User: "Mark generator repair as completed and add a note waiting for spare parts"
+Output: {"intents": [
+  {"intent": "complete_task", "task_reference": "generator repair", "confidence": 0.95},
+  {"intent": "create_note", "task_reference": "generator repair", "blocker_text": "waiting for spare parts", "confidence": 0.95}
+]}
 
-Example 3:
-User: "Top Terrace waterproofing 60%"
-Output: {"intent": "task_update", "project_name": "Top Terrace", "progress": 60, "confidence": 0.92}
+Example 3 (Assignment):
+User: "Create a task for Vikash to inspect the generator tomorrow"
+Output: {"intents": [{"intent": "create_task", "task_reference": "inspect the generator", "assigned_to": "Vikash", "deadline": "tomorrow", "confidence": 0.98}]}
 
-Example 4:
-User: "show my tasks"
-Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": "all", "status": "pending"}}
+Example 4 (Personal Task):
+User: "Create a personal reminder to call the vendor"
+Output: {"intents": [{"intent": "create_task", "task_reference": "call the vendor", "is_personal": true, "confidence": 0.98}]}
 
 Example 5:
-User: "overdue tasks with blockers"
-Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "overdue", "has_blockers": true}}
+User: "show my tasks"
+Output: {"intents": [{"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": "all", "status": "pending"}}]}
 
-Example 6:
-User: "show completed tasks"
-Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "status": "completed"}}
-
-Example 7:
-User: "which tasks are in progress"
-Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "status": "pending"}}
-
-Example 8:
-User: "show tasks from 10 Mar to 25 Mar"
-Output: {"intent": "query_tasks", "confidence": 0.98, "query_filters": {"range": "custom_range", "start_date": "10 Mar", "end_date": "25 Mar"}}
-
-Example 9:
-User: "show tasks due today"
-Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "today"}}
-
-Example 10:
-User: "which tasks are blocked"
-Output: {"intent": "query_tasks", "confidence": 0.95, "query_filters": {"range": "all", "has_blockers": true}}
-
-Example 14:
-User: "3-1 80% done"
-Output: {"intent": "task_update", "task_reference": "3-1", "progress": 80, "confidence": 0.98}
-
-Example 15:
-User: "3.1 no blocker"
-Output: {"intent": "remove_blocker", "task_reference": "3-1", "confidence": 0.95}
-
-Example 16:
-User: "complete 1-2"
-Output: {"intent": "complete_task", "task_reference": "1-2", "confidence": 0.98}
-
-Example 11:
-User: "ask asif"
-Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
-
-Example 12:
-User: "ask asif for updates"
-Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
-
-Example 13:
-User: "send updates to asif"
-Output: {"intent": "trigger_reminder_user", "target_user": "Asif", "message_type": "task_update_reminder", "confidence": 0.98}
-
-Example 17 (Voice note - create task with full info):
-User: "Dummy Test mein ek naya task banana hai audio testing deadline 20 May"
-Output: {"intent": "create_task", "project_name": "Dummy Test", "task_reference": "audio testing", "deadline": "20 May", "confidence": 0.95}
-
-Example 18 (Voice note - create task):
-User: "create a new task in Top Terrace project called railing installation deadline 25 May"
-Output: {"intent": "create_task", "project_name": "Top Terrace", "task_reference": "railing installation", "deadline": "25 May", "confidence": 0.95}
-
-Example 19 (Voice note - add blocker with project context):
-User: "Top Terrace waterproofing mein blocker hai cement delivery nahi aayi"
-Output: {"intent": "add_blocker", "project_name": "Top Terrace", "task_reference": "waterproofing", "blocker_text": "cement delivery nahi aayi", "confidence": 0.92}
-
-Example 20 (Voice note - task update Hinglish):
-User: "bhai slope correction wala kaam 45% tak pahunch gaya ek blocker hai labour nahi aa rahi"
-Output: {"intent": "task_update", "task_reference": "slope correction", "progress": 45, "blocker_text": "labour nahi aa rahi", "confidence": 0.90}
-
-Example 21 (Voice note - create ticket):
-User: "Top Terrace mein waterproofing ka issue hai paani leak ho raha hai"
-Output: {"intent": "create_ticket", "project_name": "Top Terrace", "task_reference": "waterproofing", "blocker_text": "paani leak ho raha hai", "confidence": 0.90}
+Example 6 (Multiple Tasks Update):
+User: "complete 1-2 and update 3-1 to 80% done"
+Output: {"intents": [
+  {"intent": "complete_task", "task_reference": "1-2", "confidence": 0.98},
+  {"intent": "task_update", "task_reference": "3-1", "progress": 80, "confidence": 0.98}
+]}
 
 IMPORTANT RULES FOR create_task:
 * task_reference = the NEW task name to create (not the project name)
 * project_name = the project to create it under
 * deadline = the deadline if mentioned
+* assigned_to = user name if assigned to someone
+* is_personal = true if it's a personal reminder
 * NEVER put the project name in task_reference for create_task intent
 
 OUTPUT FORMAT:
 {
-"intent": "intent_here",
-"task_reference": "task name if any",
-"project_name": "project name if any",
-"target_user": "user name if any",
-"message_type": "task_update_reminder if applicable",
-"progress": null,
-"blocker_text": "blocker text if any",
-"deadline": "deadline date if mentioned",
-"confidence": 1.0,
-"query_filters": {
-  "range": "overdue|today|tomorrow|this_week|custom_range|all",
-  "start_date": null,
-  "end_date": null,
-  "status": "pending|completed|all",
-  "has_blockers": false
-}
+  "intents": [
+    {
+      "intent": "intent_here",
+      "task_reference": "task name if any",
+      "project_name": "project name if any",
+      "target_user": "user name if any",
+      "assigned_to": "assignee name if any",
+      "is_personal": false,
+      "message_type": "task_update_reminder if applicable",
+      "progress": null,
+      "blocker_text": "blocker text or note if any",
+      "deadline": "deadline date if mentioned",
+      "confidence": 1.0,
+      "query_filters": {
+        "range": "overdue|today|tomorrow|this_week|custom_range|all",
+        "status": "pending|completed|all"
+      }
+    }
+  ]
 }
 """
 
@@ -182,15 +135,15 @@ def parse_with_llm(message: str, history: List[Dict] = None, state: Dict = None)
             result_json = _call_groq(full_message, SYSTEM_PROMPT)
         else:
             logger.error(f"Unsupported LLM provider: {LLM_PROVIDER}")
-            return {"intent": "clarify", "confidence": 0}
+            return {"intents": [{"intent": "clarify", "confidence": 0}]}
 
-        # Pydantic Validation
-        parsed = IntentResponse.model_validate(result_json)
+        # Pydantic Validation for MultiIntentResponse
+        parsed = MultiIntentResponse.model_validate(result_json)
         return parsed.model_dump()
 
     except Exception as e:
         logger.error(f"LLM parsing or validation failed: {str(e)}")
-        return {"intent": "clarify", "confidence": 0}
+        return {"intents": [{"intent": "clarify", "confidence": 0}]}
 
 def _call_groq(message, system_prompt):
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -243,7 +196,7 @@ def _call_openrouter(message, system_prompt):
     }
     
     payload = {
-        "model": "google/gemini-flash-1.5", # Or any other model
+        "model": "google/gemini-flash-1.5",
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": message}
@@ -260,4 +213,4 @@ def _call_openrouter(message, system_prompt):
         return json.loads(content)
     except Exception as e:
         logger.error(f"OpenRouter API error: {e}")
-        return {"intent": "unknown"}
+        return {"intents": [{"intent": "unknown", "confidence": 0}]}

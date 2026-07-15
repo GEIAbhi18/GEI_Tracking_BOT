@@ -170,124 +170,128 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         return
         
     # 3. LLM Intent Parser
+    intents_to_process = []
+    
     try:
         # Prepare history for LLM context
         history = [{"role": "user", "content": m} for m in context.get("messages", [])[:-1]]
         
         parsed_obj = parse_with_llm(text, history=history, state=state)
-        intent = parsed_obj.get("intent", "clarify")
-        confidence = parsed_obj.get("confidence", 0)
+        
+        raw_intents = parsed_obj.get("intents", [])
+        if not raw_intents:
+            raw_intents = [{"intent": "clarify", "confidence": 0}]
+            
+        for p_obj in raw_intents:
+            intent = p_obj.get("intent", "clarify")
+            confidence = p_obj.get("confidence", 0)
+    
+            # Mapping new schema to existing handler keys
+            parsed = {
+                "intent": intent,
+                "task_name": p_obj.get("task_reference") or p_obj.get("project_name"),
+                "project_name_extracted": p_obj.get("project_name"),
+                "progress": p_obj.get("progress"),
+                "blocker_description": p_obj.get("blocker_text"),
+                "confidence": confidence,
+                "query_filters": p_obj.get("query_filters"),
+                "target_user": p_obj.get("target_user"),
+                "assigned_to": p_obj.get("assigned_to"),
+                "is_personal": p_obj.get("is_personal"),
+                "message_type": p_obj.get("message_type"),
+                "deadline": p_obj.get("deadline")
+            }
+            intents_to_process.append(parsed)
 
-        # Mapping new schema to existing handler keys
-        parsed = {
-            "intent": intent,
-            "task_name": parsed_obj.get("task_reference") or parsed_obj.get("project_name"),
-            "project_name_extracted": parsed_obj.get("project_name"),
-            "progress": parsed_obj.get("progress"),
-            "blocker_description": parsed_obj.get("blocker_text"),
-            "confidence": confidence,
-            "query_filters": parsed_obj.get("query_filters"),
-            "target_user": parsed_obj.get("target_user"),
-            "message_type": parsed_obj.get("message_type"),
-            "deadline": parsed_obj.get("deadline") # Ensure deadline is also passed if present
-        }
-
-        # Step 7: Fallback if confidence is low
-        if confidence < 0.6:
-            raise ValueError("Low confidence")
+        # Step 7: Fallback if ANY confidence is low
+        if any(i["confidence"] < 0.6 for i in intents_to_process):
+            raise ValueError("Low confidence in one or more intents")
 
     except Exception as e:
         logger.warning(f"LLM parsing failed or low confidence: {e}. Falling back to rule-based parser.")
         # 4. Fallback to Rule-based Parser (Step 7)
+        intents_to_process = []
         if "task" in text.lower() and ("show" in text.lower() or "list" in text.lower() or "my" in text.lower() or "view" in text.lower()):
-            intent = "query_tasks"
-            parsed = {"intent": "query_tasks", "confidence": 0.8}
+            intents_to_process.append({"intent": "query_tasks", "confidence": 0.8})
         elif "blocker" in text.lower() and ("show" in text.lower() or "list" in text.lower() or "current" in text.lower()):
-            intent = "query_blockers"
-            parsed = {"intent": "query_blockers", "confidence": 0.8}
+            intents_to_process.append({"intent": "query_blockers", "confidence": 0.8})
         elif "ticket" in text.lower() and ("view" in text.lower() or "show" in text.lower()):
-            intent = "view_tickets"
-            parsed = {"intent": "view_tickets", "confidence": 0.8}
+            intents_to_process.append({"intent": "view_tickets", "confidence": 0.8})
         elif "ticket" in text.lower() and ("raise" in text.lower() or "create" in text.lower()):
-            intent = "create_ticket"
-            parsed = {"intent": "create_ticket", "confidence": 0.8}
+            intents_to_process.append({"intent": "create_ticket", "confidence": 0.8})
         elif "report" in text.lower() and ("get" in text.lower() or "show" in text.lower() or "generate" in text.lower()):
-            intent = "request_report"
-            parsed = {"intent": "request_report", "confidence": 0.8}
+            intents_to_process.append({"intent": "request_report", "confidence": 0.8})
         elif "project" in text.lower() and "create" in text.lower():
-            intent = "create_project"
-            parsed = {"intent": "create_project", "confidence": 0.8}
+            intents_to_process.append({"intent": "create_project", "confidence": 0.8})
         elif "project" in text.lower() and ("show" in text.lower() or "view" in text.lower() or "list" in text.lower()):
-            intent = "view_projects"
-            parsed = {"intent": "view_projects", "confidence": 0.8}
+            intents_to_process.append({"intent": "view_projects", "confidence": 0.8})
         elif "task" in text.lower() and "create" in text.lower():
-            intent = "create_task"
-            parsed = {"intent": "create_task", "confidence": 0.8}
+            intents_to_process.append({"intent": "create_task", "confidence": 0.8})
         elif "image" in text.lower() and ("add" in text.lower() or "upload" in text.lower()):
-            intent = "add_image"
-            parsed = {"intent": "add_image", "confidence": 0.8}
+            intents_to_process.append({"intent": "add_image", "confidence": 0.8})
         elif "task" in text.lower() and re.search(r'task\s*\d+', text.lower()):
-            intent = "get_task_detail"
-            parsed = {"intent": "get_task_detail", "task_reference": re.search(r'task\s*(\d+)', text.lower()).group(0), "confidence": 0.9}
+            intents_to_process.append({"intent": "get_task_detail", "task_reference": re.search(r'task\s*(\d+)', text.lower()).group(0), "confidence": 0.9})
         else:
             rule_parsed = rule_based_parse_message(text)
             if rule_parsed["confidence"] != "low":
-                parsed = {
+                intents_to_process.append({
                     "intent": "task_update", # Default to task_update for rule-based
                     "task_name": f"{rule_parsed.get('project', '')} {rule_parsed.get('task_keyword', '')}".strip(),
                     "progress": rule_parsed.get("progress"),
                     "blocker_description": rule_parsed.get("blocker"),
                     "confidence": 0.8 # Manual boost for valid rule-based match
-                }
-                intent = "task_update"
+                })
             else:
-                intent = "clarify"
-                parsed = {"intent": "clarify", "confidence": 0}
+                intents_to_process.append({"intent": "clarify", "confidence": 0})
 
     # 5. Intent Router / Handlers
-    if intent == "task_update":
-        await handlers.handle_task_update(parsed, user_id, context, send_reply_func, images=images)
-    elif intent == "complete_task":
-        await handlers.handle_complete_task(parsed, user_id, context, send_reply_func, images=images)
-    elif intent == "add_blocker":
-        await handlers.handle_add_blocker(parsed, user_id, context, send_reply_func, images=images)
-    elif intent == "remove_blocker":
-        await handlers.handle_remove_blocker(parsed, user_id, context, send_reply_func)
-    elif intent == "add_image":
-        await handlers.handle_add_image(parsed, user_id, context, send_reply_func, images=images)
-    elif intent == "list_tasks" or intent == "query_tasks":
-        await handlers.handle_query_tasks(parsed, user_id, context, send_reply_func)
-    elif intent == "get_task_detail":
-        await handlers.handle_get_task_detail(parsed, user_id, context, send_reply_func)
-    elif intent == "query_blockers":
-        await handlers.handle_query_blockers(parsed, user_id, context, send_reply_func)
-    elif intent == "help" or intent == "greeting":
-        await handlers.handle_greeting(parsed, user_id, context, send_reply_func)
-    elif intent == "view_tickets":
-        await handlers.handle_view_tickets(parsed, user_id, context, send_reply_func)
-    elif intent == "reply_ticket":
-        await handlers.handle_reply_ticket(parsed, user_id, context, send_reply_func)
-    elif intent == "view_projects":
-        await handlers.handle_view_projects(parsed, user_id, context, send_reply_func)
-    elif intent == "edit_date":
-        await handlers.handle_edit_date(parsed, user_id, context, send_reply_func)
-    elif intent == "create_note":
-        await handlers.handle_create_note(parsed, user_id, context, send_reply_func)
-    elif intent == "request_report" or intent == "get_report":
-        await handlers.handle_request_report(parsed, user_id, context, send_reply_func)
-    elif intent == "create_project":
-        await handlers.handle_create_project(parsed, user_id, context, send_reply_func)
-    elif intent == "create_task":
-        await handlers.handle_create_task(parsed, user_id, context, send_reply_func)
-    elif intent == "create_ticket":
-        await handlers.handle_create_ticket(parsed, user_id, context, send_reply_func)
-    elif intent == "trigger_reminder_user":
-        await handlers.handle_trigger_reminder_user(parsed, user_id, context, send_reply_func)
-    elif intent == "clarify":
-        await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
-    else:
-        # Catch-all for other intents
-        await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
+    for parsed in intents_to_process:
+        intent = parsed.get("intent")
+        
+        if intent == "task_update":
+            await handlers.handle_task_update(parsed, user_id, context, send_reply_func, images=images)
+        elif intent == "complete_task":
+            await handlers.handle_complete_task(parsed, user_id, context, send_reply_func, images=images)
+        elif intent == "add_blocker":
+            await handlers.handle_add_blocker(parsed, user_id, context, send_reply_func, images=images)
+        elif intent == "remove_blocker":
+            await handlers.handle_remove_blocker(parsed, user_id, context, send_reply_func)
+        elif intent == "add_image":
+            await handlers.handle_add_image(parsed, user_id, context, send_reply_func, images=images)
+        elif intent == "list_tasks" or intent == "query_tasks":
+            await handlers.handle_query_tasks(parsed, user_id, context, send_reply_func)
+        elif intent == "get_task_detail":
+            await handlers.handle_get_task_detail(parsed, user_id, context, send_reply_func)
+        elif intent == "query_blockers":
+            await handlers.handle_query_blockers(parsed, user_id, context, send_reply_func)
+        elif intent == "help" or intent == "greeting":
+            await handlers.handle_greeting(parsed, user_id, context, send_reply_func)
+        elif intent == "view_tickets":
+            await handlers.handle_view_tickets(parsed, user_id, context, send_reply_func)
+        elif intent == "reply_ticket":
+            await handlers.handle_reply_ticket(parsed, user_id, context, send_reply_func)
+        elif intent == "view_projects":
+            await handlers.handle_view_projects(parsed, user_id, context, send_reply_func)
+        elif intent == "edit_date":
+            await handlers.handle_edit_date(parsed, user_id, context, send_reply_func)
+        elif intent == "create_note":
+            await handlers.handle_create_note(parsed, user_id, context, send_reply_func)
+        elif intent == "request_report" or intent == "get_report":
+            await handlers.handle_request_report(parsed, user_id, context, send_reply_func)
+        elif intent == "create_project":
+            await handlers.handle_create_project(parsed, user_id, context, send_reply_func)
+        elif intent == "create_task":
+            await handlers.handle_create_task(parsed, user_id, context, send_reply_func)
+        elif intent == "create_ticket":
+            await handlers.handle_create_ticket(parsed, user_id, context, send_reply_func)
+        elif intent == "trigger_reminder_user":
+            await handlers.handle_trigger_reminder_user(parsed, user_id, context, send_reply_func)
+        elif intent == "clarify":
+            await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
+        else:
+            # Catch-all for other intents
+            await handlers.handle_clarify(parsed, user_id, context, send_reply_func)
+
 
 async def continue_conversation(text, user_id, state, images, send_reply_func):
     """Handles multi-step conversation flows based on stored state."""

@@ -68,9 +68,12 @@ async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
         res = supabase.table("users").select("telegram_id").eq("name", "Kanav").execute()
         if res.data:
             target = res.data[0]["telegram_id"]
-            path = generate_pdf_report()
-            with open(path, 'rb') as f:
-                await context.bot.send_document(chat_id=target, document=f, caption="📊 Automated Daily Project Report (6:00 PM)")
+            
+            teams = ["Tech", "Facilities", "Project"]
+            for team in teams:
+                path = generate_pdf_report(team_name=team)
+                with open(path, 'rb') as f:
+                    await context.bot.send_document(chat_id=target, document=f, caption=f"📊 Daily {team} Team Report (6:00 PM)")
     except Exception as e: logging.error(f"Report error: {e}")
 
 async def send_multiline_updates_report_job(context: ContextTypes.DEFAULT_TYPE):
@@ -79,7 +82,7 @@ async def send_multiline_updates_report_job(context: ContextTypes.DEFAULT_TYPE):
         if res.data:
             target = res.data[0]["telegram_id"]
             today = datetime.datetime.now().date().isoformat()
-            upds = supabase.table("daily_updates").select("*, projects(name), tasks(name), users(name)").gte("timestamp", today).execute()
+            upds = supabase.table("daily_updates").select("*, projects(name), tasks(title), users(name)").gte("timestamp", today).execute()
             if upds.data:
                 from collections import defaultdict
                 grouped = defaultdict(list)
@@ -130,6 +133,12 @@ def start_bot():
     
     # Run every hour (3600s), staggering the first run by 10s
     application.job_queue.run_repeating(check_inactivity_and_notify, interval=3600, first=10)
+    
+    # Notification Engine worker (every minute)
+    from notifications.worker import process_notifications
+    async def process_notifications_job(context: ContextTypes.DEFAULT_TYPE):
+        process_notifications()
+    application.job_queue.run_repeating(process_notifications_job, interval=60, first=5)
     
     logging.info("Starting GEI Telegram Bot natively...")
     # drop_pending_updates prevents processing old messages on reboot

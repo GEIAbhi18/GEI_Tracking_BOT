@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from typing import Optional, Union, Literal
+from typing import Optional, Union, Literal, List
 
 class QueryFilters(BaseModel):
     range: Optional[str] = None
@@ -22,3 +22,8 @@ class IntentResponse(BaseModel):
     deadline: Optional[str] = None
     confidence: float
     query_filters: Optional[QueryFilters] = None
+    assigned_to: Optional[str] = None
+    is_personal: Optional[bool] = None
+
+class MultiIntentResponse(BaseModel):
+    intents: List[IntentResponse]

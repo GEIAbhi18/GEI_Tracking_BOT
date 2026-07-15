@@ -234,7 +234,7 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
     project_match = resolve_project(task_name, projects)
     if project_match:
         tasks = get_all_tasks()
-        p_tasks = [t for t in tasks if t['status'] != 'completed' and t.get('project_id') == project_match['id']]
+        p_tasks = [t for t in tasks if t['status'] != 'Completed' and t.get('project_id') == project_match['id']]
         if not p_tasks:
             await send_reply_func(f"No pending tasks found for project '{project_match['name']}'.")
             return
@@ -353,9 +353,9 @@ def filter_tasks(tasks, filters):
     
     status = filters.get("status")
     if status == "completed":
-        filtered = [t for t in filtered if t.get("status") == "completed"]
+        filtered = [t for t in filtered if t.get("status") == "Completed"]
     elif status == "pending":
-        filtered = [t for t in filtered if t.get("status") != "completed"]
+        filtered = [t for t in filtered if t.get("status") != "Completed"]
         
     progress_lt = filters.get("progress_lt")
     if progress_lt is not None:
@@ -744,7 +744,7 @@ async def handle_close_ticket(entities, user_id, context, send_reply_func):
     else:
         await send_reply_func(f"Couldn't find Ticket {ticket_index}.\nTry: 'view tickets' to see all open tickets")
 
-def generate_pdf_report():
+def generate_pdf_report(team_name=None):
     from fpdf import FPDF
     import os
     from datetime import datetime
@@ -829,6 +829,13 @@ def generate_pdf_report():
 
     projects = get_projects()
     tasks = get_all_tasks()
+    
+    # Filter by team_name if provided
+    if team_name:
+        team_res = supabase.table("teams").select("id").eq("name", team_name).execute()
+        if team_res.data:
+            team_id = team_res.data[0]["id"]
+            tasks = [t for t in tasks if t.get("team_id") == team_id]
 
     def check_space(h):
         if pdf.get_y() + h > pdf.page_break_trigger:
@@ -1022,7 +1029,7 @@ def generate_pdf_report():
         
         pdf.ln(10)
 
-    filepath = "/tmp/daily_report.pdf"
+    filepath = f"/tmp/daily_report_{team_name if team_name else 'all'}.pdf"
     pdf.output(filepath)
     return filepath
 
@@ -1042,7 +1049,7 @@ async def handle_trigger_reminder_user(entities, user_id, context, send_reply_fu
         
         # 2. Fetch tasks
         tasks = get_tasks_for_user(target_uuid)
-        active_tasks = [t for t in tasks if t['status'] != 'completed']
+        active_tasks = [t for t in tasks if t['status'] != 'Completed']
         
         if not active_tasks:
             await send_reply_func(f"'{target_name}' has no ongoing tasks.")
@@ -1122,17 +1129,38 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
             task_name_for_creation.strip().lower() == match['name'].strip().lower()):
         task_name_for_creation = None
 
+    # Resolve assignee if provided
+    assignee_name = entities.get("assigned_to")
+    assigned_to_db_id = None
+    if assignee_name:
+        assignee_info = get_user_by_name(assignee_name)
+        if assignee_info:
+            assigned_to_db_id = assignee_info['id']
+
     # DIRECT CREATION: if we have project + task name, skip the multi-step flow
-    if match and task_name_for_creation:
+    # For personal tasks, we don't need a project match
+    is_personal = entities.get("is_personal", False)
+    
+    if (match or is_personal) and task_name_for_creation:
         parsed_deadline = parse_human_date(deadline_raw) if deadline_raw else None
 
         try:
             from db import add_task
+            project_id = match['id'] if match else None
+            
+            # Use 'Personal' project if it exists for personal tasks, else None
+            if is_personal and not project_id:
+                personal_proj = next((p for p in projects if p['name'].lower() == "personal"), None)
+                if personal_proj:
+                    project_id = personal_proj['id']
+            
             result = add_task(
-                match['id'],
+                project_id,
                 task_name_for_creation,
                 parsed_deadline,
-                assigned_by=creator_db_id
+                assigned_by=creator_db_id,
+                assigned_to=assigned_to_db_id if assigned_to_db_id else (creator_db_id if is_personal else None),
+                task_type="PERSONAL" if is_personal else "PROJECT"
             )
         except Exception as e:
             import logging
@@ -1142,12 +1170,21 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
         if result:
             from core.utils import format_date_human
             f_dl = format_date_human(parsed_deadline) if parsed_deadline else "Not set"
-            await send_reply_func(
-                f"✅ Task created successfully!\n"
-                f"📌 Task: {task_name_for_creation}\n"
-                f"📂 Project: {match['name']}\n"
-                f"📅 Deadline: {f_dl}"
-            )
+            
+            # Format custom messages based on personal or assigned status
+            if is_personal:
+                msg_body = f"✅ Personal reminder created successfully!\n📌 Task: {task_name_for_creation}\n📅 Deadline: {f_dl}"
+            else:
+                assigned_text = f"\n👤 Assigned to: {assignee_name}" if assignee_name else ""
+                project_name = match['name'] if match else "None"
+                msg_body = (
+                    f"✅ Task created successfully!\n"
+                    f"📌 Task: {task_name_for_creation}\n"
+                    f"📂 Project: {project_name}{assigned_text}\n"
+                    f"📅 Deadline: {f_dl}"
+                )
+            
+            await send_reply_func(msg_body)
 
             # Trigger WA task assignment if creator is Kanav
             try:

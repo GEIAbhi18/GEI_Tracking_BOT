@@ -19,7 +19,7 @@ async def send_reminder_to_user(context: ContextTypes.DEFAULT_TYPE, user, reason
     # For simplicity, we just check if last_reminder_at was within last few hours for inactivity.
     
     tasks = get_tasks_for_user(user['id'])
-    active_tasks = [t for t in tasks if t['status'] != 'completed']
+    active_tasks = [t for t in tasks if t['status'] != 'Completed']
     
     if not active_tasks:
         return

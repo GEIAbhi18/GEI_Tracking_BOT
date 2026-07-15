@@ -39,6 +39,18 @@ app = Flask(__name__)
 from feedback.routes import feedback_bp
 app.register_blueprint(feedback_bp)
 
+# ── Register Teams API Blueprint ───────────────────────────────────────────
+from teams.api import teams_bp
+app.register_blueprint(teams_bp)
+
+# ── Register Tasks API Blueprint ───────────────────────────────────────────
+from tasks.api import tasks_bp
+app.register_blueprint(tasks_bp)
+
+# ── Register Reports API Blueprint ─────────────────────────────────────────
+from reports.api import reports_bp
+app.register_blueprint(reports_bp)
+
 # ── Session restore + scheduler start are deferred — see _deferred_startup() below ─
 
 
@@ -84,7 +96,7 @@ def whatsapp_daily_report_job():
         # 3. Generate multiline updates text summary and send
         try:
             today = datetime.date.today().isoformat()
-            upds = supabase.table("daily_updates").select("*, projects(name), tasks(name), users(name)").gte("timestamp", today).execute()
+            upds = supabase.table("daily_updates").select("*, projects(name), tasks(title), users(name)").gte("timestamp", today).execute()
             if upds.data:
                 from collections import defaultdict
                 grouped = defaultdict(list)
@@ -139,7 +151,7 @@ def whatsapp_employee_reminder_job():
             if not upds_res.data and not dupds_res.data:
                 # No updates today! Send reminder.
                 tasks = get_tasks_for_user(user["id"])
-                active_tasks = [t for t in tasks if t["status"] != "completed"]
+                active_tasks = [t for t in tasks if t["status"] != "Completed"]
                 if not active_tasks:
                     continue
                     
@@ -338,13 +350,26 @@ def handle_whatsapp_message():
                         text = message.get("text", {}).get("body", "").strip()
                         if text:
                             def _process_text_bg(sender_num, msg_text):
-                                # ── Check for clear/reset command first ───────
+                                from auth.middleware import authenticate_whatsapp_request
+                                auth_user = authenticate_whatsapp_request(sender_num)
+                                if not auth_user:
+                                    logger.error(f"Auth failed for {sender_num}")
+                                    return
+                                
+                                # Check for casual greetings (Main Menu trigger)
+                                greeting_words = ["hi", "hello", "menu", "hey", "start"]
+                                if msg_text.strip().lower() in greeting_words:
+                                    from whatsapp.menus import send_main_menu
+                                    send_main_menu(sender_num, auth_user)
+                                    return
+
+                                # Check for clear/reset command first
                                 if msg_text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
                                     try:
                                         from feedback.session_store import force_clear_and_process_next
                                         from core.conversation_state import clear_state
                                         from core.context_manager import clear_context
-                                        from whatsapp.task_assignment import send_text
+                                        from whatsapp.ux import send_text
                                         
                                         force_clear_and_process_next(sender_num)
                                         clear_state(sender_num)
@@ -354,7 +379,7 @@ def handle_whatsapp_message():
                                     except Exception as clear_err:
                                         logger.error(f"Error clearing WhatsApp state for {sender_num}: {clear_err}")
 
-                                # ── Feedback-first routing ────────────────────
+                                # Feedback-first routing
                                 if _try_feedback_route(sender_num, msg_text):
                                     return
                                 _handle_text(sender_num, msg_text)
@@ -404,14 +429,25 @@ def _handle_interactive(sender: str, message: dict):
       - nfm_reply    → WhatsApp Flow feedback response
     """
     try:
+        from auth.middleware import authenticate_whatsapp_request
+        auth_user = authenticate_whatsapp_request(sender)
+        if not auth_user:
+            logger.error(f"Auth failed for {sender}")
+            return
+            
         interactive = message.get("interactive", {})
         i_type = interactive.get("type")
         print(f"[INTERACTIVE] Processing type={i_type} from {sender}", flush=True)
 
         if i_type == "button_reply":
             button_id = interactive["button_reply"]["id"]
-            logger.info(f"Button reply from {sender}: {button_id}")
-            handle_button_reply(sender, button_id)
+            from whatsapp.handlers import handle_interactive_reply
+            handle_interactive_reply(sender, button_id)
+            
+        elif i_type == "list_reply":
+            list_id = interactive["list_reply"]["id"]
+            from whatsapp.handlers import handle_interactive_reply
+            handle_interactive_reply(sender, list_id)
 
         elif i_type == "nfm_reply":
             # ── WhatsApp Flow form submission ─────────────────────────
@@ -508,10 +544,59 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         _handle_voice_undo(sender)
         return
 
-    # 1. Task assignment multi-step state (e.g. rejection reason, new date)
-    if handle_text_reply(sender, text):
-        logger.info(f"Text handled by task_assignment module for {sender}")
-        return
+    # 1. Check WA State Machine for Multi-Step flows
+    from db import supabase
+    state_res = supabase.table("wa_task_states").select("*").eq("phone", sender).execute()
+    if state_res.data:
+        wa_state = state_res.data[0]
+        action = wa_state.get("action")
+        task_id = wa_state.get("task_id")
+        
+        if action == "WAITING_FOR_NOTE":
+            from tasks.timeline import add_timeline_event
+            user_id = supabase.table("users").select("id").eq("whatsapp_number", sender).execute().data[0]["id"]
+            add_timeline_event(task_id, user_id, "Note added", note=text)
+            supabase.table("wa_task_states").delete().eq("phone", sender).execute()
+            from whatsapp.ux import send_text
+            send_text(sender, "✅ Note added successfully!")
+            return
+        elif action == "WAITING_FOR_REMINDER":
+            try:
+                from tasks.service import orchestrate_set_reminder
+                from core.utils import parse_human_date
+                user_id = supabase.table("users").select("id").eq("whatsapp_number", sender).execute().data[0]["id"]
+                
+                parsed_time = parse_human_date(text)
+                if not parsed_time:
+                    from whatsapp.ux import send_text
+                    send_text(sender, "Couldn't understand the time format. Try 'tomorrow at 10am' or '2026-07-08 10:00'.")
+                    return
+                    
+                orchestrate_set_reminder({"id": user_id}, task_id, parsed_time)
+                supabase.table("wa_task_states").delete().eq("phone", sender).execute()
+                from whatsapp.ux import send_text
+                send_text(sender, f"✅ Reminder set successfully for: {parsed_time}")
+            except Exception as e:
+                from whatsapp.ux import send_text
+                send_text(sender, f"Failed to set reminder: {e}")
+            return
+            
+        elif action == "WAITING_FOR_TASK_TITLE":
+            # Just an example implementation branch
+            supabase.table("wa_task_states").delete().eq("phone", sender).execute()
+            from whatsapp.ux import send_text
+            send_text(sender, f"Got it! Task '{text}' creation flow will continue...")
+            return
+
+
+    # 1.5 Task assignment multi-step state (legacy fallback, to be removed)
+    try:
+        from whatsapp.task_assignment import handle_text_reply
+        if handle_text_reply(sender, text):
+            logger.info(f"Text handled by legacy task_assignment module for {sender}")
+            return
+    except Exception:
+        pass
 
     # 2. Voice note batch detection — multiple tasks in one message
     if voice_note:
@@ -754,6 +839,16 @@ def _handle_audio(sender: str, message: dict):
       4. Check for UNDO command in transcript
       5. Feed transcript into the SAME _handle_text pipeline as typed messages
     """
+    try:
+        from auth.middleware import authenticate_whatsapp_request
+        auth_user = authenticate_whatsapp_request(sender)
+        if not auth_user:
+            logger.error(f"Auth failed for {sender}")
+            return
+    except Exception as e:
+        logger.error(f"Auth middleware error: {e}")
+        return
+
     media_id = message.get("audio", {}).get("id")
     if not media_id:
         logger.warning(f"Audio message from {sender} has no media ID")

@@ -337,6 +337,7 @@ def _handle_accept(sender_phone: str, task_id: str):
     # Update DB
     accepted_by = sender["id"] if sender else None
     update_task_assignment(task_id,
+                           status="Accepted",
                            assignment_status="accepted",
                            accepted_by=accepted_by)
     clear_wa_state(sender_phone)
@@ -427,6 +428,7 @@ def _handle_editdate_step2(sender_phone: str, task_id: str, date_text: str):
     # Update DB: new deadline + accept
     accepted_by = sender["id"] if sender else None
     update_task_assignment(task_id,
+                           status="Accepted",
                            assignment_status="accepted",
                            accepted_by=accepted_by,
                            deadline=date_text)
