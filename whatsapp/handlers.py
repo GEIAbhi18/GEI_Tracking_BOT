@@ -1,5 +1,4 @@
 import logging
-from auth.context import get_current_user
 from tasks.service import orchestrate_status_update
 from whatsapp.ux import send_text, send_interactive_buttons, send_list_message
 from db import supabase
@@ -9,17 +8,16 @@ logger = logging.getLogger(__name__)
 def set_wa_state(phone: str, state: str, metadata: dict = None):
     """Sets a temporary conversation state for multi-step flows."""
     try:
-        payload = {"phone": phone, "action": state}
+        payload = {"whatsapp_number": phone, "action": state}
         if metadata:
             payload["task_id"] = metadata.get("task_id")
             
-        supabase.table("wa_task_states").upsert(payload, on_conflict="phone").execute()
+        supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
     except Exception as e:
         logger.error(f"Error setting WA state: {e}")
 
-def handle_interactive_reply(sender_phone: str, button_id: str):
+def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
     """Routes an interactive button/list ID to the proper service logic."""
-    user = get_current_user()
     if not user:
         return
         
@@ -76,31 +74,42 @@ def handle_interactive_reply(sender_phone: str, button_id: str):
             send_text(sender_phone, "Unauthorized.")
             return
             
+        # The real developer's user ID (not the impersonated one)
+        real_id = user.get("real_user_id", user["id"])
         target = button_id.replace("admin_switch_", "")
-        target_id = None
         
-        if target == "guest":
-            target_id = "00000000-0000-0000-0000-000000000000"
-        else:
-            # Find the target user by name
-            r = supabase.table("users").select("id").ilike("name", f"%{target}%").execute()
-            if r.data:
-                target_id = r.data[0]["id"]
-                
-        if target_id:
-            # Note: We must update the REAL user's record, which means if they are already impersonating,
-            # user['id'] is the impersonated ID. We need the real ID.
-            real_id = user.get("real_user_id", user["id"])
-            
-            # If Kanav is switching back to Kanav, clear it
-            if target == "kanav":
+        try:
+            if target == "guest":
+                # Guest mode: clear the FK column (set NULL) and flag via wa_task_states
                 supabase.table("users").update({"impersonating_user_id": None}).eq("id", real_id).execute()
-                send_text(sender_phone, f"✅ Switched back to your normal profile (Kanav).")
+                set_wa_state(sender_phone, "GUEST_MODE")
+                send_text(sender_phone, "✅ You are now testing as: Guest.\nSend 'menu' to see the Guest view.")
+                
+            elif target == "kanav":
+                # Switching back to self: clear impersonation and guest mode
+                supabase.table("users").update({"impersonating_user_id": None}).eq("id", real_id).execute()
+                supabase.table("wa_task_states").delete().eq("whatsapp_number", sender_phone).execute()
+                send_text(sender_phone, "✅ Switched back to your normal profile (Kanav).")
+                
             else:
+                # Look up the target user — MUST exist before we write
+                r = supabase.table("users").select("id, name").ilike("name", f"%{target}%").execute()
+                if not r.data:
+                    send_text(sender_phone, f"Could not find user '{target}' in the database.")
+                    return
+                    
+                target_id = r.data[0]["id"]
+                target_name = r.data[0]["name"]
+                
+                # Clear any guest mode state first
+                supabase.table("wa_task_states").delete().eq("whatsapp_number", sender_phone).execute()
+                # Write validated FK
                 supabase.table("users").update({"impersonating_user_id": target_id}).eq("id", real_id).execute()
-                send_text(sender_phone, f"✅ You are now testing as: {target.capitalize()}. \nSend 'menu' to see their view.")
-        else:
-            send_text(sender_phone, f"Could not find user '{target}' in the database.")
+                send_text(sender_phone, f"✅ You are now testing as: {target_name}.\nSend 'menu' to see their view.")
+                
+        except Exception as e:
+            logger.error(f"Admin switch error for target '{target}': {e}")
+            send_text(sender_phone, f"Failed to switch user. Error: {str(e)[:100]}")
         return
         
     # ── Create Task Routing ──────────────────────────────────────────────────

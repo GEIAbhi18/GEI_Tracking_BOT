@@ -442,12 +442,12 @@ def _handle_interactive(sender: str, message: dict):
         if i_type == "button_reply":
             button_id = interactive["button_reply"]["id"]
             from whatsapp.handlers import handle_interactive_reply
-            handle_interactive_reply(sender, button_id)
+            handle_interactive_reply(sender, button_id, auth_user)
             
         elif i_type == "list_reply":
             list_id = interactive["list_reply"]["id"]
             from whatsapp.handlers import handle_interactive_reply
-            handle_interactive_reply(sender, list_id)
+            handle_interactive_reply(sender, list_id, auth_user)
 
         elif i_type == "nfm_reply":
             # ── WhatsApp Flow form submission ─────────────────────────

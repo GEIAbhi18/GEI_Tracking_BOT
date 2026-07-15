@@ -11,6 +11,11 @@ def authenticate_whatsapp_request(sender_phone: str):
     It fetches the user from the DB. If they don't exist, it creates a Guest user.
     It then resolves their permissions and sets them into the current thread context.
     
+    Impersonation logic:
+      1. If user.role == Developer and user.impersonating_user_id is set → load that user
+      2. If user.role == Developer and wa_task_states has GUEST_MODE → synthesize Guest
+      3. Otherwise → use the real user
+    
     Returns the authenticated user dict.
     """
     try:
@@ -22,20 +27,38 @@ def authenticate_whatsapp_request(sender_phone: str):
             return None
             
         # --- Impersonation Logic for Developers ---
-        if user.get("role") == "Developer" and user.get("impersonating_user_id"):
-            impersonated_id = user.get("impersonating_user_id")
-            from db import get_user_by_id
-            
-            impersonated_user = get_user_by_id(impersonated_id)
-            if impersonated_user:
-                logger.info(f"Developer {sender_phone} is impersonating {impersonated_user.get('name')}")
-                # Keep the real whatsapp number so they can receive messages if any code uses user['whatsapp_number']
-                impersonated_user["whatsapp_number"] = sender_phone
-                impersonated_user["real_user_id"] = user["id"]
-                impersonated_user["original_role"] = user.get("role")
-                user = impersonated_user
+        if user.get("role") == "Developer":
+            # Check 1: FK-based impersonation (real user target)
+            if user.get("impersonating_user_id"):
+                impersonated_id = user.get("impersonating_user_id")
+                from db import get_user_by_id
+                
+                impersonated_user = get_user_by_id(impersonated_id)
+                if impersonated_user:
+                    logger.info(f"Developer {sender_phone} is impersonating {impersonated_user.get('name')}")
+                    impersonated_user["whatsapp_number"] = sender_phone
+                    impersonated_user["real_user_id"] = user["id"]
+                    impersonated_user["original_role"] = "Developer"
+                    user = impersonated_user
+                else:
+                    # Target user was deleted or invalid — clear the stale reference
+                    logger.warning(f"Impersonated user {impersonated_id} not found, clearing stale reference.")
+                    from db import supabase
+                    supabase.table("users").update({"impersonating_user_id": None}).eq("id", user["id"]).execute()
             else:
-                logger.warning(f"Impersonated user {impersonated_id} not found, falling back to real user.")
+                # Check 2: GUEST_MODE via wa_task_states (no FK needed)
+                from db import supabase
+                state_res = supabase.table("wa_task_states").select("action").eq("whatsapp_number", sender_phone).execute()
+                if state_res.data and state_res.data[0].get("action") == "GUEST_MODE":
+                    logger.info(f"Developer {sender_phone} is in GUEST_MODE")
+                    user = {
+                        "id": user["id"],  # keep real ID so we can switch back
+                        "name": "Guest Tester",
+                        "whatsapp_number": sender_phone,
+                        "role": "Guest",
+                        "real_user_id": user["id"],
+                        "original_role": "Developer"
+                    }
 
         # Resolve permissions
         user_role = user.get("role", Role.GUEST.value)
