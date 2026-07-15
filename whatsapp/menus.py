@@ -5,7 +5,6 @@ def send_main_menu(to: str, user: dict):
     role = user.get("role", "Guest")
     
     if role == "Guest":
-        from whatsapp.ux import send_list_message
         rows = [
             {"id": "guest_office", "title": "🏢 Office Spaces"},
             {"id": "guest_retail", "title": "🛍️ Retail Spaces"},
