@@ -18,14 +18,13 @@ import time
 import logging
 import tempfile
 import requests
+import config
 
 logger = logging.getLogger(__name__)
 
-# ── Config (same env vars already used elsewhere) ────────────────────────────
-SARVAM_API_KEY = os.getenv("SARVAM_API_KEY", "")
-META_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
-
+# ── Config ──────────────────────────────────────────────────
 GRAPH_API_VERSION = "v19.0"
+GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
 
 # ── Rate limit retry config ──────────────────────────────────────────────────
 MAX_RETRIES = 2
@@ -55,7 +54,7 @@ def download_audio(media_id: str) -> str:
         f"https://graph.facebook.com/{GRAPH_API_VERSION}"
         f"/{media_id}"
     )
-    headers = {"Authorization": f"Bearer {META_ACCESS_TOKEN}"}
+    headers = {"Authorization": f"Bearer {config.META_ACCESS_TOKEN}"}
 
     logger.info(f"Fetching media URL for media_id: {media_id}")
     url_response = requests.get(url_endpoint, headers=headers, timeout=10)
@@ -84,12 +83,12 @@ def download_audio(media_id: str) -> str:
 
 
 def transcribe_with_sarvam(file_path: str) -> str:
-    if not SARVAM_API_KEY:
+    if not config.SARVAM_API_KEY:
         raise ValueError("SARVAM_API_KEY not configured")
         
     url = "https://api.sarvam.ai/speech-to-text"
     headers = {
-        "api-subscription-key": SARVAM_API_KEY
+        "api-subscription-key": config.SARVAM_API_KEY
     }
     
     with open(file_path, "rb") as audio_file:
@@ -111,8 +110,89 @@ def transcribe_with_sarvam(file_path: str) -> str:
         logger.info(f"Sarvam transcription complete: {transcript[:100]}...")
         return transcript
 
+
+def transcribe_with_groq(file_path: str) -> str:
+    """
+    Transcribe an audio file using Groq Whisper API.
+
+    Language is set to English ('en') to force Roman script output.
+    This ensures Hinglish (Hindi-English mix) speech is transcribed
+    in Roman characters that match project/task names in the database,
+    rather than Devanagari script.
+
+    If the first attempt returns an empty/very short result, retries once
+    with slightly higher temperature to capture quieter or unclear speech.
+
+    Args:
+        file_path: Path to the .ogg audio file
+
+    Returns:
+        Transcript as a plain string
+
+    Raises:
+        Exception: If transcription fails after retries
+    """
+    from groq import Groq  # Lazy import — avoid loading at server startup
+    client = Groq(api_key=config.GROQCLOUD_API_KEY)
+
+    whisper_prompt = (
+        "Construction project management conversation in Hinglish. "
+        "Romanize all Hindi words. Project and task names are in English. "
+        "Common words: task, update, blocker, waterproofing, slope, terrace, "
+        "create, complete, progress, deadline."
+    )
+
+    # Attempt 1: deterministic (temperature=0)
+    # Attempt 2: slightly creative (temperature=0.2) if first result was too short
+    # Attempt 3+: rate limit retries
+    temperatures = [0.0, 0.2]
+
+    for attempt in range(MAX_RETRIES + 1):  # +1 for the warm retry
+        temp = temperatures[attempt] if attempt < len(temperatures) else 0.0
+        try:
+            with open(file_path, "rb") as audio_file:
+                transcription = client.audio.transcriptions.create(
+                    file=(os.path.basename(file_path), audio_file),
+                    model=GROQ_WHISPER_MODEL,
+                    language="en",
+                    response_format="text",
+                    temperature=temp,
+                    prompt=whisper_prompt,
+                )
+
+            result = transcription.strip() if isinstance(transcription, str) else str(transcription).strip()
+
+            # If result is empty/too short on attempt 0, retry with higher temp
+            if attempt == 0 and (not result or len(result.split()) < 2):
+                logger.info(f"Short transcript on attempt 1 ('{result}'), retrying with temp={temperatures[1]}")
+                continue
+
+            logger.info(f"Transcription complete ({len(result)} chars, temp={temp}): {result[:100]}...")
+            return result
+
+        except Exception as e:
+            error_str = str(e).lower()
+            is_rate_limit = "rate" in error_str or "429" in error_str or "limit" in error_str
+
+            if is_rate_limit and attempt < MAX_RETRIES:
+                logger.warning(f"Groq rate limit hit (attempt {attempt + 1}), retrying in {RETRY_DELAY_SECONDS}s...")
+                time.sleep(RETRY_DELAY_SECONDS)
+                continue
+            else:
+                logger.error(f"Transcription failed (attempt {attempt + 1}): {e}")
+                raise
+
+
 def transcribe_audio(file_path: str) -> str:
-    return transcribe_with_sarvam(file_path)
+    if config.SARVAM_API_KEY:
+        try:
+            return transcribe_with_sarvam(file_path)
+        except Exception as e:
+            logger.warning(f"Sarvam transcription failed, falling back to Groq: {e}")
+    else:
+        logger.info("SARVAM_API_KEY not configured, falling back to Groq")
+        
+    return transcribe_with_groq(file_path)
 
 
 

@@ -17,7 +17,7 @@ def test_transcribe_with_sarvam(mocker):
     mock_post.assert_called_once()
     
 def test_transcribe_with_groq(mocker):
-    mocker.patch("whatsapp.audio_handler.GROQCLOUD_API_KEY", "test_key")
+    mocker.patch("config.GROQCLOUD_API_KEY", "test_key")
     
     # Mock Groq client
     mock_groq_client = mocker.MagicMock()
