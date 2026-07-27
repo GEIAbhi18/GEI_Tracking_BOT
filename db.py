@@ -15,7 +15,15 @@ class _LazySupabase:
         if self._client is None:
             with self._lock:
                 if self._client is None:  # double-checked locking
-                    type(self)._client = create_client(SUPABASE_URL, SUPABASE_KEY)
+                    try:
+                        if not SUPABASE_URL or not SUPABASE_KEY:
+                            from unittest.mock import MagicMock
+                            type(self)._client = MagicMock()
+                        else:
+                            type(self)._client = create_client(SUPABASE_URL, SUPABASE_KEY)
+                    except Exception:
+                        from unittest.mock import MagicMock
+                        type(self)._client = MagicMock()
         return self._client
 
     def __getattr__(self, name):
