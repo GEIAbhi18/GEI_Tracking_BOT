@@ -19,12 +19,9 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_user(user_id):
-    """Resolve a user by telegram_id first, then fall back to whatsapp_number.
-    
-    WhatsApp users pass their phone number (e.g. 919xxxxxxxxx) as user_id,
-    which won't match the telegram_id column. This helper ensures WhatsApp
-    users are correctly identified and linked to their updates.
-    """
+    """Resolve a user by telegram_id, whatsapp_number, or DB ID (UUID)."""
+    if not user_id:
+        return None
     # 1. Try Telegram ID (works for Telegram users)
     u_info = get_user_by_telegram_id(user_id)
     if u_info:
@@ -34,6 +31,15 @@ def _resolve_user(user_id):
     try:
         from whatsapp.task_assignment import get_user_by_whatsapp
         u_info = get_user_by_whatsapp(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+        
+    # 3. Fallback: try DB ID / UUID
+    try:
+        from db import get_user_by_id
+        u_info = get_user_by_id(str(user_id))
         if u_info:
             return u_info
     except Exception:
@@ -455,7 +461,7 @@ def build_grouped_tasks_list_py(tasks):
             elif isinstance(p_obj, dict):
                 p_name = p_obj.get('name', 'No Project')
             else:
-                p_name = 'No Project'
+                p_name = 'Personal Tasks' if t.get('task_type') == 'PERSONAL' else 'No Project'
             
             updates = t.get('updates') or []
             prog = t.get('progress', 0)
@@ -491,8 +497,8 @@ def build_grouped_tasks_list_py(tasks):
         
     msg = ""
     # Sort projects by their absolute order in the database (Feature Request 1)
-    all_projects = get_projects()
-    project_order_map = {p['name']: i for i, p in enumerate(all_projects)}
+    all_projects = get_projects() or []
+    project_order_map = {p['name']: i for i, p in enumerate(all_projects) if isinstance(p, dict) and 'name' in p}
     
     sorted_p_names = sorted(grouped.keys(), key=lambda x: project_order_map.get(x, 999))
     
@@ -556,16 +562,40 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         
     # Not Kanav "all tasks"
     target_user_id = u_info['id'] if u_info else None
+    user_role = str(u_info.get('role', '')).capitalize() if u_info else ''
+    u_team_id = u_info.get('team_id') if u_info else None
     
-    tasks = get_all_tasks()
+    tasks = get_all_tasks(user_id=target_user_id, include_personal=True)
     
     if "show team tasks" in raw_message:
-        # Show all tasks that are not strictly personal, or show everything
-        tasks = [t for t in tasks if t.get('task_type') != 'PERSONAL']
+        # Developer and Director can see all team tasks.
+        # Other users see only team tasks matching their team_id or assigned/created by them.
+        if user_role in ['Developer', 'Director']:
+            tasks = [t for t in tasks if t.get('task_type') != 'PERSONAL']
+        else:
+            tasks = [
+                t for t in tasks 
+                if t.get('task_type') != 'PERSONAL' and (
+                    (u_team_id and str(t.get('team_id')) == str(u_team_id)) or
+                    str(t.get('assigned_to')) == str(target_user_id) or
+                    str(t.get('assigned_by')) == str(target_user_id) or
+                    str(t.get('created_by')) == str(target_user_id) or
+                    (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id))
+                )
+            ]
         
     elif "show my personal tasks" in raw_message:
-        # Show only personal tasks created by the user
-        tasks = [t for t in tasks if t.get('task_type') == 'PERSONAL' and str(t.get('created_by')) == str(target_user_id)]
+        # Show only personal tasks created by or assigned to the user
+        tasks = [
+            t for t in tasks 
+            if t.get('task_type') == 'PERSONAL' and (
+                not target_user_id or
+                str(t.get('created_by')) == str(target_user_id) or
+                str(t.get('assigned_to')) == str(target_user_id) or
+                str(t.get('assigned_by')) == str(target_user_id) or
+                (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id))
+            )
+        ]
         
     else:
         # Legacy/other filtering
@@ -581,12 +611,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
 
     filtered = filter_tasks(tasks, filters)
     if not filtered:
-        if "my personal tasks" in raw_message or explicit_assignee == str(requester).lower():
-            await send_reply_func("No tasks assigned to you and no personal tasks.")
-        elif "team tasks" in raw_message:
-            await send_reply_func("There are no team tasks available.")
-        else:
-            await send_reply_func("No tasks found matching that criteria — try 'show my tasks' to see everything.")
+        await send_reply_func("No tasks have been currently assigned to you.")
         return
         
     msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
@@ -837,7 +862,7 @@ def generate_pdf_report(team_name=None):
     pdf.ln(10)
 
     projects = get_projects()
-    tasks = get_all_tasks()
+    tasks = get_all_tasks(include_personal=True)
     
     # Filter by team_name if provided
     if team_name:

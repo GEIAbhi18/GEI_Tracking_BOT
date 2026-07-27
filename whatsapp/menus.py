@@ -23,6 +23,7 @@ def send_main_menu(to: str, user: dict):
         {"id": "menu_team_tasks", "title": "📋 Team Tasks"},
         {"id": "menu_my_tasks", "title": "👤 My Personal Tasks"},
         {"id": "menu_create_task", "title": "➕ Create Task"},
+        {"id": "menu_update_task", "title": "🔄 Update Task"},
         {"id": "menu_notifications", "title": "🔔 Notifications"},
         {"id": "menu_reports", "title": "📊 Reports"},
     ]

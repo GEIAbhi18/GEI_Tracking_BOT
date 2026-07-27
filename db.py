@@ -50,16 +50,16 @@ def get_tasks_for_project(project_id):
     response = supabase.table("tasks").select("*").eq("project_id", project_id).execute()
     return _apply_project_task_numbers(response.data)
 
-def get_all_tasks(user_id=None):
+def get_all_tasks(user_id=None, include_personal=False):
     response = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").execute()
     tasks = _apply_project_task_numbers(response.data)
     
     filtered_tasks = []
     for t in tasks:
         if t.get('task_type') == 'PERSONAL':
-            if not user_id:
+            if not include_personal and not user_id:
                 continue
-            if str(t.get('created_by')) != str(user_id) and str(t.get('assigned_to')) != str(user_id):
+            if user_id and str(t.get('created_by')) != str(user_id) and str(t.get('assigned_to')) != str(user_id) and str(t.get('assigned_by')) != str(user_id):
                 continue
         filtered_tasks.append(t)
         
@@ -175,7 +175,22 @@ def create_project_db(name, created_by=None):
     resp = supabase.table("projects").insert(data).execute()
     return resp.data[0] if resp.data else None
 
-def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None, task_type="PROJECT"):
+def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None, task_type="PROJECT", team_id=None):
+    # Ensure project_id is never None to satisfy Supabase NOT NULL constraint
+    if not project_id:
+        try:
+            projects = get_projects()
+            if projects:
+                match = next((p for p in projects if p['name'].lower() in ["general", "personal", "gei"]), None)
+                project_id = match['id'] if match else projects[0]['id']
+            else:
+                new_proj = create_project_db("General Project")
+                if new_proj:
+                    project_id = new_proj['id']
+        except Exception as p_err:
+            import logging
+            logging.error(f"Fallback project resolution error in add_task: {p_err}")
+
     data = {
         "project_id": project_id,
         "title": name,
@@ -190,6 +205,8 @@ def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None,
         data["planned_start_date"] = start_date
     if assigned_by:
         data["assigned_by"] = assigned_by
+    if team_id:
+        data["team_id"] = team_id
     try:
         resp = supabase.table("tasks").insert(data).execute()
         new_task = resp.data[0] if resp.data else None

@@ -30,14 +30,14 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             from core.logic import process_user_message
             async def _send_reply(text=None, document=None, target_user_id=None):
                 if text: send_text(sender_phone, text)
-            asyncio.run(process_user_message(sender_phone, "show team tasks", _send_reply))
+            asyncio.run(process_user_message(sender_phone, "show team tasks", send_reply_func=_send_reply))
             
         elif button_id == "menu_my_tasks":
             import asyncio
             from core.logic import process_user_message
             async def _send_reply(text=None, document=None, target_user_id=None):
                 if text: send_text(sender_phone, text)
-            asyncio.run(process_user_message(sender_phone, "show my personal tasks", _send_reply))
+            asyncio.run(process_user_message(sender_phone, "show my personal tasks", send_reply_func=_send_reply))
             
         elif button_id == "menu_create_task":
             buttons = [
@@ -45,6 +45,13 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                 {"id": "create_task_team", "title": "Team Task"}
             ]
             send_interactive_buttons(sender_phone, "What type of task do you want to create?", buttons)
+            
+        elif button_id == "menu_update_task":
+            buttons = [
+                {"id": "update_task_personal", "title": "Personal Task"},
+                {"id": "update_task_team", "title": "Team Task"}
+            ]
+            send_interactive_buttons(sender_phone, "Which task list would you like to update?", buttons)
             
         elif button_id == "menu_admin":
             if user.get("role") != "Developer" and user.get("original_role") != "Developer":
@@ -62,7 +69,28 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             send_text(sender_phone, "🔔 *Notifications*\n\nYou currently have no new notifications. Activity on your assigned tasks will appear here.")
             
         elif button_id == "menu_analytics":
-            send_text(sender_phone, "📈 *Analytics*\n\nYour dashboard is being generated. This feature is currently in Beta and will show your weekly task velocity soon!")
+            buttons = [
+                {"id": "analytics_team", "title": "📋 Team Analytics"},
+                {"id": "analytics_personal", "title": "👤 Personal Analytics"}
+            ]
+            send_interactive_buttons(sender_phone, "📈 *GEI Analytics Dashboard*\n\nSelect the type of analytics dashboard you would like to view:", buttons)
+            
+        elif button_id == "menu_reports":
+            role = user.get("role", "Guest")
+            original_role = user.get("original_role")
+            if role in ["Developer", "Director"] or original_role == "Developer":
+                send_text(sender_phone, "📄 *Generating Daily PDF Report...*\nPlease wait a moment while your report is generated.")
+                try:
+                    from core.intent_handlers import generate_pdf_report
+                    from whatsapp.task_assignment import _send_document_wa
+                    pdf_path = generate_pdf_report()
+                    _send_document_wa(sender_phone, pdf_path)
+                    send_text(sender_phone, "✅ Daily Project Report sent above!")
+                except Exception as pdf_err:
+                    logger.error(f"Error generating/sending PDF report: {pdf_err}")
+                    send_text(sender_phone, "Failed to generate PDF report. Please contact an admin.")
+            else:
+                send_text(sender_phone, "📊 *Daily Reports*\n\nDetailed system PDF reports are reserved for Directors and Developers. Please contact your administrator if you need access.")
             
         else:
             send_text(sender_phone, f"You selected: {button_id} (Coming soon)")
@@ -120,6 +148,65 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         elif button_id == "create_task_team":
             send_text(sender_phone, "What is the title of the new Team Task?")
             set_wa_state(sender_phone, "WAITING_FOR_TEAM_TASK_TITLE")
+        return
+
+    # ── Update Task Routing ──────────────────────────────────────────────────
+    if button_id.startswith("update_task_"):
+        from auth.middleware import authenticate_whatsapp_request
+        user_info = authenticate_whatsapp_request(sender_phone)
+        user_id = user_info["id"] if user_info else None
+        
+        if button_id == "update_task_personal":
+            raw_tasks = supabase.table("tasks").select("*, projects(name)").neq("status", "Completed").execute().data or []
+            tasks = [
+                t for t in raw_tasks 
+                if t.get("task_type") == "PERSONAL" and (
+                    not user_id or 
+                    str(t.get("created_by")) == str(user_id) or 
+                    str(t.get("assigned_to")) == str(user_id)
+                )
+            ]
+            task_type_label = "Personal Tasks"
+        elif button_id == "update_task_team":
+            raw_tasks = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").neq("status", "Completed").execute().data or []
+            tasks = [
+                t for t in raw_tasks 
+                if t.get("task_type") != "PERSONAL" and (
+                    not user_id or 
+                    str(t.get("assigned_to")) == str(user_id) or 
+                    str(t.get("created_by")) == str(user_id) or
+                    str(t.get("assigned_by")) == str(user_id) or
+                    (user_info and user_info.get("role") in ["Developer", "Director"])
+                )
+            ]
+            task_type_label = "Team Tasks"
+        else:
+            tasks = []
+            task_type_label = "Tasks"
+
+        if not tasks:
+            send_text(sender_phone, f"No active {task_type_label.lower()} found to update.")
+            return
+
+        lines = [f"📋 *Select a {task_type_label[:-1]} to Update:*\n"]
+        task_ids = []
+        for idx, t in enumerate(tasks, 1):
+            task_ids.append(t["id"])
+            title = t.get("title") or t.get("name") or "Task"
+            prog = t.get("progress", 0)
+            status = t.get("status", "Pending")
+            lines.append(f"{idx}. *{title}* (Progress: {prog}%, Status: {status})")
+
+        lines.append("\n💬 *Reply with the task number and update details* (e.g., *1 75% done* or *2 completed*), or send a voice recording!")
+        
+        msg = "\n".join(lines)
+        from core.context_manager import update_context
+        update_context(sender_phone, last_task_list=task_ids)
+        if user_id:
+            update_context(user_id, last_task_list=task_ids)
+            
+        set_wa_state(sender_phone, "WAITING_FOR_TASK_UPDATE", metadata={"task_id": task_ids[0] if task_ids else None})
+        send_text(sender_phone, msg)
         return
 
     # ── Guest Menu Routing ───────────────────────────────────────────────────
@@ -224,4 +311,379 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         elif action == "remind":
             send_text(sender_phone, "When do you want to be reminded? (e.g. 'tomorrow at 10am')")
             set_wa_state(sender_phone, "WAITING_FOR_REMINDER", {"task_id": task_id})
+
+    # ── Analytics Routing ───────────────────────────────────────────────────
+    if button_id.startswith("analytics_"):
+        if button_id == "analytics_team":
+            dashboard_text = build_team_analytics_dashboard(user)
+            send_text(sender_phone, dashboard_text)
+        elif button_id == "analytics_personal":
+            dashboard_text = build_personal_analytics_dashboard(user)
+            send_text(sender_phone, dashboard_text)
+        return
+
+    # ── Assign Task Routing ──────────────────────────────────────────────────
+    if button_id.startswith("assign_task_"):
+        parts = button_id.split("_", 3)
+        if len(parts) >= 4:
+            task_id = parts[2]
+            member_id = parts[3]
+
+            from db import get_user_by_id
+
+            try:
+                supabase.table("tasks").update({"assigned_to": member_id}).eq("id", task_id).execute()
+                task_res = supabase.table("tasks").select("title, name").eq("id", task_id).execute()
+                task_title = "Team Task"
+                if task_res.data:
+                    task_title = task_res.data[0].get("title") or task_res.data[0].get("name") or "Team Task"
+            except Exception as update_err:
+                logger.error(f"Error updating task assigned_to: {update_err}")
+                task_title = "Team Task"
+
+            assigned_user = get_user_by_id(member_id)
+            member_name = assigned_user.get("name", "Team Member") if assigned_user else "Team Member"
+
+            send_text(sender_phone, f"✅ Task '{task_title}' assigned to *{member_name}*!")
+
+            # Send WhatsApp notification ONLY for Team Tasks to assigned member
+            if assigned_user:
+                assigned_wa = assigned_user.get("whatsapp_number") or assigned_user.get("telegram_id")
+                if assigned_wa:
+                    creator_name = user.get("name", "A team member") if user else "A team member"
+                    notify_msg = (
+                        f"📋 *New Task Assigned to You!*\n\n"
+                        f"Hi {member_name} 👋,\n"
+                        f"*{creator_name}* assigned a new Team Task to you:\n\n"
+                        f"📌 *Task:* {task_title}\n\n"
+                        f"Please check your task list in GEI_BOT for details."
+                    )
+                    send_text(assigned_wa, notify_msg)
+        return
+
+
+def send_assignee_selection_prompt(to_phone: str, task_id: str, task_title: str, creator_user: dict):
+    """Presents interactive selection of team members to assign the team task."""
+    from db import supabase
+    from whatsapp.ux import send_interactive_buttons, send_list_message
+
+    try:
+        res = supabase.table("users").select("id, name, role, whatsapp_number, telegram_id, team_id").execute()
+        users_list = res.data or []
+    except Exception as e:
+        logger.error(f"Error fetching users for task assignment prompt: {e}")
+        users_list = []
+
+    team_id = creator_user.get("team_id") if creator_user else None
+    
+    if team_id:
+        same_team = [u for u in users_list if str(u.get("team_id")) == str(team_id)]
+        other_team = [u for u in users_list if str(u.get("team_id")) != str(team_id)]
+        members = same_team + other_team
+    else:
+        members = users_list
+
+    members = [m for m in members if m.get("name")]
+
+    if not members:
+        send_text(to_phone, f"✅ Team Task '{task_title}' created successfully!")
+        return
+
+    body = f"✅ Team Task '{task_title}' created!\n\n👥 Who should this Team Task be assigned to?"
+
+    if len(members) <= 3:
+        buttons = [
+            {"id": f"assign_task_{task_id}_{m['id']}", "title": m["name"][:20]}
+            for m in members[:3]
+        ]
+        send_interactive_buttons(to_phone, body, buttons)
+    else:
+        sections = [{
+            "title": "Select Team Member",
+            "rows": [
+                {"id": f"assign_task_{task_id}_{m['id']}", "title": m["name"][:24], "description": m.get("role", "Team Member")}
+                for m in members[:10]
+            ]
+        }]
+        send_list_message(to_phone, body, "Assign Task", sections)
+
+
+def build_team_analytics_dashboard(user: dict) -> str:
+    """Builds person-wise team analytics showing done, left, blocked tasks and velocity."""
+    from db import get_all_tasks
+    from collections import defaultdict
+
+    target_user_id = user.get("id") if user else None
+    user_role = str(user.get("role", "")).capitalize() if user else ""
+    original_role = user.get("original_role") if user else None
+    user_team_id = user.get("team_id") if user else None
+
+    all_tasks = get_all_tasks(include_personal=True)
+    
+    # Filter team tasks based on role / team membership
+    if user_role in ["Developer", "Director"] or original_role == "Developer":
+        team_tasks = [t for t in all_tasks if t.get("task_type") != "PERSONAL"]
+    else:
+        team_tasks = [
+            t for t in all_tasks 
+            if t.get("task_type") != "PERSONAL" and (
+                (user_team_id and str(t.get("team_id")) == str(user_team_id)) or
+                str(t.get("assigned_to")) == str(target_user_id) or
+                str(t.get("assigned_by")) == str(target_user_id) or
+                str(t.get("created_by")) == str(target_user_id)
+            )
+        ]
+
+    if not team_tasks:
+        return "📈 *GEI Team Analytics Dashboard*\n\nNo team tasks currently found in the system."
+
+    # Group person-wise
+    grouped_by_user = defaultdict(list)
+    for t in team_tasks:
+        assignee_name = "Unassigned"
+        if t.get("assigned_to_user") and isinstance(t["assigned_to_user"], dict):
+            assignee_name = t["assigned_to_user"].get("name") or "Unassigned"
+        elif t.get("assigned_to"):
+            assignee_name = str(t.get("assigned_to"))[:8]
+        grouped_by_user[assignee_name].append(t)
+
+    msg = "📈 *GEI Team Analytics Dashboard*\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += "👥 *Person-Wise Breakdown*\n\n"
+
+    total_all = len(team_tasks)
+    completed_all = 0
+    left_all = 0
+    blocked_all = 0
+    total_prog_sum = 0
+
+    for person_name, p_tasks in sorted(grouped_by_user.items(), key=lambda x: x[0]):
+        p_total = len(p_tasks)
+        p_completed = 0
+        p_left = 0
+        p_blocked = 0
+        p_prog_sum = 0
+
+        for t in p_tasks:
+            try:
+                prog = int(str(t.get("progress", 0) or 0).replace("%", "").strip())
+            except Exception:
+                prog = 0
+            status = str(t.get("status", "")).capitalize()
+            blocker = t.get("blocker_reason") or t.get("blockers")
+
+            is_done = status in ["Completed", "Closed"] or prog >= 100
+            is_blocked = bool(blocker and str(blocker).lower() not in ["none", "null", "undefined", "no blocker"])
+
+            if is_done:
+                p_completed += 1
+            else:
+                p_left += 1
+
+            if is_blocked and not is_done:
+                p_blocked += 1
+
+            p_prog_sum += min(prog, 100)
+
+        completed_all += p_completed
+        left_all += p_left
+        blocked_all += p_blocked
+        total_prog_sum += p_prog_sum
+
+        avg_prog = round(p_prog_sum / p_total) if p_total > 0 else 0
+
+        msg += f"👤 *{person_name}*\n"
+        msg += f"  ├ 📋 Total Tasks: {p_total}\n"
+        msg += f"  ├ ✅ Done: {p_completed}\n"
+        msg += f"  ├ ⏳ Left: {p_left}\n"
+        msg += f"  ├ 🛑 Blocked: {p_blocked}\n"
+        msg += f"  └ 📊 Velocity: {avg_prog}%\n\n"
+
+    overall_avg = round(total_prog_sum / total_all) if total_all > 0 else 0
+
+    msg += "📌 *Overall Team Summary*\n"
+    msg += f"  • Total Team Tasks: {total_all}\n"
+    msg += f"  • Done: {completed_all} | Left: {left_all} | Blocked: {blocked_all}\n"
+    msg += f"  • Overall Team Velocity: {overall_avg}%\n"
+
+    return msg
+
+
+def build_personal_analytics_dashboard(user: dict) -> str:
+    """Builds personal task analytics showing done, left, blocked tasks and velocity."""
+    from db import get_all_tasks
+
+    target_user_id = user.get("id") if user else None
+    user_name = user.get("name", "there") if user else "there"
+
+    all_tasks = get_all_tasks(include_personal=True)
+    
+    personal_tasks = [
+        t for t in all_tasks 
+        if t.get("task_type") == "PERSONAL" and (
+            str(t.get("created_by")) == str(target_user_id) or
+            str(t.get("assigned_to")) == str(target_user_id) or
+            str(t.get("assigned_by")) == str(target_user_id) or
+            (t.get("assigned_to_user") and str(t["assigned_to_user"].get("id")) == str(target_user_id))
+        )
+    ]
+
+    if not personal_tasks:
+        return f"👤 *Personal Analytics Dashboard*\n\nHi {user_name} 👋, you currently have no personal tasks recorded in Supabase."
+
+    total_tasks = len(personal_tasks)
+    completed = 0
+    left = 0
+    blocked = 0
+    prog_sum = 0
+
+    for t in personal_tasks:
+        try:
+            prog = int(str(t.get("progress", 0) or 0).replace("%", "").strip())
+        except Exception:
+            prog = 0
+        status = str(t.get("status", "")).capitalize()
+        blocker = t.get("blocker_reason") or t.get("blockers")
+
+        is_done = status in ["Completed", "Closed"] or prog >= 100
+        is_blocked = bool(blocker and str(blocker).lower() not in ["none", "null", "undefined", "no blocker"])
+
+        if is_done:
+            completed += 1
+        else:
+            left += 1
+
+        if is_blocked and not is_done:
+            blocked += 1
+
+        prog_sum += min(prog, 100)
+
+    avg_prog = round(prog_sum / total_tasks) if total_tasks > 0 else 0
+
+    msg = f"👤 *Personal Task Analytics*\n"
+    msg += "━━━━━━━━━━━━━━━━━━━━━\n"
+    msg += f"Hi {user_name} 👋, here is your personal task breakdown:\n\n"
+    msg += f"  • 📋 Total Tasks: {total_tasks}\n"
+    msg += f"  • ✅ Done: {completed}\n"
+    msg += f"  • ⏳ Left: {left}\n"
+    msg += f"  • 🛑 Blocked: {blocked}\n"
+    msg += f"  • 📊 Personal Velocity: {avg_prog}%\n\n"
+    msg += "💡 *Tip:* Tap '👤 My Personal Tasks' from the main menu to view and update your active tasks."
+
+    return msg
+
+
+def handle_direct_task_update(sender_phone: str, text: str, user_info: dict) -> bool:
+    """
+    Parses and executes a task update input (e.g. '1 75% done' or '2 completed' or voice transcript).
+    Returns True if successfully processed, False if it couldn't resolve the task.
+    """
+    from core.context_manager import get_context
+    from db import supabase, save_update
+    from core.utils import resolve_task_from_list
+    import re
+
+    ctx = get_context(sender_phone)
+    task_ids = ctx.get("last_task_list", [])
+    user_id = user_info.get("id") if user_info else None
+
+    if not task_ids and user_id:
+        ctx_user = get_context(user_id)
+        task_ids = ctx_user.get("last_task_list", [])
+
+    all_raw = supabase.table("tasks").select("*, projects(name)").execute().data or []
+    if task_ids:
+        tasks = []
+        for tid in task_ids:
+            found = next((t for t in all_raw if t["id"] == tid), None)
+            if found:
+                tasks.append(found)
+    else:
+        tasks = [t for t in all_raw if t.get("status") != "Completed"]
+
+    if not tasks:
+        send_text(sender_phone, "No active tasks found to update.")
+        return True
+
+    # 1. Resolve task index or task matching
+    target_task = None
+
+    # Check leading number or explicit task number
+    num_match = re.search(r'^(?:task|number|#)?\s*(\d+)', text.strip(), re.IGNORECASE)
+    if num_match:
+        idx = int(num_match.group(1)) - 1
+        if 0 <= idx < len(tasks):
+            target_task = tasks[idx]
+
+    if not target_task:
+        numbers = re.findall(r'\b\d+\b', text)
+        if numbers:
+            idx = int(numbers[0]) - 1
+            if 0 <= idx < len(tasks):
+                target_task = tasks[idx]
+
+    if not target_task:
+        target_task = resolve_task_from_list(text, tasks, last_list_ids=task_ids)
+
+    if not target_task:
+        send_text(sender_phone, "Could not identify which task you want to update. Please reply with the task number (e.g., '1 75% done').")
+        return True
+
+    # 2. Extract progress
+    progress = None
+    pct_match = re.search(r'(\d{1,3})\s*(?:%|percent)', text, re.IGNORECASE)
+    if pct_match:
+        progress = int(pct_match.group(1))
+    elif re.search(r'\b(completed|done|finished|complete|closed)\b', text, re.IGNORECASE):
+        numbers = re.findall(r'\b\d+\b', text)
+        if len(numbers) >= 2:
+            try:
+                val = int(numbers[1])
+                if 0 <= val <= 100:
+                    progress = val
+                else:
+                    progress = 100
+            except ValueError:
+                progress = 100
+        else:
+            progress = 100
+    else:
+        numbers = re.findall(r'\b\d+\b', text)
+        if len(numbers) >= 2:
+            try:
+                val = int(numbers[1])
+                if 0 <= val <= 100:
+                    progress = val
+            except ValueError:
+                pass
+        elif len(numbers) == 1:
+            try:
+                val = int(numbers[0])
+                if 0 <= val <= 100 and val != (tasks.index(target_task) + 1):
+                    progress = val
+            except ValueError:
+                pass
+
+    if progress is None:
+        progress = target_task.get("progress", 0) or 0
+
+    progress = min(100, max(0, progress))
+
+    # 3. Save update to DB
+    task_id = target_task["id"]
+    save_update(task_id, progress, "None", [], user_id)
+
+    # 4. Confirmation message
+    task_name = target_task.get("title") or target_task.get("name") or "Task"
+    new_status = "Completed" if progress >= 100 else ("In Progress" if progress > 0 else "Pending")
+
+    send_text(
+        sender_phone,
+        f"✅ Task is Updated.\n\n"
+        f"📌 *Task:* {task_name}\n"
+        f"📊 *Progress:* {progress}%\n"
+        f"🏷️ *Status:* {new_status}"
+    )
+    return True
+
 

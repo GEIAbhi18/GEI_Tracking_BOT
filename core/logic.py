@@ -23,7 +23,9 @@ async def process_user_message(user_id: str, text: str, images: list = None, sen
     _images = images if images else []
 
     try:
-        await process_update_message(text=text, user_id=int(user_id), images=_images, send_reply_func=reply_cb)
+        # Convert numeric string to int if possible for legacy telegram IDs, but preserve string if not numeric
+        parsed_uid = int(str(user_id)) if (isinstance(user_id, int) or (isinstance(user_id, str) and str(user_id).isdigit())) else user_id
+        await process_update_message(text=text, user_id=parsed_uid, images=_images, send_reply_func=reply_cb)
     except Exception as e:
         logging.exception(f"Error processing message: {e}")
         # Send a friendly message instead of exposing internals

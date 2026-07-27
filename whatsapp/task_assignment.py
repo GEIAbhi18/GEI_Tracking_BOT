@@ -136,9 +136,10 @@ def _get_supabase():
 
 
 def get_user_by_whatsapp(phone: str):
-    """Return user row by whatsapp_number. Phone in E.164 without '+' (e.g. 919xxxxxxxx)."""
+    """Return user row by whatsapp_number. Phone in E.164 (e.g. 919xxxxxxxx or +919xxxxxxxx)."""
     try:
-        r = _get_supabase().table("users").select("*").eq("whatsapp_number", phone).execute()
+        clean_phone = str(phone).lstrip("+")
+        r = _get_supabase().table("users").select("*").or_(f"whatsapp_number.eq.{clean_phone},whatsapp_number.eq.+{clean_phone}").execute()
         return r.data[0] if r.data else None
     except Exception as e:
         logger.error(f"get_user_by_whatsapp error: {e}")

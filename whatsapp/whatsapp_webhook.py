@@ -585,7 +585,8 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
             from whatsapp.ux import send_text
             
-            task_type = "PERSONAL" if action == "WAITING_FOR_PERSONAL_TASK_TITLE" else "PROJECT"
+            is_personal = (action == "WAITING_FOR_PERSONAL_TASK_TITLE")
+            task_type = "PERSONAL" if is_personal else "TEAM"
             try:
                 from db import add_task
                 from auth.middleware import authenticate_whatsapp_request
@@ -593,23 +594,38 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 # Fetch the correct user considering impersonation
                 user_info = authenticate_whatsapp_request(sender)
                 user_id = user_info["id"] if user_info else None
+                team_id = user_info.get("team_id") if user_info else None
                 
                 new_task = add_task(
                     project_id=None,
                     name=text,
                     assigned_by=user_id,
-                    assigned_to=user_id if task_type == "PERSONAL" else None,
-                    task_type=task_type
+                    assigned_to=user_id if is_personal else None,
+                    task_type=task_type,
+                    team_id=team_id
                 )
                 
                 if new_task:
-                    send_text(sender, f"✅ {task_type.capitalize()} Task '{text}' created successfully!")
+                    if is_personal:
+                        send_text(sender, f"✅ Personal Task '{text}' created successfully!")
+                    else:
+                        from whatsapp.handlers import send_assignee_selection_prompt
+                        send_assignee_selection_prompt(sender, new_task['id'], text, user_info)
                 else:
                     send_text(sender, "Failed to create task in the database. Contact an admin.")
             except Exception as e:
                 logger.error(f"Error creating task: {e}")
                 send_text(sender, "An error occurred while creating the task.")
             return
+
+        elif action == "WAITING_FOR_TASK_UPDATE":
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+            from auth.middleware import authenticate_whatsapp_request
+            from whatsapp.handlers import handle_direct_task_update
+            
+            user_info = authenticate_whatsapp_request(sender)
+            if handle_direct_task_update(sender, text, user_info):
+                return
 
 
     # 1.5 Task assignment multi-step state (legacy fallback, to be removed)

@@ -21,14 +21,23 @@ logger = logging.getLogger(__name__)
 
 
 def _resolve_user_ue(user_id):
-    """Resolve user by telegram_id first, then fall back to whatsapp_number.
+    """Resolve user by telegram_id first, then fall back to whatsapp_number or DB ID.
     (Separate copy to avoid circular import with intent_handlers.)"""
+    if not user_id:
+        return None
     u_info = get_user_by_telegram_id(user_id)
     if u_info:
         return u_info
     try:
         from whatsapp.task_assignment import get_user_by_whatsapp
         u_info = get_user_by_whatsapp(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+    try:
+        from db import get_user_by_id
+        u_info = get_user_by_id(str(user_id))
         if u_info:
             return u_info
     except Exception:
