@@ -116,7 +116,7 @@ def test_handle_interactive_reply_my_tasks(mocker):
     user = {"id": "user-123", "name": "Abhijeet", "role": "Developer"}
     handle_interactive_reply("+919876543210", "menu_my_tasks", user)
     
-    mock_send_text.assert_called_once_with("+919876543210", "No tasks have been currently assigned to you.")
+    mock_send_text.assert_called_once_with("+919876543210", "👤 **My Personal Tasks**\n\nNo personal tasks currently assigned.")
 
 def test_handle_interactive_reply_team_tasks(mocker):
     """Test menu_team_tasks sends reply text via WhatsApp send_text."""
@@ -128,7 +128,7 @@ def test_handle_interactive_reply_team_tasks(mocker):
     user = {"id": "user-123", "name": "Abhijeet", "role": "Developer"}
     handle_interactive_reply("+919876543210", "menu_team_tasks", user)
     
-    mock_send_text.assert_called_once_with("+919876543210", "No tasks have been currently assigned to you.")
+    mock_send_text.assert_called_once_with("+919876543210", "📋 **Team Tasks**\n\nNo team tasks currently assigned.")
 
 def test_team_task_scoping_for_team_members(mocker):
     """Test team members only see tasks matching their team_id while Developer sees all."""

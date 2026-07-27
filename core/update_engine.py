@@ -69,7 +69,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     # Pre-intercept "state-breakers" - If user types a clear top-level command, break any existing loop
     COMMAND_KEYWORDS = [
         "/start", "show tasks", "view tasks", "list tasks", "show blockers", 
-        "help", "/help", "exit", "cancel", "update task", "add image", 
+        "team tasks", "personal tasks", "my tasks", "show team tasks", "show my personal tasks",
+        "show all tasks", "help", "/help", "exit", "cancel", "update task", "add image", 
         "complete task", "task detail", "create project", "create task", "add blocker"
     ]
     if state and any(cmd in stripped_lower for cmd in COMMAND_KEYWORDS):
@@ -128,11 +129,21 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         await handlers.handle_remove_blocker({"intent": "remove_blocker", "task_name": t_ref}, user_id, context, send_reply_func)
         return
 
+    is_task_query = (
+        stripped_lower in ["show tasks", "view tasks", "list tasks", "show_tasks", "list_tasks", 
+                           "show team tasks", "show my personal tasks", "show all tasks", 
+                           "team tasks", "personal tasks", "my tasks", "my personal tasks"] or
+        ("show" in stripped_lower and "task" in stripped_lower) or
+        ("list" in stripped_lower and "task" in stripped_lower) or
+        ("view" in stripped_lower and "task" in stripped_lower) or
+        stripped_lower in ["tasks", "/tasks", "all tasks"]
+    ) and not any(action in stripped_lower for action in ["complete", "update", "create", "new", "delete", "add", "detail"])
+
     if stripped_lower in ["complete task", "complete_task"]:
         await handlers.handle_complete_task({"intent": "complete_task"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["show tasks", "view tasks", "list tasks", "show_tasks", "list_tasks"]:
-        await handlers.handle_query_tasks({"intent": "query_tasks"}, user_id, context, send_reply_func)
+    elif is_task_query:
+        await handlers.handle_query_tasks({"intent": "query_tasks", "raw_text": text}, user_id, context, send_reply_func)
         return
     elif stripped_lower in ["show blockers", "view blockers", "list blockers", "show_blockers", "view_blockers"]:
         await handlers.handle_query_blockers({"intent": "query_blockers"}, user_id, context, send_reply_func)

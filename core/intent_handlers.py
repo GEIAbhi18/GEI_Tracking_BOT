@@ -517,7 +517,7 @@ def build_grouped_tasks_list_py(tasks):
                 current_prog = t.get('progress', 0)
                 if current_prog is None: current_prog = 0
                 is_done = int(float(current_prog)) >= 100
-            except:
+            except Exception:
                 is_done = False
                 
             done_marker = " ✅" if is_done else ""
@@ -527,95 +527,125 @@ def build_grouped_tasks_list_py(tasks):
         
     return msg.strip()
 
+def _resolve_user(user_id):
+    """Resolve a user by telegram_id, whatsapp_number, or DB ID (UUID)."""
+    if not user_id:
+        return None
+    # 1. Try WhatsApp authentication middleware (handles impersonation & WA number)
+    try:
+        from auth.middleware import authenticate_whatsapp_request
+        u_info = authenticate_whatsapp_request(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+
+    # 2. Try Telegram ID (works for Telegram users)
+    u_info = get_user_by_telegram_id(user_id)
+    if u_info:
+        return u_info
+    
+    # 3. Fallback: try WhatsApp number directly
+    try:
+        from whatsapp.task_assignment import get_user_by_whatsapp
+        u_info = get_user_by_whatsapp(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+        
+    # 4. Fallback: try DB ID / UUID
+    try:
+        from db import get_user_by_id
+        u_info = get_user_by_id(str(user_id))
+        if u_info:
+            return u_info
+    except Exception:
+        pass
+    
+    return None
+
 async def handle_query_tasks(entities, user_id, context, send_reply_func):
     u_info = _resolve_user(user_id)
     filters = entities.get("query_filters") or {}
     
-    # Same logic as JS: check if all tasks were requested
-    raw_message = str(context.get("messages", [])[-1]).lower() if context.get("messages") else ""
+    raw_message = (entities.get("raw_text") or "").lower()
+    if not raw_message and context and context.get("messages"):
+        raw_message = str(context.get("messages", [])[-1]).lower()
+    
     explicit_assignee = str(filters.get("assignee") or entities.get("assignee", "")).lower()
-    is_all = any(x in raw_message for x in ["all tasks", "all task", "view all", "list all", "show all"]) or explicit_assignee == "all"
     
-    requester = u_info['name'] if u_info else 'Asif'
-    
-    # Defaults for Manager Kanav
-    if requester == 'Kanav' and not explicit_assignee:
-        is_all = True
-        
-    if requester == 'Kanav' and is_all and explicit_assignee not in ['kanav', 'asif']:
-        msg = "**Tasks Assigned to Kanav**\n"
-        all_tasks = get_all_tasks()
-        k_tasks = [t for t in all_tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'kanav']
-        k_tasks = filter_tasks(k_tasks, filters)
-        msg += build_grouped_tasks_list_py(k_tasks) + "\n\n" if k_tasks else "No tasks match criteria\n\n"
-        
-        msg += "**Tasks Assigned to Asif**\n"
-        a_tasks = [t for t in all_tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif') or not t.get('assigned_to_user')]
-        a_tasks = filter_tasks(a_tasks, filters)
-        msg += build_grouped_tasks_list_py(a_tasks) if a_tasks else "No tasks match criteria"
-        
-        # Store context for index matching
-        update_context(user_id, last_task_list=[t['id'] for t in k_tasks] + [t['id'] for t in a_tasks], active_project_id=None)
-        
-        await send_reply_func(msg)
-        return
-        
-    # Not Kanav "all tasks"
     target_user_id = u_info['id'] if u_info else None
-    user_role = str(u_info.get('role', '')).capitalize() if u_info else ''
+    user_role = str(u_info.get('role', '')).lower() if u_info else ''
+    original_role = str(u_info.get('original_role', '')).lower() if u_info else ''
+    is_admin = user_role in ['director', 'developer'] or original_role == 'developer'
     u_team_id = u_info.get('team_id') if u_info else None
     
-    tasks = get_all_tasks(user_id=target_user_id, include_personal=True)
+    all_tasks = get_all_tasks(user_id=target_user_id, include_personal=True)
     
-    if "show team tasks" in raw_message:
-        # Developer and Director can see all team tasks.
-        # Other users see only team tasks matching their team_id or assigned/created by them.
-        if user_role in ['Developer', 'Director']:
-            tasks = [t for t in tasks if t.get('task_type') != 'PERSONAL']
-        else:
-            tasks = [
-                t for t in tasks 
-                if t.get('task_type') != 'PERSONAL' and (
-                    (u_team_id and str(t.get('team_id')) == str(u_team_id)) or
-                    str(t.get('assigned_to')) == str(target_user_id) or
-                    str(t.get('assigned_by')) == str(target_user_id) or
-                    str(t.get('created_by')) == str(target_user_id) or
-                    (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id))
-                )
-            ]
-        
-    elif "show my personal tasks" in raw_message:
-        # Show only personal tasks created by or assigned to the user
-        tasks = [
-            t for t in tasks 
-            if t.get('task_type') == 'PERSONAL' and (
-                not target_user_id or
-                str(t.get('created_by')) == str(target_user_id) or
+    # Categorize into Team Tasks vs Personal Tasks
+    
+    # 1. Team Tasks (task_type != 'PERSONAL')
+    if is_admin:
+        team_tasks = [t for t in all_tasks if t.get('task_type') != 'PERSONAL']
+    else:
+        team_tasks = [
+            t for t in all_tasks 
+            if t.get('task_type') != 'PERSONAL' and (
+                (u_team_id and str(t.get('team_id')) == str(u_team_id)) or
                 str(t.get('assigned_to')) == str(target_user_id) or
                 str(t.get('assigned_by')) == str(target_user_id) or
-                (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id))
+                str(t.get('created_by')) == str(target_user_id) or
+                (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id)) or
+                not t.get('team_id')
             )
         ]
-        
-    else:
-        # Legacy/other filtering
-        if explicit_assignee == 'kanav':
-            tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'kanav']
-        elif explicit_assignee == 'asif':
-            tasks = [t for t in tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif') or not t.get('assigned_to_user')]
-        elif (requester == 'Asif' and not explicit_assignee and not is_all):
-            if "my tasks" in raw_message:
-                tasks = [t for t in tasks if t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == 'asif']
-        elif target_user_id and u_info and u_info['role'] != 'director' and not is_all:
-            tasks = get_tasks_for_user(target_user_id)
 
-    filtered = filter_tasks(tasks, filters)
-    if not filtered:
-        await send_reply_func("No tasks have been currently assigned to you.")
-        return
-        
-    msg = f"Here are the tasks currently matching your query:\n\n{build_grouped_tasks_list_py(filtered)}"
-    update_context(user_id, last_task_list=[t['id'] for t in filtered], active_project_id=None)
+    # 2. Personal Tasks (task_type == 'PERSONAL')
+    personal_tasks = [
+        t for t in all_tasks 
+        if t.get('task_type') == 'PERSONAL' and (
+            not target_user_id or
+            str(t.get('created_by')) == str(target_user_id) or
+            str(t.get('assigned_to')) == str(target_user_id) or
+            str(t.get('assigned_by')) == str(target_user_id) or
+            (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id))
+        )
+    ]
+    
+    if explicit_assignee and explicit_assignee != "all":
+        team_tasks = [t for t in team_tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == explicit_assignee) or explicit_assignee in str(t.get('assigned_to', '')).lower()]
+        personal_tasks = [t for t in personal_tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == explicit_assignee) or explicit_assignee in str(t.get('assigned_to', '')).lower()]
+
+    filtered_team = filter_tasks(team_tasks, filters)
+    filtered_personal = filter_tasks(personal_tasks, filters)
+
+    is_only_team = ("show team tasks" in raw_message or raw_message == "team tasks") and "personal" not in raw_message
+    is_only_personal = ("show my personal tasks" in raw_message or "personal tasks" in raw_message) and "team" not in raw_message
+
+    if is_only_team:
+        if not filtered_team:
+            msg = "📋 **Team Tasks**\n\nNo team tasks currently assigned."
+        else:
+            msg = f"📋 **Team Tasks**\n\n{build_grouped_tasks_list_py(filtered_team)}"
+        stored_tasks = filtered_team
+
+    elif is_only_personal:
+        if not filtered_personal:
+            msg = "👤 **My Personal Tasks**\n\nNo personal tasks currently assigned."
+        else:
+            msg = f"👤 **My Personal Tasks**\n\n{build_grouped_tasks_list_py(filtered_personal)}"
+        stored_tasks = filtered_personal
+
+    else:
+        # Default & explicit multi-type requests: Team Tasks FIRST, Personal Tasks SECOND
+        team_str = build_grouped_tasks_list_py(filtered_team) if filtered_team else "No team tasks currently assigned."
+        personal_str = build_grouped_tasks_list_py(filtered_personal) if filtered_personal else "No personal tasks currently assigned."
+
+        msg = f"📋 **Team Tasks**\n\n{team_str}\n\n👤 **My Personal Tasks**\n\n{personal_str}"
+        stored_tasks = filtered_team + filtered_personal
+
+    update_context(user_id, last_task_list=[t['id'] for t in stored_tasks if t.get('id')], active_project_id=None)
     await send_reply_func(msg)
 
 async def handle_get_task_detail(entities, user_id, context, send_reply_func):
