@@ -527,6 +527,54 @@ def build_grouped_tasks_list_py(tasks):
         
     return msg.strip()
 
+def build_personal_tasks_list_py(tasks):
+    if not tasks:
+        return "No personal tasks currently assigned."
+    
+    from core.utils import format_date_human
+    msg = ""
+    for idx, t in enumerate(tasks, 1):
+        try:
+            updates = t.get('updates') or []
+            prog = t.get('progress', 0)
+            if prog is None:
+                prog = 0
+            if ('progress' not in t or t.get('progress') is None) and updates:
+                valid_progs = [u.get('progress') for u in updates if u.get('progress') is not None]
+                if valid_progs:
+                    prog = max(valid_progs)
+            
+            blocker_count = 0
+            for u in updates:
+                b_val = str(u.get('blockers') or '').lower()
+                if b_val and b_val not in ['none', 'null', 'undefined']:
+                    blocker_count += 1
+            br = str(t.get('blocker_reason') or '').lower()
+            if br and br not in ['none', 'null'] and not any(str(u.get('blockers') or '').lower() == br for u in updates):
+                blocker_count += 1
+
+            start_val = t.get('planned_start_date') or t.get('created_at')
+            start_str = format_date_human(start_val)
+            dl_str = format_date_human(t.get('deadline'))
+
+            is_done = False
+            try:
+                if prog is not None:
+                    is_done = int(float(prog)) >= 100
+            except Exception:
+                pass
+
+            done_marker = " ✅" if is_done else ""
+            blocker_marker = " 🛑" if (not is_done and blocker_count > 0) else ""
+            
+            task_title = t.get('title') or t.get('name') or 'Unknown Task'
+            msg += f"{idx}. {task_title} – Start: {start_str} | Deadline: {dl_str} | {prog}% done{done_marker} | {blocker_count} blocker(s){blocker_marker}\n"
+        except Exception as e:
+            logger.error(f"Error processing personal task {t.get('id', 'unknown')}: {e}")
+            continue
+
+    return msg.strip()
+
 def _resolve_user(user_id):
     """Resolve a user by telegram_id, whatsapp_number, or DB ID (UUID)."""
     if not user_id:
@@ -634,13 +682,13 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         if not filtered_personal:
             msg = "👤 **My Personal Tasks**\n\nNo personal tasks currently assigned."
         else:
-            msg = f"👤 **My Personal Tasks**\n\n{build_grouped_tasks_list_py(filtered_personal)}"
+            msg = f"👤 **My Personal Tasks**\n\n{build_personal_tasks_list_py(filtered_personal)}"
         stored_tasks = filtered_personal
 
     else:
         # Default & explicit multi-type requests: Team Tasks FIRST, Personal Tasks SECOND
         team_str = build_grouped_tasks_list_py(filtered_team) if filtered_team else "No team tasks currently assigned."
-        personal_str = build_grouped_tasks_list_py(filtered_personal) if filtered_personal else "No personal tasks currently assigned."
+        personal_str = build_personal_tasks_list_py(filtered_personal) if filtered_personal else "No personal tasks currently assigned."
 
         msg = f"📋 **Team Tasks**\n\n{team_str}\n\n👤 **My Personal Tasks**\n\n{personal_str}"
         stored_tasks = filtered_team + filtered_personal
@@ -1277,10 +1325,8 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
                             "project_query": match['name'], "creator_user_id": creator_db_id})
         await send_reply_func("enter task name")
     else:
-        msg = "Which project should this task be added to? (You can type the number)\n\n"
-        for i, p in enumerate(projects, 1):
-            msg += f"{i}. {p['name']}\n"
-        set_state(user_id, {"action": "create_task", "step": "waiting_for_project",
+        msg = "What type of task do you want to create?\n\n1. Personal Task\n2. Team Task"
+        set_state(user_id, {"action": "create_task", "step": "waiting_for_task_type",
                             "creator_user_id": creator_db_id})
         await send_reply_func(msg)
 

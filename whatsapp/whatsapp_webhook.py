@@ -543,14 +543,27 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
 
     # Intercept text commands that map directly to Main Menu button options
     clean_text = text.strip().lower()
-    if clean_text in ["create task", "create_task", "new task", "new_task", "add task"]:
+
+    # Create task matching (including typos like 'create taks', 'create a task', 'new task')
+    is_create_task_cmd = (
+        clean_text in ["create task", "create_task", "create taks", "new task", "new_task", "add task", "create a task"] or
+        any(x in clean_text for x in ["create task", "create taks", "new task", "add task", "create a task"])
+    ) and not any(x in clean_text for x in ["update", "complete", "delete", "detail"])
+
+    if is_create_task_cmd:
         from auth.middleware import authenticate_whatsapp_request
         from whatsapp.handlers import handle_interactive_reply
         user_info = authenticate_whatsapp_request(sender)
         handle_interactive_reply(sender, "menu_create_task", user_info)
         return
 
-    if clean_text in ["update task", "update_task", "task update", "task_update"]:
+    # Update task matching (including 'update task', 'update taks', 'task update')
+    is_update_task_cmd = (
+        clean_text in ["update task", "update_task", "update taks", "task update", "task_update", "update a task"] or
+        any(x in clean_text for x in ["update task", "update taks", "task update"])
+    ) and not any(x in clean_text for x in ["create", "new", "add", "delete", "detail"])
+
+    if is_update_task_cmd:
         from auth.middleware import authenticate_whatsapp_request
         from whatsapp.handlers import handle_interactive_reply
         user_info = authenticate_whatsapp_request(sender)
