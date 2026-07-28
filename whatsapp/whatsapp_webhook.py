@@ -74,7 +74,6 @@ def whatsapp_daily_report_job():
     try:
         from db import supabase
         from core.intent_handlers import generate_pdf_report
-        from whatsapp.task_assignment import send_text, _send_document_wa
         import datetime
         
         # 1. Resolve Kanav's WhatsApp number
@@ -126,7 +125,6 @@ def whatsapp_employee_reminder_job():
     logging.info("Running WhatsApp employee reminder job (5 PM)...")
     try:
         from db import supabase, get_active_users_with_tasks, get_tasks_for_user
-        from whatsapp.task_assignment import send_text
         import datetime
         
         # 1. Get all active users with pending tasks
@@ -369,7 +367,6 @@ def handle_whatsapp_message():
                                         from feedback.session_store import force_clear_and_process_next
                                         from core.conversation_state import clear_state
                                         from core.context_manager import clear_context
-                                        from whatsapp.ux import send_text
                                         
                                         force_clear_and_process_next(sender_num)
                                         clear_state(sender_num)
@@ -544,6 +541,36 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         _handle_voice_undo(sender)
         return
 
+    # Intercept text commands that map directly to Main Menu button options
+    clean_text = text.strip().lower()
+    if clean_text in ["create task", "create_task", "new task", "new_task", "add task"]:
+        from auth.middleware import authenticate_whatsapp_request
+        from whatsapp.handlers import handle_interactive_reply
+        user_info = authenticate_whatsapp_request(sender)
+        handle_interactive_reply(sender, "menu_create_task", user_info)
+        return
+
+    if clean_text in ["update task", "update_task", "task update", "task_update"]:
+        from auth.middleware import authenticate_whatsapp_request
+        from whatsapp.handlers import handle_interactive_reply
+        user_info = authenticate_whatsapp_request(sender)
+        handle_interactive_reply(sender, "menu_update_task", user_info)
+        return
+
+    if clean_text in ["analytics", "show analytics", "view analytics", "team analytics"]:
+        from auth.middleware import authenticate_whatsapp_request
+        from whatsapp.handlers import handle_interactive_reply
+        user_info = authenticate_whatsapp_request(sender)
+        handle_interactive_reply(sender, "menu_analytics", user_info)
+        return
+
+    if clean_text in ["report", "reports", "daily report", "get report", "send report"]:
+        from auth.middleware import authenticate_whatsapp_request
+        from whatsapp.handlers import handle_interactive_reply
+        user_info = authenticate_whatsapp_request(sender)
+        handle_interactive_reply(sender, "menu_reports", user_info)
+        return
+
     # 1. Check WA State Machine for Multi-Step flows
     from db import supabase
     state_res = supabase.table("wa_task_states").select("*").eq("whatsapp_number", sender).execute()
@@ -557,7 +584,6 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             user_id = supabase.table("users").select("id").eq("whatsapp_number", sender).execute().data[0]["id"]
             add_timeline_event(task_id, user_id, "Note added", note=text)
             supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-            from whatsapp.ux import send_text
             send_text(sender, "✅ Note added successfully!")
             return
         elif action == "WAITING_FOR_REMINDER":
@@ -568,22 +594,18 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 
                 parsed_time = parse_human_date(text)
                 if not parsed_time:
-                    from whatsapp.ux import send_text
                     send_text(sender, "Couldn't understand the time format. Try 'tomorrow at 10am' or '2026-07-08 10:00'.")
                     return
                     
                 orchestrate_set_reminder({"id": user_id}, task_id, parsed_time)
                 supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-                from whatsapp.ux import send_text
                 send_text(sender, f"✅ Reminder set successfully for: {parsed_time}")
             except Exception as e:
-                from whatsapp.ux import send_text
                 send_text(sender, f"Failed to set reminder: {e}")
             return
             
         elif action in ["WAITING_FOR_PERSONAL_TASK_TITLE", "WAITING_FOR_TEAM_TASK_TITLE"]:
             supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-            from whatsapp.ux import send_text
             
             is_personal = (action == "WAITING_FOR_PERSONAL_TASK_TITLE")
             task_type = "PERSONAL" if is_personal else "TEAM"
