@@ -688,10 +688,18 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             return
 
         elif action == "WAITING_FOR_COMPLETION_COMMENT":
+            import json as _json
             clean_t = text.strip().lower()
             final_comment = None if clean_t in ["no", "n", "skip", "none", "nope"] else text.strip()
             
-            image_url = wa_state.get("note")
+            # Read image URL from metadata JSONB column
+            raw_metadata = wa_state.get("metadata") or {}
+            if isinstance(raw_metadata, str):
+                try:
+                    raw_metadata = _json.loads(raw_metadata)
+                except (_json.JSONDecodeError, TypeError):
+                    raw_metadata = {}
+            image_url = raw_metadata.get("image_url")
             
             from auth.middleware import authenticate_whatsapp_request
             from db import save_update
@@ -702,6 +710,15 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             user_id = user_info["id"] if user_info else None
 
             images_list = [image_url] if image_url else []
+
+            # Fetch task name for the final message
+            task_name = "Task"
+            try:
+                task_row = supabase.table("tasks").select("title").eq("id", task_id).execute()
+                if task_row.data:
+                    task_name = task_row.data[0].get("title", "Task")
+            except Exception:
+                pass
 
             save_update(
                 task_id=task_id,
@@ -730,11 +747,12 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
 
             supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
 
-            msg = "🎉 Task Completed! Awaiting final closure."
+            # Build final completion message
+            msg = f"✅ *{task_name}* — Updated to Completed! 🎉"
             if image_url:
-                msg += "\n📸 Image proof attached."
+                msg += f"\n📸 Proof: {image_url}"
             if final_comment:
-                msg += f"\n📝 Final Comment: {final_comment}"
+                msg += f"\n📝 Notes: {final_comment}"
             send_text(sender, msg)
             return
 
@@ -1074,8 +1092,9 @@ def _handle_image(sender: str, message: dict):
     """
     Handles incoming image messages from WhatsApp (msg_type == "image").
     If the user is in a task completion / proof upload state, saves the image URL
-    and advances state to WAITING_FOR_COMPLETION_COMMENT.
+    in metadata and advances state to WAITING_FOR_COMPLETION_COMMENT.
     """
+    import config
     try:
         from auth.middleware import authenticate_whatsapp_request
         auth_user = authenticate_whatsapp_request(sender)
@@ -1096,8 +1115,7 @@ def _handle_image(sender: str, message: dict):
 
     logger.info(f"Image received from {sender}, media_id: {media_id}")
 
-    # Resolve image URL via Meta Graph API if available
-    import config
+    # Resolve image URL via Meta Graph API
     media_url = None
     graph_version = getattr(config, "GRAPH_API_VERSION", "v19.0")
     try:
@@ -1110,27 +1128,37 @@ def _handle_image(sender: str, message: dict):
     except Exception as err:
         logger.error(f"Error fetching image URL for media_id {media_id}: {err}")
 
-    img_ref = media_url or f"https://graph.facebook.com/{graph_version}/{media_id}"
+    # Use media_url if resolved, else store the media_id reference
+    img_ref = media_url or f"wa_media:{media_id}"
 
     # Check WA State Machine for Multi-Step flows
     from db import supabase
+    import json
     state_res = supabase.table("wa_task_states").select("*").eq("whatsapp_number", sender).execute()
     if state_res.data:
         wa_state = state_res.data[0]
         action = wa_state.get("action")
 
         if action in ["WAITING_FOR_COMPLETION_IMAGE_DECISION", "WAITING_FOR_COMPLETION_IMAGE", "WAITING_FOR_PROOF"]:
-            # Update state with image proof URL and transition to comment step
+            # Store image URL in metadata JSONB column and transition to comment step
+            existing_metadata = wa_state.get("metadata") or {}
+            if isinstance(existing_metadata, str):
+                try:
+                    existing_metadata = json.loads(existing_metadata)
+                except (json.JSONDecodeError, TypeError):
+                    existing_metadata = {}
+            existing_metadata["image_url"] = img_ref
+
             supabase.table("wa_task_states").update({
                 "action": "WAITING_FOR_COMPLETION_COMMENT",
-                "note": img_ref
+                "metadata": json.dumps(existing_metadata)
             }).eq("whatsapp_number", sender).execute()
 
             send_text(
                 sender,
                 "Image proof received! 📸\n\n"
                 "Would you like to add a final comment or note for this task? 📝\n\n"
-                "Reply with your comment, or send 'No' to skip."
+                "Reply with your comment, or send *No* to skip."
             )
             return
 

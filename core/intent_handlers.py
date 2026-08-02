@@ -1044,7 +1044,7 @@ def generate_pdf_report(team_name=None):
             
             r_color = COLORS.get(rag_val, COLORS["TEXT_DARK"])
             pdf.set_fill_color(*r_color)
-            pdf.circle(x_rag + 3, y_row + 6, 1, style="F")
+            pdf.ellipse(x_rag + 2, y_row + 4.5, 2, 2, style="F")
             
             pdf.set_xy(x_rag + 5, y_row)
             pdf.set_font("Helvetica", "B", 8)
@@ -1068,14 +1068,103 @@ def generate_pdf_report(team_name=None):
             pdf.ln(12)
         pdf.ln(10)
 
-    # ── Project Tasks Section ────────────────────────────────────────────────
-    for p in projects:
-        # EXCLUDE personal tasks from project tables
-        p_tasks = [t for t in tasks if t.get("project_id") == p["id"] and t.get("task_type") != "PERSONAL"]
-        if not p_tasks: continue
+    # ─────────────────────────────────────────────────────────────────────────
+    # Fetch all teams from DB for grouping
+    # ─────────────────────────────────────────────────────────────────────────
+    from teams.repository import get_all_teams
+    all_teams = get_all_teams() or []
 
-        p_tasks.sort(key=get_sort_date)
+    # Build team id → name and name → id maps
+    team_id_to_name = {t["id"]: t["name"] for t in all_teams}
 
+    # Known primary team names to show in the Team Tasks section (in order)
+    KNOWN_TEAM_NAMES = ["Facilities Team", "Project Team", "Tech Team"]
+
+    # Helper to fetch a task's team id (from team_id field directly)
+    def task_team_id(task):
+        return task.get("team_id")
+
+    # Compute which team (by name) a task belongs to
+    def task_team_name(task):
+        tid = task_team_id(task)
+        if not tid:
+            return None
+        return team_id_to_name.get(tid)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Helper: render a team/subgroup section header (blue strip)
+    # ─────────────────────────────────────────────────────────────────────────
+    def render_main_section_header(title, color=None):
+        """Full-width dark blue section header (e.g. 'Team Tasks')."""
+        bg = color or COLORS["HEADER_BG"]
+        check_space(18)
+        pdf.set_fill_color(*bg)
+        pdf.rect(10, pdf.get_y(), 190, 12, style="F")
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(255, 255, 255)
+        pdf.cell(190, 12, "  " + clean(title), ln=1)
+        pdf.ln(3)
+
+    def render_team_subheader(team_name_str, team_tasks):
+        """Medium subheader row for a team inside a main section."""
+        check_space(40)
+        task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
+        for t in team_tasks:
+            from rag import calculate_rag
+            progress = t.get("progress", 0)
+            t_start = None
+            try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+            except: pass
+            t_dl = None
+            try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+            except: pass
+            t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
+            task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
+
+        pdf.set_fill_color(220, 232, 246)
+        pdf.rect(10, pdf.get_y(), 190, 10, style="F")
+        pdf.set_draw_color(*COLORS["HEADER_BG"])
+        pdf.set_line_width(0.5)
+        pdf.line(10, pdf.get_y(), 10, pdf.get_y() + 10)  # left accent bar
+
+        pdf.set_font("Helvetica", "B", 13)
+        pdf.set_text_color(*COLORS["HEADER_BG"])
+        pdf.cell(90, 10, "   " + clean(team_name_str), ln=0)
+
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*COLORS["RED"])
+        pdf.cell(8, 10, str(task_stats["RED"]), align="R")
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(12, 10, " Red ", align="L")
+        pdf.set_text_color(*COLORS["AMBER"])
+        pdf.cell(8, 10, str(task_stats["AMBER"]), align="R")
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(14, 10, " Amber ", align="L")
+        pdf.set_text_color(*COLORS["GREEN"])
+        pdf.cell(8, 10, str(task_stats["GREEN"]), align="R")
+        pdf.set_text_color(*COLORS["TEXT_DARK"])
+        pdf.cell(12, 10, " Green", align="L")
+        pdf.set_font("Helvetica", "", 9)
+        pdf.set_text_color(*COLORS["TEXT_GREY"])
+        pdf.cell(0, 10, f"({len(team_tasks)} tasks)", ln=1, align="R")
+        pdf.set_draw_color(*COLORS["LINE_GREY"])
+        pdf.set_line_width(0.2)
+
+    def render_no_tasks_row():
+        """Render a grey 'No Tasks' placeholder row."""
+        check_space(10)
+        pdf.set_fill_color(248, 248, 248)
+        pdf.rect(10, pdf.get_y(), 190, 8, style="F")
+        pdf.set_draw_color(*COLORS["LINE_GREY"])
+        pdf.rect(10, pdf.get_y(), 190, 8, style="D")
+        pdf.set_font("Helvetica", "I", 9)
+        pdf.set_text_color(*COLORS["TEXT_GREY"])
+        pdf.cell(190, 8, "   No Tasks", ln=1, align="L")
+        pdf.ln(4)
+
+    def render_project_subheader(p, p_tasks):
+        """Small project-level subheader inside a team section."""
+        check_space(30)
         task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
         for t in p_tasks:
             from rag import calculate_rag
@@ -1086,53 +1175,175 @@ def generate_pdf_report(team_name=None):
             t_dl = None
             try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
             except: pass
-            
             t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
             task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
 
-        check_space(50)
-        
         pdf.set_fill_color(240, 240, 240)
-        pdf.rect(10, pdf.get_y(), 190, 10, style="F")
-        
-        pdf.set_font("Helvetica", "B", 14)
+        pdf.rect(10, pdf.get_y(), 190, 9, style="F")
+        pdf.set_font("Helvetica", "B", 11)
         pdf.set_text_color(*COLORS["TEXT_DARK"])
-        pdf.cell(90, 10, " " + clean(p["name"][:35]), ln=0)
-        
-        pdf.set_font("Helvetica", "B", 10)
+        pdf.cell(85, 9, "   \u25B6 " + clean(p["name"][:35]), ln=0)
+
+        pdf.set_font("Helvetica", "B", 9)
         pdf.set_text_color(*COLORS["RED"])
-        pdf.cell(10, 10, str(task_stats["RED"]), align="R")
+        pdf.cell(8, 9, str(task_stats["RED"]), align="R")
         pdf.set_text_color(*COLORS["TEXT_DARK"])
-        pdf.cell(10, 10, " Red ", align="L")
-        
+        pdf.cell(12, 9, " Red ", align="L")
         pdf.set_text_color(*COLORS["AMBER"])
-        pdf.cell(10, 10, str(task_stats["AMBER"]), align="R")
+        pdf.cell(8, 9, str(task_stats["AMBER"]), align="R")
         pdf.set_text_color(*COLORS["TEXT_DARK"])
-        pdf.cell(15, 10, " Amber ", align="L")
-        
+        pdf.cell(14, 9, " Amber ", align="L")
         pdf.set_text_color(*COLORS["GREEN"])
-        pdf.cell(10, 10, str(task_stats["GREEN"]), align="R")
+        pdf.cell(8, 9, str(task_stats["GREEN"]), align="R")
         pdf.set_text_color(*COLORS["TEXT_DARK"])
-        pdf.cell(15, 10, " Green", align="L")
-        
-        pdf.set_font("Helvetica", "", 9)
+        pdf.cell(12, 9, " Green", align="L")
+        pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(*COLORS["TEXT_GREY"])
-        pdf.cell(30, 10, clean(f" ({len(p_tasks)} tasks)"), ln=1, align="R")
+        pdf.cell(0, 9, f"({len(p_tasks)} tasks)", ln=1, align="R")
 
-        render_task_table(p_tasks)
+    # ─────────────────────────────────────────────────────────────────────────
+    # Non-personal tasks
+    # ─────────────────────────────────────────────────────────────────────────
+    non_personal = [t for t in tasks if t.get("task_type") != "PERSONAL"]
 
-    # ── Personal Tasks Section ───────────────────────────────────────────────
+    # Tasks that belong to a known team
+    def tasks_for_known_team(team_name_str):
+        matched_team = next((t for t in all_teams if t["name"] == team_name_str), None)
+        if not matched_team:
+            return []
+        tid = matched_team["id"]
+        return [t for t in non_personal if t.get("team_id") == tid]
+
+    # Tasks that belong to unknown/other teams or no team
+    known_team_ids = {t["id"] for t in all_teams if t["name"] in KNOWN_TEAM_NAMES}
+    old_tasks = [t for t in non_personal if not t.get("team_id") or t.get("team_id") not in known_team_ids]
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SECTION 1: Team Tasks
+    # ─────────────────────────────────────────────────────────────────────────
+    render_main_section_header("Team Tasks")
+
+    for team_name_str in KNOWN_TEAM_NAMES:
+        team_tasks = tasks_for_known_team(team_name_str)
+
+        if team_tasks:
+            render_team_subheader(team_name_str, team_tasks)
+        else:
+            # Show subheader with "No Tasks" even when empty
+            check_space(25)
+            pdf.set_fill_color(220, 232, 246)
+            pdf.rect(10, pdf.get_y(), 190, 10, style="F")
+            pdf.set_font("Helvetica", "B", 13)
+            pdf.set_text_color(*COLORS["HEADER_BG"])
+            pdf.cell(190, 10, "   " + clean(team_name_str), ln=1)
+            render_no_tasks_row()
+            continue
+
+        # Group team tasks by project
+        team_project_ids = list({t.get("project_id") for t in team_tasks if t.get("project_id")})
+        # Also include tasks with no project (standalone team tasks)
+        standalone = [t for t in team_tasks if not t.get("project_id")]
+
+        rendered_any = False
+        for p in projects:
+            if p["id"] not in team_project_ids:
+                continue
+            p_tasks = [t for t in team_tasks if t.get("project_id") == p["id"]]
+            if not p_tasks:
+                continue
+            p_tasks.sort(key=get_sort_date)
+            render_project_subheader(p, p_tasks)
+            render_task_table(p_tasks)
+            rendered_any = True
+
+        if standalone:
+            standalone.sort(key=get_sort_date)
+            check_space(15)
+            pdf.set_fill_color(248, 248, 248)
+            pdf.rect(10, pdf.get_y(), 190, 8, style="F")
+            pdf.set_font("Helvetica", "BI", 10)
+            pdf.set_text_color(*COLORS["TEXT_GREY"])
+            pdf.cell(190, 8, "   General Tasks (no project)", ln=1, align="L")
+            render_task_table(standalone)
+            rendered_any = True
+
+        if not rendered_any:
+            render_no_tasks_row()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SECTION 2: Old Tasks & Projects
+    # ─────────────────────────────────────────────────────────────────────────
+    if old_tasks:
+        render_main_section_header("Old Tasks & Projects", color=(90, 90, 90))
+
+        # Group by project
+        old_project_ids = list({t.get("project_id") for t in old_tasks if t.get("project_id")})
+        old_standalone = [t for t in old_tasks if not t.get("project_id")]
+
+        for p in projects:
+            if p["id"] not in old_project_ids:
+                continue
+            p_tasks = [t for t in old_tasks if t.get("project_id") == p["id"]]
+            if not p_tasks:
+                continue
+            p_tasks.sort(key=get_sort_date)
+
+            # Project subheader (grey)
+            check_space(30)
+            task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
+            for t in p_tasks:
+                from rag import calculate_rag
+                progress = t.get("progress", 0)
+                t_start = None
+                try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+                except: pass
+                t_dl = None
+                try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+                except: pass
+                t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
+                task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
+
+            pdf.set_fill_color(230, 230, 230)
+            pdf.rect(10, pdf.get_y(), 190, 9, style="F")
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(85, 9, "   " + clean(p["name"][:35]), ln=0)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*COLORS["RED"])
+            pdf.cell(8, 9, str(task_stats["RED"]), align="R")
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(12, 9, " Red ", align="L")
+            pdf.set_text_color(*COLORS["AMBER"])
+            pdf.cell(8, 9, str(task_stats["AMBER"]), align="R")
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(14, 9, " Amber ", align="L")
+            pdf.set_text_color(*COLORS["GREEN"])
+            pdf.cell(8, 9, str(task_stats["GREEN"]), align="R")
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(12, 9, " Green", align="L")
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*COLORS["TEXT_GREY"])
+            pdf.cell(0, 9, f"({len(p_tasks)} tasks)", ln=1, align="R")
+
+            render_task_table(p_tasks)
+
+        if old_standalone:
+            old_standalone.sort(key=get_sort_date)
+            check_space(15)
+            pdf.set_fill_color(230, 230, 230)
+            pdf.rect(10, pdf.get_y(), 190, 8, style="F")
+            pdf.set_font("Helvetica", "BI", 10)
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(190, 8, "   Unassigned Tasks", ln=1, align="L")
+            render_task_table(old_standalone)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SECTION 3: Personal Tasks
+    # ─────────────────────────────────────────────────────────────────────────
     personal_tasks = [t for t in tasks if t.get("task_type") == "PERSONAL"]
     if personal_tasks:
         check_space(40)
-        
-        # Section Header: Personal Tasks
-        pdf.set_fill_color(31, 95, 160)
-        pdf.rect(10, pdf.get_y(), 190, 10, style="F")
-        pdf.set_font("Helvetica", "B", 14)
-        pdf.set_text_color(255, 255, 255)
-        pdf.cell(190, 10, "  Personal Tasks", ln=1)
-        pdf.ln(5)
+        render_main_section_header("Personal Tasks", color=(31, 95, 160))
 
         user_name_cache = {}
         def get_owner_name(t):
@@ -1142,7 +1353,6 @@ def generate_pdf_report(team_name=None):
             u_str = str(u_id)
             if u_str in user_name_cache:
                 return user_name_cache[u_str]
-            
             name = None
             if isinstance(t.get("assigned_to_user"), dict) and t["assigned_to_user"].get("name"):
                 name = t["assigned_to_user"]["name"]
@@ -1152,7 +1362,6 @@ def generate_pdf_report(team_name=None):
                 u_info = get_user_by_id(u_str)
                 if u_info and u_info.get("name"):
                     name = u_info["name"]
-            
             final_name = name or "Personal"
             user_name_cache[u_str] = final_name
             return final_name
@@ -1162,7 +1371,7 @@ def generate_pdf_report(team_name=None):
             owner = get_owner_name(t)
             user_personal_tasks[owner].append(t)
 
-        for owner_name, u_tasks in user_personal_tasks.items():
+        for owner_name, u_tasks in sorted(user_personal_tasks.items()):
             u_tasks.sort(key=get_sort_date)
 
             task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
@@ -1175,41 +1384,31 @@ def generate_pdf_report(team_name=None):
                 t_dl = None
                 try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
                 except: pass
-                
                 t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
                 task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
 
             check_space(45)
-
-            # Subheader Row for User (e.g. Subheader: Abhijeet)
             pdf.set_fill_color(240, 244, 248)
             pdf.rect(10, pdf.get_y(), 190, 9, style="F")
-
             pdf.set_font("Helvetica", "B", 12)
             pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.cell(90, 9, "  Subheader: " + clean(owner_name), ln=0)
-
-            # Summary on Right
+            pdf.cell(90, 9, "  " + clean(owner_name), ln=0)
             pdf.set_font("Helvetica", "B", 9)
             pdf.set_text_color(*COLORS["RED"])
-            pdf.cell(10, 9, str(task_stats["RED"]), align="R")
+            pdf.cell(8, 9, str(task_stats["RED"]), align="R")
             pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.cell(10, 9, " Red ", align="L")
-            
+            pdf.cell(12, 9, " Red ", align="L")
             pdf.set_text_color(*COLORS["AMBER"])
-            pdf.cell(10, 9, str(task_stats["AMBER"]), align="R")
+            pdf.cell(8, 9, str(task_stats["AMBER"]), align="R")
             pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.cell(15, 9, " Amber ", align="L")
-            
+            pdf.cell(14, 9, " Amber ", align="L")
             pdf.set_text_color(*COLORS["GREEN"])
-            pdf.cell(10, 9, str(task_stats["GREEN"]), align="R")
+            pdf.cell(8, 9, str(task_stats["GREEN"]), align="R")
             pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.cell(15, 9, " Green", align="L")
-            
+            pdf.cell(12, 9, " Green", align="L")
             pdf.set_font("Helvetica", "", 9)
             pdf.set_text_color(*COLORS["TEXT_GREY"])
-            pdf.cell(30, 9, clean(f" ({len(u_tasks)} tasks)"), ln=1, align="R")
-
+            pdf.cell(0, 9, clean(f" ({len(u_tasks)} tasks)"), ln=1, align="R")
             render_task_table(u_tasks)
 
     filepath = f"/tmp/daily_report_{team_name if team_name else 'all'}.pdf"
