@@ -224,6 +224,24 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         return
         
     # ── Task Actions Routing ─────────────────────────────────────────────────
+    if button_id.startswith("ACCEPT_TASK_") or button_id.startswith("REJECT_TASK_"):
+        if button_id.startswith("ACCEPT_TASK_"):
+            button_id = f"task_accept_{button_id.replace('ACCEPT_TASK_', '')}"
+        else:
+            button_id = f"task_reject_{button_id.replace('REJECT_TASK_', '')}"
+
+    if button_id.startswith("complete_img_yes_"):
+        task_id = button_id.replace("complete_img_yes_", "")
+        send_text(sender_phone, "Please upload an image as proof of completion 📎")
+        set_wa_state(sender_phone, "WAITING_FOR_COMPLETION_IMAGE", metadata={"task_id": task_id})
+        return
+
+    if button_id.startswith("complete_img_no_"):
+        task_id = button_id.replace("complete_img_no_", "")
+        send_text(sender_phone, "Would you like to add a final comment or note for this task? 📝\n\nReply with your comment, or send 'No' to skip.")
+        set_wa_state(sender_phone, "WAITING_FOR_COMPLETION_COMMENT", metadata={"task_id": task_id})
+        return
+
     if button_id.startswith("task_"):
         parts = button_id.split("_", 2)
         if len(parts) < 3: return
@@ -231,17 +249,70 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         action = parts[1]
         task_id = parts[2]
         
-        if action == "accept":
-            orchestrate_status_update(user, task_id, "Accepted")
-            send_text(sender_phone, "✅ Task Accepted! The creator has been notified.")
+        if action in ["accept", "reject"]:
+            new_status = "Accepted" if action == "accept" else "Rejected"
+            try:
+                orchestrate_status_update(user, task_id, new_status)
+            except Exception as e:
+                logger.error(f"Error executing status update to {new_status}: {e}")
+
+            if action == "accept":
+                send_text(sender_phone, "✅ Task Accepted! The creator has been notified.")
+            else:
+                send_text(sender_phone, "❌ Task Rejected. The creator has been notified.")
+
+            # Send WhatsApp notification to the Assignor / Creator
+            try:
+                task_res = supabase.table("tasks").select("title, deadline, due_date, created_by, assigned_by").eq("id", task_id).execute()
+                if task_res.data:
+                    t_data = task_res.data[0]
+                    t_title = t_data.get("title", "Team Task")
+                    due_val = t_data.get("deadline") or t_data.get("due_date") or "No due date"
+                    d_date_str = str(due_val).split("T")[0] if due_val != "No due date" and "T" in str(due_val) else str(due_val)
+                    assignor_id = t_data.get("assigned_by") or t_data.get("created_by")
+
+                    if assignor_id and str(assignor_id) != str(user.get("id")):
+                        from db import get_user_by_id
+                        creator_user = get_user_by_id(assignor_id)
+                        if creator_user:
+                            creator_wa = creator_user.get("whatsapp_number") or creator_user.get("telegram_id")
+                            if creator_wa:
+                                creator_name = creator_user.get("name", "Creator")
+                                assignee_name = user.get("name", "Assignee")
+                                if action == "accept":
+                                    notify_creator_msg = (
+                                        f"✅ *Task Accepted!*\n\n"
+                                        f"Hi {creator_name} 👋,\n"
+                                        f"*{assignee_name}* accepted your Team Task:\n\n"
+                                        f"📌 *Task:* {t_title}\n"
+                                        f"📅 *Due Date:* {d_date_str}"
+                                    )
+                                else:
+                                    notify_creator_msg = (
+                                        f"❌ *Task Rejected*\n\n"
+                                        f"Hi {creator_name} 👋,\n"
+                                        f"*{assignee_name}* rejected your Team Task:\n\n"
+                                        f"📌 *Task:* {t_title}\n"
+                                        f"📅 *Due Date:* {d_date_str}"
+                                    )
+                                send_text(creator_wa, notify_creator_msg)
+            except Exception as notify_err:
+                logger.error(f"Error sending creator notification for task {action}: {notify_err}")
+            return
             
         elif action == "start":
             orchestrate_status_update(user, task_id, "In Progress")
             send_text(sender_phone, "🚀 Task moved to In Progress! Keep up the good work.")
             
         elif action == "complete":
-            orchestrate_status_update(user, task_id, "Completed")
-            send_text(sender_phone, "🎉 Task Completed! Awaiting final closure.")
+            body = "Would you like to attach an image proof of completion for this task? 📸"
+            buttons = [
+                {"id": f"complete_img_yes_{task_id}", "title": "Yes"},
+                {"id": f"complete_img_no_{task_id}", "title": "No"}
+            ]
+            send_interactive_buttons(sender_phone, body, buttons)
+            set_wa_state(sender_phone, "WAITING_FOR_COMPLETION_IMAGE_DECISION", metadata={"task_id": task_id})
+            return
             
         elif action == "note":
             send_text(sender_phone, "Please type your note now, or send a Voice Note 🎤")
@@ -331,34 +402,60 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
 
             from db import get_user_by_id
 
-            try:
-                supabase.table("tasks").update({"assigned_to": member_id}).eq("id", task_id).execute()
-                task_res = supabase.table("tasks").select("title, name").eq("id", task_id).execute()
-                task_title = "Team Task"
-                if task_res.data:
-                    task_title = task_res.data[0].get("title") or task_res.data[0].get("name") or "Team Task"
-            except Exception as update_err:
-                logger.error(f"Error updating task assigned_to: {update_err}")
-                task_title = "Team Task"
-
             assigned_user = get_user_by_id(member_id)
             member_name = assigned_user.get("name", "Team Member") if assigned_user else "Team Member"
 
+            update_payload = {"assigned_to": member_id}
+            if assigned_user and assigned_user.get("team_id"):
+                update_payload["team_id"] = assigned_user.get("team_id")
+
+            try:
+                supabase.table("tasks").update(update_payload).eq("id", task_id).execute()
+                task_res = supabase.table("tasks").select("title, deadline, due_date").eq("id", task_id).execute()
+                task_title = "Team Task"
+                due_date_str = "No due date"
+                if task_res.data:
+                    task_title = task_res.data[0].get("title") or "Team Task"
+                    due_val = task_res.data[0].get("deadline") or task_res.data[0].get("due_date") or "No due date"
+                    due_date_str = str(due_val).split("T")[0] if due_val != "No due date" and "T" in str(due_val) else str(due_val)
+            except Exception as update_err:
+                logger.error(f"Error updating task assigned_to: {update_err}")
+                task_title = "Team Task"
+                due_date_str = "No due date"
+
             send_text(sender_phone, f"✅ Task '{task_title}' assigned to *{member_name}*!")
 
-            # Send WhatsApp notification ONLY for Team Tasks to assigned member
+            # Send WhatsApp notification to assigned member
             if assigned_user:
                 assigned_wa = assigned_user.get("whatsapp_number") or assigned_user.get("telegram_id")
                 if assigned_wa:
                     creator_name = user.get("name", "A team member") if user else "A team member"
-                    notify_msg = (
-                        f"📋 *New Task Assigned to You!*\n\n"
-                        f"Hi {member_name} 👋,\n"
-                        f"*{creator_name}* assigned a new Team Task to you:\n\n"
-                        f"📌 *Task:* {task_title}\n\n"
-                        f"Please check your task list in GEI_BOT for details."
-                    )
-                    send_text(assigned_wa, notify_msg)
+                    is_self_assignment = (user and assigned_user and str(user.get("id")) == str(assigned_user.get("id")))
+
+                    if is_self_assignment:
+                        notify_msg = (
+                            f"📋 *New Task Assigned to You!*\n\n"
+                            f"Hi {member_name} 👋,\n"
+                            f"*{creator_name}* assigned a new Team Task to you:\n\n"
+                            f"📌 *Task:* {task_title}\n"
+                            f"📅 *Due Date:* {due_date_str}\n\n"
+                            f"Please check your task list in GEI_BOT for details."
+                        )
+                        send_text(assigned_wa, notify_msg)
+                    else:
+                        body = (
+                            f"📋 *New Task Assigned to You!*\n\n"
+                            f"Hi {member_name} 👋,\n"
+                            f"*{creator_name}* assigned a new Team Task to you:\n\n"
+                            f"📌 *Task:* {task_title}\n"
+                            f"📅 *Due Date:* {due_date_str}\n\n"
+                            f"Please select an option below:"
+                        )
+                        buttons = [
+                            {"id": f"task_accept_{task_id}", "title": "Accept"},
+                            {"id": f"task_reject_{task_id}", "title": "Reject"}
+                        ]
+                        send_interactive_buttons(assigned_wa, body, buttons)
         return
 
 

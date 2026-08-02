@@ -32,12 +32,13 @@ def validate_assignment(current_user: dict, target_user: dict) -> tuple:
 def validate_status_transition(current_status: str, new_status: str) -> tuple:
     """Validates the state machine for task status changes."""
     valid_transitions = {
-        "Pending": ["Accepted", "Closed"],
+        "Pending": ["Accepted", "Rejected", "Closed"],
         "Accepted": ["In Progress", "Pending", "Closed"],
         "In Progress": ["Completed", "Pending", "Closed"],
         "Completed": ["Closed", "Reopened"],
         "Closed": ["Reopened"],
-        "Reopened": ["In Progress", "Closed"]
+        "Reopened": ["In Progress", "Closed"],
+        "Rejected": ["Pending", "Closed", "Reopened"]
     }
     
     if new_status not in valid_transitions.get(current_status, []):

@@ -74,7 +74,7 @@ def get_all_tasks(user_id=None, include_personal=False):
     return filtered_tasks
 
 
-def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None):
+def save_update(task_id, progress, blockers, images, employee_id=None, new_deadline=None, note=None):
     from rag import calculate_rag
     
     try:
@@ -108,7 +108,7 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
         "task_id": task_id,
         "progress": progress,
         "blockers": blockers,
-        "note": None,
+        "note": note,
         "images": images,
         "rag": rag_color,
         "timestamp": datetime.now().isoformat()

@@ -81,3 +81,21 @@ def test_bulk_update_tasks(mock_supabase):
     
     result = bulk_update_tasks(["task-1", "task-2"], {"status": "Completed"})
     assert len(result) == 2
+
+@pytest.mark.asyncio
+async def test_perform_update_with_note(mocker):
+    mocker.patch("core.intent_handlers.get_context", return_value={})
+    mocker.patch("core.intent_handlers.get_all_tasks", return_value=[{"id": "t-1", "name": "Test Task", "progress": 50}])
+    mocker.patch("core.intent_handlers.resolve_task_from_list", return_value={"id": "t-1", "name": "Test Task", "progress": 50})
+    mocker.patch("core.intent_handlers._resolve_user", return_value={"id": "u-1"})
+    mocker.patch("core.intent_handlers.update_context")
+    mocker.patch("core.intent_handlers.set_state")
+    mock_save_update = mocker.patch("core.intent_handlers.save_update")
+
+    mock_send = mocker.AsyncMock()
+
+    from core.intent_handlers import perform_update
+    await perform_update("Test Task", "100", "user-123", mock_send, images=["img1.png"], note="Completed successfully")
+
+    mock_save_update.assert_called_once_with("t-1", 100, "None", ["img1.png"], "u-1", new_deadline=None, note="Completed successfully")
+    mock_send.assert_called_once()

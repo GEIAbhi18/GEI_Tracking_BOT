@@ -1411,7 +1411,7 @@ async def handle_clarify(entities, user_id, context, send_reply_func):
 
 # --- Helper Performers ---
 
-async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None, deadline=None):
+async def perform_update(task_query, progress_str, user_id, send_reply_func, images=None, deadline=None, note=None):
     ctx = get_context(user_id)
     last_list = ctx.get('last_task_list', [])
     active_project_id = ctx.get('active_project_id')
@@ -1462,7 +1462,7 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     u_info = _resolve_user(user_id)
     emp_uuid = u_info['id'] if u_info else None
     
-    save_update(match['id'], progress, "None", images or [], emp_uuid, new_deadline=deadline)
+    save_update(match['id'], progress, "None", images or [], emp_uuid, new_deadline=deadline, note=note)
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")

@@ -634,33 +634,43 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             choice = text.strip().lower()
             tq = state.get("task_query")
             if choice in ["no", "n", "skip", "nope"]:
-                await handlers.perform_update(tq, "100", user_id, send_reply_func)
+                state["step"] = "waiting_for_comment"
+                state["collected_images"] = []
+                set_state(user_id, state)
+                await send_reply_func(f"Would you like to add a final comment or note for '{tq}'? 📝\n\nReply with your comment, or type **No** to skip.")
             elif choice in ["yes", "y", "yep", "ok", "sure"]:
                 state["step"] = "waiting_for_proof"
                 set_state(user_id, state)
                 await send_reply_func(f"Please upload the image proof for '{tq}'.")
             else:
-                await send_reply_func("Please reply with **Yes** to upload an image or **No** to complete without an image.")
+                await send_reply_func("Please reply with **Yes** to upload an image or **No** to skip image.")
+                
         elif step == "waiting_for_proof":
+            tq = state.get("task_query")
             if images:
                 if "collected_images" not in state: state["collected_images"] = []
                 state["collected_images"].extend(images)
+                state["step"] = "waiting_for_comment"
                 set_state(user_id, state)
-                await send_reply_func(f"Image received ({len(state['collected_images'])} total). Send more or type 'done' to finish.")
+                await send_reply_func(f"Image received! 📸\n\nWould you like to add a final comment or note for '{tq}'? 📝\n\nReply with your comment, or type **No** to skip.")
                 return
                 
-            if text.strip().lower() == "done":
-                collected = state.get("collected_images", [])
-                tq = state.get("task_query")
-                await handlers.perform_update(tq, "100", user_id, send_reply_func, images=collected)
+            if text.strip().lower() in ["no", "skip", "done"]:
+                state["step"] = "waiting_for_comment"
+                set_state(user_id, state)
+                await send_reply_func(f"Would you like to add a final comment or note for '{tq}'? 📝\n\nReply with your comment, or type **No** to skip.")
                 return
 
-            if text.strip().lower() in ["no", "skip"]:
-                tq = state.get("task_query")
-                await handlers.perform_update(tq, "100", user_id, send_reply_func)
-                return
+            await send_reply_func("Please upload an image proof or type **No** to skip image.")
+
+        elif step == "waiting_for_comment":
+            comment = text.strip()
+            tq = state.get("task_query")
+            collected = state.get("collected_images", [])
+            final_note = None if comment.lower() in ["no", "n", "skip", "none", "nope"] else comment
             
-            await send_reply_func("Please upload an image proof or type 'done' to finish.")
+            await handlers.perform_update(tq, "100", user_id, send_reply_func, images=collected, note=final_note)
+            clear_state(user_id)
             
     elif action == "get_task_detail":
         if step == "waiting_for_project":

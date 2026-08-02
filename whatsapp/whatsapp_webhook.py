@@ -662,6 +662,78 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             if handle_direct_task_update(sender, text, user_info):
                 return
 
+        elif action == "WAITING_FOR_COMPLETION_IMAGE_DECISION":
+            clean_t = text.strip().lower()
+            if clean_t in ["yes", "y", "yep", "ok", "sure"]:
+                send_text(sender, "Please upload an image as proof of completion 📎")
+                supabase.table("wa_task_states").update({"action": "WAITING_FOR_COMPLETION_IMAGE"}).eq("whatsapp_number", sender).execute()
+            elif clean_t in ["no", "n", "skip", "nope"]:
+                send_text(sender, "Would you like to add a final comment or note for this task? 📝\n\nReply with your comment, or send 'No' to skip.")
+                supabase.table("wa_task_states").update({"action": "WAITING_FOR_COMPLETION_COMMENT"}).eq("whatsapp_number", sender).execute()
+            else:
+                send_text(sender, "Please reply with *Yes* to upload an image or *No* to skip.")
+            return
+
+        elif action in ["WAITING_FOR_COMPLETION_IMAGE", "WAITING_FOR_PROOF"]:
+            clean_t = text.strip().lower()
+            if clean_t in ["no", "n", "skip", "nope"]:
+                send_text(sender, "Would you like to add a final comment or note for this task? 📝\n\nReply with your comment, or send 'No' to skip.")
+                supabase.table("wa_task_states").update({"action": "WAITING_FOR_COMPLETION_COMMENT"}).eq("whatsapp_number", sender).execute()
+            else:
+                send_text(sender, "Please upload an image as proof of completion 📎 (or reply 'No' to skip).")
+            return
+
+        elif action == "WAITING_FOR_COMPLETION_COMMENT":
+            clean_t = text.strip().lower()
+            final_comment = None if clean_t in ["no", "n", "skip", "none", "nope"] else text.strip()
+            
+            image_url = wa_state.get("note")
+            
+            from auth.middleware import authenticate_whatsapp_request
+            from db import save_update
+            from tasks.service import orchestrate_status_update
+            from tasks.timeline import add_timeline_event
+
+            user_info = authenticate_whatsapp_request(sender)
+            user_id = user_info["id"] if user_info else None
+
+            images_list = [image_url] if image_url else []
+
+            save_update(
+                task_id=task_id,
+                progress=100,
+                blockers="None",
+                images=images_list,
+                employee_id=user_id,
+                new_deadline=None,
+                note=final_comment
+            )
+
+            orchestrate_status_update(
+                current_user=user_info if user_info else {"id": user_id},
+                task_id=task_id,
+                new_status="Completed",
+                note=final_comment,
+                proof_url=image_url
+            )
+
+            if final_comment:
+                add_timeline_event(task_id, user_id, "Final comment added on completion", note=final_comment)
+                try:
+                    supabase.table("tasks").update({"notes": final_comment}).eq("id", task_id).execute()
+                except Exception:
+                    pass
+
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+
+            msg = "🎉 Task Completed! Awaiting final closure."
+            if image_url:
+                msg += "\n📸 Image proof attached."
+            if final_comment:
+                msg += f"\n📝 Final Comment: {final_comment}"
+            send_text(sender, msg)
+            return
+
 
     # 1.5 Task assignment multi-step state (legacy fallback, to be removed)
     try:

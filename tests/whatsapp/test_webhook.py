@@ -273,28 +273,71 @@ def test_add_task_fallback_project_id(mocker):
     assert inserted_data["project_id"] == "p-default-123"
 
 def test_create_team_task_assignment_and_notification(mocker):
-    """Test Team Task creation prompts for assignment and sends WhatsApp notification to assigned member."""
+    """Test Team Task creation sends interactive Accept/Reject buttons to assigned member when assigned by someone else."""
     mock_send_text = mocker.patch("whatsapp.handlers.send_text")
-    mock_supabase = mocker.patch("db.supabase")
+    mock_send_buttons = mocker.patch("whatsapp.handlers.send_interactive_buttons")
+    mock_supabase = mocker.patch("whatsapp.handlers.supabase")
     
-    # Mock user resolution for assignee (Asif)
-    mocker.patch("db.get_user_by_id", return_value={"id": "asif-uuid", "name": "Asif", "whatsapp_number": "+919800000002"})
-    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [{"title": "Fix Site Slope"}]
+    # Mock user resolution for assignee (Vikas)
+    mocker.patch("db.get_user_by_id", return_value={"id": "vikas-uuid", "name": "Vikas", "whatsapp_number": "+919800000002"})
+    mock_supabase.table.return_value.update.return_value.eq.return_value.execute.return_value.data = [{}]
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [{"title": "Pay water bill", "deadline": "2026-08-10"}]
     
     from whatsapp.handlers import handle_interactive_reply
-    creator_user = {"id": "dev-1", "name": "Abhijeet", "role": "Developer"}
+    creator_user = {"id": "kanav-uuid", "name": "Kanav", "role": "Director"}
     
-    # Trigger assign_task button click
-    handle_interactive_reply("+919876543210", "assign_task_task-99_asif-uuid", creator_user)
+    # Trigger assign_task button click (Kanav assigns to Vikas)
+    handle_interactive_reply("+919876543210", "assign_task_task-99_vikas-uuid", creator_user)
     
-    # Creator gets confirmation AND assigned member gets WhatsApp notification
+    # Creator gets text confirmation
+    call_args_list = [c[0] for c in mock_send_text.call_args_list]
+    phones = [c[0] for c in call_args_list]
+    assert "+919876543210" in phones # Creator phone
+    
+    # Assignee gets interactive buttons (Accept / Reject) with task title, creator name, and due date
+    mock_send_buttons.assert_called_once()
+    btn_args = mock_send_buttons.call_args[0]
+    assert btn_args[0] == "+919800000002"
+    assert "Kanav" in btn_args[1]
+    assert "Pay water bill" in btn_args[1]
+    assert "2026-08-10" in btn_args[1]
+    button_list = mock_send_buttons.call_args[0][2]
+    assert any(b["id"] == "task_accept_task-99" for b in button_list)
+    assert any(b["id"] == "task_reject_task-99" for b in button_list)
+
+
+def test_task_accept_notifies_creator(mocker):
+    """Test clicking Accept updates task status and sends notification to creator with due date."""
+    mock_send_text = mocker.patch("whatsapp.handlers.send_text")
+    mock_supabase = mocker.patch("whatsapp.handlers.supabase")
+    mocker.patch("tasks.service.validate_status_transition", return_value=(True, None))
+    mocker.patch("tasks.service.get_task_by_id", return_value={"id": "task-99", "status": "Pending"})
+    mocker.patch("tasks.service.update_task", return_value={"id": "task-99", "status": "Accepted"})
+    mocker.patch("tasks.service.add_timeline_event")
+
+    mocker.patch("db.get_user_by_id", return_value={"id": "kanav-uuid", "name": "Kanav", "whatsapp_number": "+919876543210"})
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value.data = [{
+        "title": "Pay water bill",
+        "deadline": "2026-08-10",
+        "assigned_by": "kanav-uuid"
+    }]
+
+    from whatsapp.handlers import handle_interactive_reply
+    assignee_user = {"id": "vikas-uuid", "name": "Vikas", "role": "Employee"}
+
+    handle_interactive_reply("+919800000002", "task_accept_task-99", assignee_user)
+
     call_args_list = [c[0] for c in mock_send_text.call_args_list]
     phones = [c[0] for c in call_args_list]
     messages = [c[1] for c in call_args_list]
-    
-    assert "+919876543210" in phones # Creator phone
-    assert "+919800000002" in phones # Assigned member phone (Asif)
-    assert any("New Task Assigned to You!" in msg for msg in messages)
+
+    assert "+919800000002" in phones # Assignee text confirmation
+    assert "+919876543210" in phones # Creator notification
+    creator_msg = [m for p, m in zip(phones, messages) if p == "+919876543210"][0]
+    assert "Task Accepted!" in creator_msg
+    assert "Vikas" in creator_msg
+    assert "Pay water bill" in creator_msg
+    assert "2026-08-10" in creator_msg
 
 
 def test_handle_interactive_reply_update_task(mocker):
@@ -362,6 +405,26 @@ def test_handle_direct_task_update_text_and_voice(mocker):
     assert "Task is Updated." in reply
     assert "Personal Task 1" in reply
     assert "75%" in reply
+
+
+def test_task_completion_flow_no_image_with_comment(mocker):
+    """Test completing a task: selecting No image, typing a comment, saving to daily report (save_update) and completing."""
+    mock_send_text = mocker.patch("whatsapp.handlers.send_text")
+    mock_send_buttons = mocker.patch("whatsapp.handlers.send_interactive_buttons")
+    mock_set_state = mocker.patch("whatsapp.handlers.set_wa_state")
+
+    from whatsapp.handlers import handle_interactive_reply
+    user_info = {"id": "user-123", "name": "Abhijeet"}
+
+    # 1. Click complete button
+    handle_interactive_reply("+919876543210", "task_complete_task-123", user_info)
+    mock_send_buttons.assert_called_once()
+    mock_set_state.assert_called_with("+919876543210", "WAITING_FOR_COMPLETION_IMAGE_DECISION", metadata={"task_id": "task-123"})
+
+    # 2. Click No image
+    handle_interactive_reply("+919876543210", "complete_img_no_task-123", user_info)
+    mock_set_state.assert_called_with("+919876543210", "WAITING_FOR_COMPLETION_COMMENT", metadata={"task_id": "task-123"})
+    assert any("Would you like to add a final comment" in c[0][1] for c in mock_send_text.call_args_list)
 
 
 
