@@ -766,13 +766,25 @@ def handle_direct_task_update(sender_phone: str, text: str, user_info: dict) -> 
 
     progress = min(100, max(0, progress))
 
-    # 3. Save update to DB
     task_id = target_task["id"]
+
+    # 3. If completing task (progress >= 100), enter completion flow (ask for image proof decision and optional comment)
+    if progress >= 100:
+        body = "Would you like to attach an image proof of completion for this task? 📸"
+        buttons = [
+            {"id": f"complete_img_yes_{task_id}", "title": "Yes"},
+            {"id": f"complete_img_no_{task_id}", "title": "No"}
+        ]
+        send_interactive_buttons(sender_phone, body, buttons)
+        set_wa_state(sender_phone, "WAITING_FOR_COMPLETION_IMAGE_DECISION", metadata={"task_id": task_id})
+        return True
+
+    # Save update to DB for non-completion progress updates
     save_update(task_id, progress, "None", [], user_id)
 
-    # 4. Confirmation message
+    # 4. Confirmation message for non-completion updates
     task_name = target_task.get("title") or target_task.get("name") or "Task"
-    new_status = "Completed" if progress >= 100 else ("In Progress" if progress > 0 else "Pending")
+    new_status = "In Progress" if progress > 0 else "Pending"
 
     send_text(
         sender_phone,

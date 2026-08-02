@@ -427,5 +427,31 @@ def test_task_completion_flow_no_image_with_comment(mocker):
     assert any("Would you like to add a final comment" in c[0][1] for c in mock_send_text.call_args_list)
 
 
+def test_handle_direct_task_update_completed_triggers_flow(mocker):
+    """Test typing '1 completed' initiates completion flow (asking for proof image decision)."""
+    mock_send_buttons = mocker.patch("whatsapp.handlers.send_interactive_buttons")
+    mock_set_state = mocker.patch("whatsapp.handlers.set_wa_state")
+
+    mock_table = mocker.patch("whatsapp.handlers.supabase.table")
+    mock_table.return_value.select.return_value.execute.return_value.data = [
+        {"id": "t-100", "title": "GEI BOT Testing", "progress": 0, "status": "Pending"}
+    ]
+
+    from core.context_manager import update_context
+    update_context("+919876543210", last_task_list=["t-100"])
+
+    from whatsapp.handlers import handle_direct_task_update
+    user_info = {"id": "user-123", "name": "Abhijeet"}
+
+    res = handle_direct_task_update("+919876543210", "1 completed", user_info)
+    assert res is True
+    mock_send_buttons.assert_called_once()
+    mock_set_state.assert_called_once_with(
+        "+919876543210",
+        "WAITING_FOR_COMPLETION_IMAGE_DECISION",
+        metadata={"task_id": "t-100"}
+    )
+
+
 
 
