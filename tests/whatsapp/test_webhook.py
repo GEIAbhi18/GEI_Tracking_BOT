@@ -453,5 +453,26 @@ def test_handle_direct_task_update_completed_triggers_flow(mocker):
     )
 
 
+def test_handle_image_proof_upload(mocker):
+    """Test receiving an image message advances state to WAITING_FOR_COMPLETION_COMMENT."""
+    mocker.patch("auth.middleware.authenticate_whatsapp_request", return_value={"id": "user-123"})
+    mock_send_text = mocker.patch("whatsapp.whatsapp_webhook.send_text")
+
+    mock_table = mocker.patch("db.supabase.table")
+    mock_table.return_value.select.return_value.eq.return_value.execute.return_value.data = [
+        {"whatsapp_number": "+919876543210", "action": "WAITING_FOR_COMPLETION_IMAGE", "task_id": "task-123"}
+    ]
+
+    from whatsapp.whatsapp_webhook import _handle_image
+    msg_payload = {
+        "image": {"id": "img-media-123", "caption": ""}
+    }
+
+    _handle_image("+919876543210", msg_payload)
+    mock_send_text.assert_called_once()
+    reply = mock_send_text.call_args[0][1]
+    assert "Image proof received!" in reply
+
+
 
 

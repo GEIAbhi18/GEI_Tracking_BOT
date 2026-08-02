@@ -343,6 +343,10 @@ def handle_whatsapp_message():
                     elif msg_type == "audio":
                         threading.Thread(target=_handle_audio, args=(sender, message), daemon=True).start()
 
+                    # ── Image ─────────────────────────────────────────────────
+                    elif msg_type == "image":
+                        threading.Thread(target=_handle_image, args=(sender, message), daemon=True).start()
+
                     # ── Plain text ────────────────────────────────────────────
                     elif msg_type == "text":
                         text = message.get("text", {}).get("body", "").strip()
@@ -1064,6 +1068,73 @@ def _handle_audio(sender: str, message: dict):
 
     # Step 6: Feed transcript into the SAME pipeline as typed messages
     _handle_text(sender, transcript, voice_note=True)
+
+
+def _handle_image(sender: str, message: dict):
+    """
+    Handles incoming image messages from WhatsApp (msg_type == "image").
+    If the user is in a task completion / proof upload state, saves the image URL
+    and advances state to WAITING_FOR_COMPLETION_COMMENT.
+    """
+    try:
+        from auth.middleware import authenticate_whatsapp_request
+        auth_user = authenticate_whatsapp_request(sender)
+        if not auth_user:
+            logger.error(f"Auth failed for {sender}")
+            return
+    except Exception as e:
+        logger.error(f"Auth middleware error in _handle_image: {e}")
+        return
+
+    image_obj = message.get("image", {})
+    media_id = image_obj.get("id")
+    caption = image_obj.get("caption", "").strip()
+
+    if not media_id:
+        logger.warning(f"Image message from {sender} has no media ID")
+        return
+
+    logger.info(f"Image received from {sender}, media_id: {media_id}")
+
+    # Resolve image URL via Meta Graph API if available
+    import config
+    media_url = None
+    graph_version = getattr(config, "GRAPH_API_VERSION", "v19.0")
+    try:
+        import requests
+        url_endpoint = f"https://graph.facebook.com/{graph_version}/{media_id}"
+        headers = {"Authorization": f"Bearer {config.META_ACCESS_TOKEN}"}
+        resp = requests.get(url_endpoint, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            media_url = resp.json().get("url")
+    except Exception as err:
+        logger.error(f"Error fetching image URL for media_id {media_id}: {err}")
+
+    img_ref = media_url or f"https://graph.facebook.com/{graph_version}/{media_id}"
+
+    # Check WA State Machine for Multi-Step flows
+    from db import supabase
+    state_res = supabase.table("wa_task_states").select("*").eq("whatsapp_number", sender).execute()
+    if state_res.data:
+        wa_state = state_res.data[0]
+        action = wa_state.get("action")
+
+        if action in ["WAITING_FOR_COMPLETION_IMAGE_DECISION", "WAITING_FOR_COMPLETION_IMAGE", "WAITING_FOR_PROOF"]:
+            # Update state with image proof URL and transition to comment step
+            supabase.table("wa_task_states").update({
+                "action": "WAITING_FOR_COMPLETION_COMMENT",
+                "note": img_ref
+            }).eq("whatsapp_number", sender).execute()
+
+            send_text(
+                sender,
+                "Image proof received! 📸\n\n"
+                "Would you like to add a final comment or note for this task? 📝\n\n"
+                "Reply with your comment, or send 'No' to skip."
+            )
+            return
+
+    send_text(sender, "📸 Image received! If you are updating a task, please select the task update flow first.")
 
 
 def _handle_voice_undo(sender: str):
