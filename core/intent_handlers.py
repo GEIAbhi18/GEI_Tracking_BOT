@@ -862,8 +862,9 @@ def generate_pdf_report(team_name=None):
     from datetime import datetime
     import pytz
     from core.utils import format_date_human
-    from db import supabase
+    from db import supabase, get_user_by_id, get_projects, get_all_tasks
     from config import TIMEZONE
+    from collections import defaultdict
 
     def clean(text):
         if not text: return ""
@@ -892,11 +893,9 @@ def generate_pdf_report(team_name=None):
 
     class GEIReport(FPDF):
         def header(self):
-            # Top Banner (Implicitly handled in first page setup)
             pass
 
         def footer(self):
-            # Line separator
             self.set_draw_color(*COLORS["LINE_GREY"])
             self.line(10, self.h - 15, self.w - 10, self.h - 15)
             
@@ -953,23 +952,130 @@ def generate_pdf_report(team_name=None):
         if pdf.get_y() + h > pdf.page_break_trigger:
             pdf.add_page()
 
+    def get_sort_date(task):
+        dt_str = task.get('deadline') or task.get('planned_start_date') or task.get('created_at')
+        if not dt_str: return datetime(9999, 12, 31)
+        try:
+            if isinstance(dt_str, str):
+                return datetime.fromisoformat(dt_str.replace('Z', '+00:00')).replace(tzinfo=None)
+            return dt_str
+        except:
+            return datetime(9999, 12, 31)
+
+    def render_task_table(group_tasks):
+        pdf.set_fill_color(*COLORS["HEADER_BG"])
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_font("Helvetica", "B", 9)
+        
+        cols = [
+            ("Task", 38), ("Start", 22), ("Deadline", 22), ("Progress", 25), 
+            ("RAG", 18), ("Blocker", 28), ("Note", 25), ("Proof", 12)
+        ]
+        
+        for label, width in cols:
+            pdf.cell(width, 8, label, fill=True, border=0, align="L" if label == "Task" else "C")
+        pdf.ln(8)
+
+        for idx, t in enumerate(group_tasks):
+            fill = (idx % 2 != 0)
+            if fill: pdf.set_fill_color(*COLORS["ZREBRA_BG"])
+            else: pdf.set_fill_color(255, 255, 255)
+            
+            progress = int(t.get("progress", 0) or 0)
+            start_date = format_date_human(t.get("planned_start_date") or t.get("created_at"))
+            deadline = format_date_human(t.get("deadline"))
+            
+            latest_note = "None"
+            blocker = t.get("blocker_reason") or "None"
+            atts = t.get("attachments") or []
+            
+            update_res = supabase.table("updates").select("note, blockers, images").eq("task_id", t["id"]).order("timestamp", desc=True).limit(5).execute()
+            if update_res.data:
+                blocker = next((u["blockers"] for u in update_res.data if u["blockers"] and u["blockers"].lower() not in ["none", "null", ""]), blocker)
+                latest_note = next((u["note"] for u in update_res.data if u["note"]), "None")
+                for u in update_res.data:
+                    if u["images"]: atts.extend(u["images"])
+
+            t_start = None
+            try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+            except: pass
+            t_dl = None
+            try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+            except: pass
+            from rag import calculate_rag
+            rag_val, _ = calculate_rag(progress, t_start, t_dl, blocker)
+            
+            check_space(12)
+            y_row = pdf.get_y()
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.set_font("Helvetica", "B", 8)
+            
+            pdf.set_draw_color(*COLORS["LINE_GREY"])
+            pdf.cell(38, 12, clean(t["name"][:25]), fill=True, border="B")
+            
+            pdf.set_font("Helvetica", "", 8)
+            pdf.cell(22, 12, start_date, fill=True, border="B", align="C")
+            pdf.cell(22, 12, deadline, fill=True, border="B", align="C")
+            
+            x_prev = pdf.get_x()
+            pdf.cell(25, 12, "", fill=True, border="B")
+            
+            bar_w = 18
+            bar_h = 2.5
+            pdf.set_draw_color(*COLORS["LINE_GREY"])
+            pdf.set_fill_color(230, 230, 230)
+            pdf.rect(x_prev + 3.5, y_row + 6, bar_w, bar_h, style="FD")
+            
+            p_color = COLORS["GREEN"] if progress >= 100 else (100, 150, 255)
+            pdf.set_fill_color(*p_color)
+            pdf.rect(x_prev + 3.5, y_row + 6, (progress / 100) * bar_w, bar_h, style="F")
+            
+            pdf.set_y(y_row + 2)
+            pdf.set_x(x_prev)
+            pdf.set_font("Helvetica", "", 6)
+            pdf.set_text_color(*COLORS["TEXT_GREY"])
+            pdf.cell(25, 4, f"{progress}%", align="C")
+            pdf.set_y(y_row)
+            pdf.set_x(x_prev + 25)
+            
+            x_rag = pdf.get_x()
+            pdf.set_fill_color(*(COLORS["ZREBRA_BG"] if fill else (255,255,255)))
+            pdf.cell(18, 12, "", fill=True, border="B")
+            
+            r_color = COLORS.get(rag_val, COLORS["TEXT_DARK"])
+            pdf.set_fill_color(*r_color)
+            pdf.circle(x_rag + 3, y_row + 6, 1, style="F")
+            
+            pdf.set_xy(x_rag + 5, y_row)
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*r_color)
+            pdf.cell(13, 12, rag_val.capitalize().replace("_", " "), align="L")
+            
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.cell(28, 12, clean(blocker[:18] + ".." if len(blocker) > 18 else blocker), fill=True, border="B", align="L")
+            pdf.cell(25, 12, clean(latest_note[:15] + ".." if len(latest_note) > 15 else latest_note), fill=True, border="B", align="L")
+            
+            if atts:
+                pdf.set_text_color(30, 100, 200)
+                pdf.set_font("Helvetica", "U", 8)
+                pdf.cell(12, 12, "View", fill=True, border="B", align="C", link=atts[0])
+            else:
+                pdf.set_text_color(*COLORS["TEXT_GREY"])
+                pdf.set_font("Helvetica", "", 8)
+                pdf.cell(12, 12, "-", fill=True, border="B", align="C")
+            
+            pdf.ln(12)
+        pdf.ln(10)
+
+    # ── Project Tasks Section ────────────────────────────────────────────────
     for p in projects:
-        p_tasks = [t for t in tasks if t.get("project_id") == p["id"]]
+        # EXCLUDE personal tasks from project tables
+        p_tasks = [t for t in tasks if t.get("project_id") == p["id"] and t.get("task_type") != "PERSONAL"]
         if not p_tasks: continue
 
-        # Sort tasks by deadline ascending (fallback to start date)
-        def get_sort_date(task):
-            dt_str = task.get('deadline') or task.get('planned_start_date') or task.get('created_at')
-            if not dt_str: return datetime(9999, 12, 31)
-            try:
-                if isinstance(dt_str, str):
-                    return datetime.fromisoformat(dt_str.replace('Z', '+00:00')).replace(tzinfo=None)
-                return dt_str
-            except:
-                return datetime(9999, 12, 31)
         p_tasks.sort(key=get_sort_date)
 
-        # Calculate Summary
         task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
         for t in p_tasks:
             from rag import calculate_rag
@@ -984,10 +1090,8 @@ def generate_pdf_report(team_name=None):
             t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
             task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
 
-        # Check space for Project Header + Summary + Table Header + 2 Rows
         check_space(50)
         
-        # Project Header Row with Background
         pdf.set_fill_color(240, 240, 240)
         pdf.rect(10, pdf.get_y(), 190, 10, style="F")
         
@@ -995,7 +1099,6 @@ def generate_pdf_report(team_name=None):
         pdf.set_text_color(*COLORS["TEXT_DARK"])
         pdf.cell(90, 10, " " + clean(p["name"][:35]), ln=0)
         
-        # Summary on Right
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*COLORS["RED"])
         pdf.cell(10, 10, str(task_stats["RED"]), align="R")
@@ -1015,131 +1118,99 @@ def generate_pdf_report(team_name=None):
         pdf.set_font("Helvetica", "", 9)
         pdf.set_text_color(*COLORS["TEXT_GREY"])
         pdf.cell(30, 10, clean(f" ({len(p_tasks)} tasks)"), ln=1, align="R")
+
+        render_task_table(p_tasks)
+
+    # ── Personal Tasks Section ───────────────────────────────────────────────
+    personal_tasks = [t for t in tasks if t.get("task_type") == "PERSONAL"]
+    if personal_tasks:
+        check_space(40)
         
-        # --- Table Headers ---
-        pdf.set_fill_color(*COLORS["HEADER_BG"])
+        # Section Header: Personal Tasks
+        pdf.set_fill_color(31, 95, 160)
+        pdf.rect(10, pdf.get_y(), 190, 10, style="F")
+        pdf.set_font("Helvetica", "B", 14)
         pdf.set_text_color(255, 255, 255)
-        pdf.set_font("Helvetica", "B", 9)
-        
-        cols = [
-            ("Task", 38), ("Start", 22), ("Deadline", 22), ("Progress", 25), 
-            ("RAG", 18), ("Blocker", 28), ("Note", 25), ("Proof", 12)
-        ]
-        
-        y_start = pdf.get_y()
-        for label, width in cols:
-            pdf.cell(width, 8, label, fill=True, border=0, align="L" if label == "Task" else "C")
-        pdf.ln(8)
+        pdf.cell(190, 10, "  Personal Tasks", ln=1)
+        pdf.ln(5)
 
-        # --- Table Rows ---
-        from core.utils import format_date_human
-        from db import supabase
-        
-        for idx, t in enumerate(p_tasks):
-            # Zebra striping
-            fill = (idx % 2 != 0)
-            if fill: pdf.set_fill_color(*COLORS["ZREBRA_BG"])
-            else: pdf.set_fill_color(255, 255, 255)
+        user_name_cache = {}
+        def get_owner_name(t):
+            u_id = t.get("assigned_to") or t.get("created_by") or t.get("assigned_by")
+            if not u_id:
+                return "Personal"
+            u_str = str(u_id)
+            if u_str in user_name_cache:
+                return user_name_cache[u_str]
             
-            # Pre-calculate data
-            progress = int(t.get("progress", 0) or 0)
-            start_date = format_date_human(t.get("planned_start_date") or t.get("created_at"))
-            deadline = format_date_human(t.get("deadline"))
-            
-            # Fetch latest update for Note/Blocker/Images
-            latest_note = "None"
-            blocker = t.get("blocker_reason") or "None"
-            atts = t.get("attachments") or []
-            
-            update_res = supabase.table("updates").select("note, blockers, images").eq("task_id", t["id"]).order("timestamp", desc=True).limit(5).execute()
-            if update_res.data:
-                blocker = next((u["blockers"] for u in update_res.data if u["blockers"] and u["blockers"].lower() not in ["none", "null", ""]), blocker)
-                latest_note = next((u["note"] for u in update_res.data if u["note"]), "None")
-                for u in update_res.data:
-                    if u["images"]: atts.extend(u["images"])
-
-            # RAG again for row
-            t_start = None
-            try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
-            except: pass
-            t_dl = None
-            try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
-            except: pass
-            from rag import calculate_rag
-            rag_val, _ = calculate_rag(progress, t_start, t_dl, blocker)
-            
-            # Row Start Check
-            check_space(12)
-            y_row = pdf.get_y()
-            pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.set_font("Helvetica", "B", 8)
-            
-            # Task Name (Multi-line support if needed, but cell for now)
-            pdf.set_draw_color(*COLORS["LINE_GREY"])
-            pdf.cell(38, 12, clean(t["name"][:25]), fill=True, border="B")
-            
-            pdf.set_font("Helvetica", "", 8)
-            pdf.cell(22, 12, start_date, fill=True, border="B", align="C")
-            pdf.cell(22, 12, deadline, fill=True, border="B", align="C")
-            
-            # Progress Column (Progress Bar)
-            x_prev = pdf.get_x()
-            pdf.cell(25, 12, "", fill=True, border="B") # Background for bar
-            
-            # Draw Progress Bar
-            bar_w = 18
-            bar_h = 2.5
-            pdf.set_draw_color(*COLORS["LINE_GREY"])
-            pdf.set_fill_color(230, 230, 230)
-            pdf.rect(x_prev + 3.5, y_row + 6, bar_w, bar_h, style="FD") # Track
-            
-            # Progress Fill color based on RAG or just blue
-            p_color = COLORS["GREEN"] if progress >= 100 else (100, 150, 255)
-            pdf.set_fill_color(*p_color)
-            pdf.rect(x_prev + 3.5, y_row + 6, (progress / 100) * bar_w, bar_h, style="F")
-            
-            # Progress Text
-            pdf.set_y(y_row + 2)
-            pdf.set_x(x_prev)
-            pdf.set_font("Helvetica", "", 6)
-            pdf.set_text_color(*COLORS["TEXT_GREY"])
-            pdf.cell(25, 4, f"{progress}%", align="C")
-            pdf.set_y(y_row) # Reset Y for next cells
-            pdf.set_x(x_prev + 25)
-            
-            # RAG Column (Dot + Text)
-            x_rag = pdf.get_x()
-            pdf.set_fill_color(*(COLORS["ZREBRA_BG"] if fill else (255,255,255)))
-            pdf.cell(18, 12, "", fill=True, border="B")
-            
-            r_color = COLORS.get(rag_val, COLORS["TEXT_DARK"])
-            pdf.set_fill_color(*r_color)
-            pdf.circle(x_rag + 3, y_row + 6, 1, style="F")
-            
-            pdf.set_xy(x_rag + 5, y_row)
-            pdf.set_font("Helvetica", "B", 8)
-            pdf.set_text_color(*r_color)
-            pdf.cell(13, 12, rag_val.capitalize().replace("_", " "), align="L")
-            
-            # Blocker / Note
-            pdf.set_font("Helvetica", "", 7)
-            pdf.set_text_color(*COLORS["TEXT_DARK"])
-            pdf.cell(28, 12, clean(blocker[:18] + ".." if len(blocker) > 18 else blocker), fill=True, border="B", align="L")
-            pdf.cell(25, 12, clean(latest_note[:15] + ".." if len(latest_note) > 15 else latest_note), fill=True, border="B", align="L")
-            
-            # Proof
-            if atts:
-                pdf.set_text_color(30, 100, 200)
-                pdf.set_font("Helvetica", "U", 8)
-                pdf.cell(12, 12, "View", fill=True, border="B", align="C", link=atts[0])
+            name = None
+            if isinstance(t.get("assigned_to_user"), dict) and t["assigned_to_user"].get("name"):
+                name = t["assigned_to_user"]["name"]
+            elif isinstance(t.get("creator_user"), dict) and t["creator_user"].get("name"):
+                name = t["creator_user"]["name"]
             else:
-                pdf.set_text_color(*COLORS["TEXT_GREY"])
-                pdf.set_font("Helvetica", "", 8)
-                pdf.cell(12, 12, "-", fill=True, border="B", align="C")
+                u_info = get_user_by_id(u_str)
+                if u_info and u_info.get("name"):
+                    name = u_info["name"]
             
-            pdf.ln(12)
-        
-        pdf.ln(10)
+            final_name = name or "Personal"
+            user_name_cache[u_str] = final_name
+            return final_name
+
+        user_personal_tasks = defaultdict(list)
+        for t in personal_tasks:
+            owner = get_owner_name(t)
+            user_personal_tasks[owner].append(t)
+
+        for owner_name, u_tasks in user_personal_tasks.items():
+            u_tasks.sort(key=get_sort_date)
+
+            task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
+            for t in u_tasks:
+                from rag import calculate_rag
+                progress = t.get("progress", 0)
+                t_start = None
+                try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+                except: pass
+                t_dl = None
+                try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+                except: pass
+                
+                t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
+                task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
+
+            check_space(45)
+
+            # Subheader Row for User (e.g. Subheader: Abhijeet)
+            pdf.set_fill_color(240, 244, 248)
+            pdf.rect(10, pdf.get_y(), 190, 9, style="F")
+
+            pdf.set_font("Helvetica", "B", 12)
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.cell(90, 9, "  Subheader: " + clean(owner_name), ln=0)
+
+            # Summary on Right
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*COLORS["RED"])
+            pdf.cell(10, 9, str(task_stats["RED"]), align="R")
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.cell(10, 9, " Red ", align="L")
+            
+            pdf.set_text_color(*COLORS["AMBER"])
+            pdf.cell(10, 9, str(task_stats["AMBER"]), align="R")
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.cell(15, 9, " Amber ", align="L")
+            
+            pdf.set_text_color(*COLORS["GREEN"])
+            pdf.cell(10, 9, str(task_stats["GREEN"]), align="R")
+            pdf.set_text_color(*COLORS["TEXT_DARK"])
+            pdf.cell(15, 9, " Green", align="L")
+            
+            pdf.set_font("Helvetica", "", 9)
+            pdf.set_text_color(*COLORS["TEXT_GREY"])
+            pdf.cell(30, 9, clean(f" ({len(u_tasks)} tasks)"), ln=1, align="R")
+
+            render_task_table(u_tasks)
 
     filepath = f"/tmp/daily_report_{team_name if team_name else 'all'}.pdf"
     pdf.output(filepath)
