@@ -13,7 +13,7 @@ def create_task(data: dict):
 
 def get_task_by_id(task_id: str):
     try:
-        response = supabase.table("tasks").select("*, teams(name), users!tasks_created_by_fkey(name), users!tasks_assigned_to_fkey(name)").eq("id", task_id).execute()
+        response = supabase.table("tasks").select("*, teams(name), creator:users!tasks_created_by_fkey(name), assignee:users!tasks_assigned_to_fkey(name)").eq("id", task_id).execute()
         return response.data[0] if response.data else None
     except Exception as e:
         logger.error(f"Error fetching task {task_id}: {e}")
