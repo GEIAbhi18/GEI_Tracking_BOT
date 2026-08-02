@@ -131,7 +131,7 @@ BEGIN
         changed_data := jsonb_set(changed_data, '{assigned_to}', jsonb_build_object('old', OLD.assigned_to, 'new', NEW.assigned_to));
     END IF;
 
-    IF OLD.status IS DISTINCT FROM NEW.status OR jsonb_array_length(jsonb_object_keys(changed_data)) > 0 THEN
+    IF OLD.status IS DISTINCT FROM NEW.status OR changed_data != '{}'::jsonb THEN
         INSERT INTO tasks_audit (task_id, changed_by, old_status, new_status, changes)
         VALUES (
             NEW.id,
