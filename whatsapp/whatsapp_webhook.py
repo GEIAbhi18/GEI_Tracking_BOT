@@ -361,6 +361,11 @@ def handle_whatsapp_message():
                                 # Check for casual greetings (Main Menu trigger)
                                 greeting_words = ["hi", "hello", "menu", "hey", "start"]
                                 if msg_text.strip().lower() in greeting_words:
+                                    try:
+                                        from whatsapp.task_assignment import check_and_deliver_pending_task_notifications
+                                        check_and_deliver_pending_task_notifications(auth_user)
+                                    except Exception as check_err:
+                                        logger.error(f"Error delivering pending task notifications: {check_err}")
                                     from whatsapp.menus import send_main_menu
                                     send_main_menu(sender_num, auth_user)
                                     return

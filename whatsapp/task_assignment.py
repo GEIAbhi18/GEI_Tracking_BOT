@@ -455,6 +455,64 @@ def _handle_editdate_step2(sender_phone: str, task_id: str, date_text: str):
         logger.warning(f"Could not notify creator for edit-date on task {task_id}")
 
 
+def check_and_deliver_pending_task_notifications(user: dict):
+    """
+    Delivers any pending task assignment notifications (Accept / Reject)
+    for tasks assigned to the user that were created while the user's 24h window was inactive.
+    """
+    user_id = user.get("id")
+    user_wa = user.get("whatsapp_number")
+    if not user_id or not user_wa:
+        return
+
+    from db import supabase
+    from whatsapp.ux import send_interactive_buttons, send_text
+    from core.utils import format_date_human
+
+    try:
+        # Query tasks assigned to this user that are pending acceptance
+        res = supabase.table("tasks").select("*, creator:users!created_by(name)").eq("assigned_to", user_id).neq("status", "Completed").execute()
+        all_tasks = res.data or []
+        pending_tasks = [t for t in all_tasks if t.get("assignment_status") in ["pending_acceptance", "pending"] and t.get("assigned_by") != user_id]
+
+        for t in pending_tasks:
+            task_id = t.get("id")
+            task_title = t.get("title") or t.get("name") or "Task"
+            due_date_str = format_date_human(t.get("deadline"))
+            creator_info = t.get("creator") or {}
+            creator_name = creator_info.get("name") or "Team Member"
+            member_name = user.get("name", "Team Member")
+
+            body = (
+                f"📋 *Pending Task Assignment!*\n\n"
+                f"Hi {member_name} 👋,\n"
+                f"*{creator_name}* assigned a task to you:\n\n"
+                f"📌 *Task:* {task_title}\n"
+                f"📅 *Due Date:* {due_date_str}\n\n"
+                f"Please select an option below:"
+            )
+            buttons = [
+                {"id": f"task_accept_{task_id}", "title": "Accept"},
+                {"id": f"task_reject_{task_id}", "title": "Reject"}
+            ]
+            sent = send_interactive_buttons(user_wa, body, buttons)
+            if not sent:
+                fallback_msg = (
+                    f"📋 *Pending Task Assignment!*\n\n"
+                    f"Hi {member_name} 👋,\n"
+                    f"*{creator_name}* assigned a task to you:\n\n"
+                    f"📌 *Task:* {task_title}\n"
+                    f"📅 *Due Date:* {due_date_str}\n\n"
+                    f"Reply *Accept* to accept or *Reject* to reject this task."
+                )
+                send_text(user_wa, fallback_msg)
+            
+            logger.info(f"Delivered pending task notification to {member_name} ({user_wa}) for task '{task_title}' (ID: {task_id})")
+            print(f"[PENDING_ASSIGNMENT] Delivered pending task notification to {member_name} ({user_wa}) for task '{task_title}' (ID: {task_id})", flush=True)
+    except Exception as err:
+        logger.error(f"Error checking pending task notifications for {user_wa}: {err}")
+
+
 def _check_yes_no_shorthand(sender_phone: str, text: str) -> bool:
     """
     If user has a pending_acceptance task, allow 'yes'→accept / 'no'→reject shorthand.
