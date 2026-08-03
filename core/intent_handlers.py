@@ -1216,7 +1216,9 @@ def generate_pdf_report(team_name=None):
 
     # Tasks that belong to unknown/other teams or no team
     known_team_ids = {t["id"] for t in all_teams if t["name"] in KNOWN_TEAM_NAMES}
-    old_tasks = [t for t in non_personal if not t.get("team_id") or t.get("team_id") not in known_team_ids]
+    # Also exclude tasks from the "Personal" project to avoid confusing duplicate labels
+    personal_project_ids = {p["id"] for p in projects if p["name"].lower() == "personal"}
+    old_tasks = [t for t in non_personal if (not t.get("team_id") or t.get("team_id") not in known_team_ids) and t.get("project_id") not in personal_project_ids]
 
     # ─────────────────────────────────────────────────────────────────────────
     # SECTION 1: Team Tasks
@@ -1271,74 +1273,7 @@ def generate_pdf_report(team_name=None):
             render_no_tasks_row()
 
     # ─────────────────────────────────────────────────────────────────────────
-    # SECTION 2: Old Tasks & Projects
-    # ─────────────────────────────────────────────────────────────────────────
-    if old_tasks:
-        render_main_section_header("Old Tasks & Projects", color=(90, 90, 90))
-
-        # Group by project
-        old_project_ids = list({t.get("project_id") for t in old_tasks if t.get("project_id")})
-        old_standalone = [t for t in old_tasks if not t.get("project_id")]
-
-        for p in projects:
-            if p["id"] not in old_project_ids:
-                continue
-            p_tasks = [t for t in old_tasks if t.get("project_id") == p["id"]]
-            if not p_tasks:
-                continue
-            p_tasks.sort(key=get_sort_date)
-
-            # Project subheader (grey)
-            check_space(30)
-            task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
-            for t in p_tasks:
-                from rag import calculate_rag
-                progress = t.get("progress", 0)
-                t_start = None
-                try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
-                except: pass
-                t_dl = None
-                try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
-                except: pass
-                t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
-                task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
-
-            pdf.set_fill_color(230, 230, 230)
-            pdf.rect(10, pdf.get_y(), 190, 9, style="F")
-            pdf.set_font("Helvetica", "B", 11)
-            pdf.set_text_color(70, 70, 70)
-            pdf.cell(85, 9, "   " + clean(p["name"][:35]), ln=0)
-            pdf.set_font("Helvetica", "B", 9)
-            pdf.set_text_color(*COLORS["RED"])
-            pdf.cell(8, 9, str(task_stats["RED"]), align="R")
-            pdf.set_text_color(70, 70, 70)
-            pdf.cell(12, 9, " Red ", align="L")
-            pdf.set_text_color(*COLORS["AMBER"])
-            pdf.cell(8, 9, str(task_stats["AMBER"]), align="R")
-            pdf.set_text_color(70, 70, 70)
-            pdf.cell(14, 9, " Amber ", align="L")
-            pdf.set_text_color(*COLORS["GREEN"])
-            pdf.cell(8, 9, str(task_stats["GREEN"]), align="R")
-            pdf.set_text_color(70, 70, 70)
-            pdf.cell(12, 9, " Green", align="L")
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(*COLORS["TEXT_GREY"])
-            pdf.cell(0, 9, f"({len(p_tasks)} tasks)", ln=1, align="R")
-
-            render_task_table(p_tasks)
-
-        if old_standalone:
-            old_standalone.sort(key=get_sort_date)
-            check_space(15)
-            pdf.set_fill_color(230, 230, 230)
-            pdf.rect(10, pdf.get_y(), 190, 8, style="F")
-            pdf.set_font("Helvetica", "BI", 10)
-            pdf.set_text_color(70, 70, 70)
-            pdf.cell(190, 8, "   Unassigned Tasks", ln=1, align="L")
-            render_task_table(old_standalone)
-
-    # ─────────────────────────────────────────────────────────────────────────
-    # SECTION 3: Personal Tasks
+    # SECTION 2: Personal Tasks
     # ─────────────────────────────────────────────────────────────────────────
     personal_tasks = [t for t in tasks if t.get("task_type") == "PERSONAL"]
     if personal_tasks:
@@ -1410,6 +1345,73 @@ def generate_pdf_report(team_name=None):
             pdf.set_text_color(*COLORS["TEXT_GREY"])
             pdf.cell(0, 9, clean(f" ({len(u_tasks)} tasks)"), ln=1, align="R")
             render_task_table(u_tasks)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # SECTION 3: Old Tasks & Projects
+    # ─────────────────────────────────────────────────────────────────────────
+    if old_tasks:
+        render_main_section_header("Old Tasks & Projects", color=(90, 90, 90))
+
+        # Group by project
+        old_project_ids = list({t.get("project_id") for t in old_tasks if t.get("project_id")})
+        old_standalone = [t for t in old_tasks if not t.get("project_id")]
+
+        for p in projects:
+            if p["id"] not in old_project_ids:
+                continue
+            p_tasks = [t for t in old_tasks if t.get("project_id") == p["id"]]
+            if not p_tasks:
+                continue
+            p_tasks.sort(key=get_sort_date)
+
+            # Project subheader (grey)
+            check_space(30)
+            task_stats = {"RED": 0, "AMBER": 0, "GREEN": 0, "NOT_STARTED": 0}
+            for t in p_tasks:
+                from rag import calculate_rag
+                progress = t.get("progress", 0)
+                t_start = None
+                try: t_start = datetime.fromisoformat(str(t.get("planned_start_date") or t.get("created_at")).replace('Z', '+00:00'))
+                except: pass
+                t_dl = None
+                try: t_dl = datetime.fromisoformat(str(t.get("deadline")).replace('Z', '+00:00'))
+                except: pass
+                t_rag, _ = calculate_rag(progress, t_start, t_dl, t.get("blocker_reason"))
+                task_stats[t_rag] = task_stats.get(t_rag, 0) + 1
+
+            pdf.set_fill_color(230, 230, 230)
+            pdf.rect(10, pdf.get_y(), 190, 9, style="F")
+            pdf.set_font("Helvetica", "B", 11)
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(85, 9, "   " + clean(p["name"][:35]), ln=0)
+            pdf.set_font("Helvetica", "B", 9)
+            pdf.set_text_color(*COLORS["RED"])
+            pdf.cell(8, 9, str(task_stats["RED"]), align="R")
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(12, 9, " Red ", align="L")
+            pdf.set_text_color(*COLORS["AMBER"])
+            pdf.cell(8, 9, str(task_stats["AMBER"]), align="R")
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(14, 9, " Amber ", align="L")
+            pdf.set_text_color(*COLORS["GREEN"])
+            pdf.cell(8, 9, str(task_stats["GREEN"]), align="R")
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(12, 9, " Green", align="L")
+            pdf.set_font("Helvetica", "", 8)
+            pdf.set_text_color(*COLORS["TEXT_GREY"])
+            pdf.cell(0, 9, f"({len(p_tasks)} tasks)", ln=1, align="R")
+
+            render_task_table(p_tasks)
+
+        if old_standalone:
+            old_standalone.sort(key=get_sort_date)
+            check_space(15)
+            pdf.set_fill_color(230, 230, 230)
+            pdf.rect(10, pdf.get_y(), 190, 8, style="F")
+            pdf.set_font("Helvetica", "BI", 10)
+            pdf.set_text_color(70, 70, 70)
+            pdf.cell(190, 8, "   Unassigned Tasks", ln=1, align="L")
+            render_task_table(old_standalone)
 
     filepath = f"/tmp/daily_report_{team_name if team_name else 'all'}.pdf"
     pdf.output(filepath)
@@ -1631,9 +1633,9 @@ async def handle_greeting(entities, user_id, context, send_reply_func):
     
     msg = f"Hi {name}, What can I help you with?\n\n🤖 Available Commands:\n"
     if role == 'director':
-        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /edit_date\n• /create_note\n• /ask_asif\n• /help"
+        msg += "• /get_report\n• /get_task\n• /create_task\n• /create_project\n• /update_date\n• /edit_date\n• /create_note\n• /ask_asif\n• /help"
     else:
-        msg += "• /update_task\n• /raise_ticket\n• /edit_date\n• /create_note\n• /create_task\n• /help"
+        msg += "• /update_task\n• /update_date\n• /raise_ticket\n• /edit_date\n• /create_note\n• /create_task\n• /help"
     
     await send_reply_func(msg)
 

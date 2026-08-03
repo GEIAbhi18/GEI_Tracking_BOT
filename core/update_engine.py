@@ -71,7 +71,8 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         "/start", "show tasks", "view tasks", "list tasks", "show blockers", 
         "team tasks", "personal tasks", "my tasks", "show team tasks", "show my personal tasks",
         "show all tasks", "help", "/help", "exit", "cancel", "update task", "add image", 
-        "complete task", "task detail", "create project", "create task", "add blocker"
+        "complete task", "task detail", "create project", "create task", "add blocker",
+        "update date", "edit date"
     ]
     if state and any(cmd in stripped_lower for cmd in COMMAND_KEYWORDS):
         from core.context_manager import clear_context
@@ -166,7 +167,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
     elif stripped_lower in ["view tickets", "show tickets", "view_tickets", "show_tickets"]:
         await handlers.handle_view_tickets({"intent": "view_tickets"}, user_id, context, send_reply_func)
         return
-    elif stripped_lower in ["edit date", "edit_date", "/edit_date", "change date"]:
+    elif stripped_lower in ["edit date", "edit_date", "/edit_date", "change date", "update date", "update_date", "/update_date"]:
         await handlers.handle_edit_date({"intent": "edit_date"}, user_id, context, send_reply_func)
         return
     elif stripped_lower in ["create note", "create_note", "/create_note", "add note"]:
@@ -722,11 +723,40 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             await send_reply_func(f"Project '{text}' created successfully! ✅")
 
     elif action == "create_task":
-        if step == "waiting_for_project":
+        if step == "waiting_for_task_type":
+            choice = text.strip().replace('.', '').strip()
+            if choice == "1":
+                # Personal task — use "Personal" project
+                projects = get_projects()
+                personal_proj = next((p for p in projects if p['name'].lower() == "personal"), None)
+                if personal_proj:
+                    state["project_query"] = personal_proj['name']
+                else:
+                    state["project_query"] = projects[0]['name'] if projects else ""
+                state["is_personal"] = True
+                state["step"] = "waiting_for_task_name"
+                set_state(user_id, state)
+                await send_reply_func("Enter task name:")
+            elif choice == "2":
+                # Team task — show project list
+                projects = get_projects()
+                if not projects:
+                    await send_reply_func("No projects exist. Create a project first.")
+                    clear_state(user_id)
+                    return
+                msg = "Select Project: (Type the number)\n\n"
+                for i, p in enumerate(projects, 1):
+                    msg += f"{i}. {p['name']}\n"
+                state["step"] = "waiting_for_project"
+                set_state(user_id, state)
+                await send_reply_func(msg)
+            else:
+                await send_reply_func("Please enter 1 for Personal Task or 2 for Team Task.")
+        elif step == "waiting_for_project":
             state["project_query"] = text
             state["step"] = "waiting_for_task_name"
             set_state(user_id, state)
-            await send_reply_func("enter task name")
+            await send_reply_func("Enter task name:")
         elif step == "waiting_for_task_name":
             state["task_name"] = text
             state["step"] = "waiting_for_start_date"
@@ -748,6 +778,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             task_name = state.get("task_name")
             start_date = state.get("start_date")
             creator_user_id = state.get("creator_user_id")  # WA: who created this task
+            is_personal = state.get("is_personal", False)
             deadline = text
             pq = project_query.strip()
             projects = get_projects()
@@ -767,7 +798,9 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                         task_name,
                         parsed_deadline,
                         start_date=start_date,
-                        assigned_by=creator_user_id
+                        assigned_by=creator_user_id,
+                        assigned_to=creator_user_id if is_personal else None,
+                        task_type="PERSONAL" if is_personal else "PROJECT"
                     )
                 except Exception as ae:
                     logging.error(f"Database error in add_task: {ae}")
