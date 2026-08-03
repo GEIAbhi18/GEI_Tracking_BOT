@@ -622,22 +622,67 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             return
             
         elif action in ["WAITING_FOR_PERSONAL_TASK_TITLE", "WAITING_FOR_TEAM_TASK_TITLE"]:
-            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-            
             is_personal = (action == "WAITING_FOR_PERSONAL_TASK_TITLE")
             task_type = "PERSONAL" if is_personal else "TEAM"
+            task_title = text.strip()
+            
+            meta = {
+                "task_title": task_title,
+                "is_personal": is_personal,
+                "task_type": task_type
+            }
+            from whatsapp.handlers import set_wa_state
+            set_wa_state(sender, "WAITING_FOR_TASK_START_DATE", metadata=meta)
+            send_text(sender, f"What is the Start Date for *'{task_title}'*?\n(e.g., *today*, *tomorrow*, *next Monday*, or *2026-08-10*)")
+            return
+
+        elif action == "WAITING_FOR_TASK_START_DATE":
+            from core.utils import parse_human_date
+            import json as _json
+            
+            raw_meta = wa_state.get("metadata") or {}
+            if isinstance(raw_meta, str):
+                try: raw_meta = _json.loads(raw_meta)
+                except Exception: raw_meta = {}
+                
+            parsed_start = parse_human_date(text)
+            raw_meta["start_date"] = parsed_start
+            
+            task_title = raw_meta.get("task_title", "Task")
+            from whatsapp.handlers import set_wa_state
+            set_wa_state(sender, "WAITING_FOR_TASK_DEADLINE", metadata=raw_meta)
+            send_text(sender, f"What is the Deadline for *'{task_title}'*?\n(e.g., *tomorrow*, *next Friday*, *in 1 week*, or *2026-08-15*)")
+            return
+
+        elif action == "WAITING_FOR_TASK_DEADLINE":
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+            from core.utils import parse_human_date, format_date_human
+            import json as _json
+            
+            raw_meta = wa_state.get("metadata") or {}
+            if isinstance(raw_meta, str):
+                try: raw_meta = _json.loads(raw_meta)
+                except Exception: raw_meta = {}
+                
+            task_title = raw_meta.get("task_title", text)
+            is_personal = raw_meta.get("is_personal", True)
+            task_type = raw_meta.get("task_type", "PERSONAL")
+            start_date = raw_meta.get("start_date")
+            parsed_dl = parse_human_date(text)
+            
             try:
                 from db import add_task
                 from auth.middleware import authenticate_whatsapp_request
                 
-                # Fetch the correct user considering impersonation
                 user_info = authenticate_whatsapp_request(sender)
                 user_id = user_info["id"] if user_info else None
                 team_id = user_info.get("team_id") if user_info else None
                 
                 new_task = add_task(
                     project_id=None,
-                    name=text,
+                    name=task_title,
+                    deadline=parsed_dl,
+                    start_date=start_date,
                     assigned_by=user_id,
                     assigned_to=user_id if is_personal else None,
                     task_type=task_type,
@@ -645,16 +690,110 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 )
                 
                 if new_task:
+                    f_start = format_date_human(start_date)
+                    f_dl = format_date_human(parsed_dl)
                     if is_personal:
-                        send_text(sender, f"✅ Personal Task '{text}' created successfully!")
+                        send_text(sender, f"✅ Personal Task *'{task_title}'* created successfully!\n📅 Start Date: {f_start}\n📅 Deadline: {f_dl}")
                     else:
                         from whatsapp.handlers import send_assignee_selection_prompt
-                        send_assignee_selection_prompt(sender, new_task['id'], text, user_info)
+                        send_assignee_selection_prompt(sender, new_task['id'], task_title, user_info)
                 else:
                     send_text(sender, "Failed to create task in the database. Contact an admin.")
             except Exception as e:
                 logger.error(f"Error creating task: {e}")
                 send_text(sender, "An error occurred while creating the task.")
+            return
+
+        elif action == "WAITING_FOR_UPDATE_DATE_TASK_SELECTION":
+            from auth.middleware import authenticate_whatsapp_request
+            from db import supabase
+            from core.context_manager import get_context
+            from core.utils import resolve_task_from_list
+            import re
+            
+            user_info = authenticate_whatsapp_request(sender)
+            user_id = user_info["id"] if user_info else None
+            
+            ctx = get_context(sender)
+            task_ids = ctx.get("last_task_list", [])
+            if not task_ids and user_id:
+                task_ids = get_context(user_id).get("last_task_list", [])
+                
+            all_raw = supabase.table("tasks").select("*, projects(name)").execute().data or []
+            if task_ids:
+                tasks = [t for t in all_raw if t["id"] in task_ids]
+            else:
+                tasks = [t for t in all_raw if t.get("status") != "Completed"]
+                
+            target_task = None
+            num_match = re.search(r'^(?:task|number|#)?\s*(\d+)', text.strip(), re.IGNORECASE)
+            if num_match:
+                idx = int(num_match.group(1)) - 1
+                if 0 <= idx < len(tasks):
+                    target_task = tasks[idx]
+            if not target_task:
+                target_task = resolve_task_from_list(text, tasks, last_list_ids=task_ids)
+                
+            if not target_task:
+                send_text(sender, "Could not identify task. Please reply with the task number (e.g. *1*).")
+                return
+                
+            task_id = target_task["id"]
+            task_name = target_task.get("title") or target_task.get("name") or "Task"
+            
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+            
+            body = f"What date would you like to update for *{task_name}*?"
+            buttons = [
+                {"id": f"date_type_start_{task_id}", "title": "Start Date"},
+                {"id": f"date_type_dl_{task_id}", "title": "Deadline"}
+            ]
+            from whatsapp.ux import send_interactive_buttons
+            send_interactive_buttons(sender, body, buttons)
+            return
+
+        elif action == "WAITING_FOR_NEW_START_DATE":
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+            from core.utils import parse_human_date, format_date_human
+            from db import update_task_dates
+            import json as _json
+            
+            raw_meta = wa_state.get("metadata") or {}
+            if isinstance(raw_meta, str):
+                try: raw_meta = _json.loads(raw_meta)
+                except Exception: raw_meta = {}
+            task_id = wa_state.get("task_id") or raw_meta.get("task_id")
+            
+            parsed_date = parse_human_date(text)
+            res = update_task_dates(task_id, start_date=parsed_date)
+            if res:
+                f_date = format_date_human(parsed_date)
+                t_name = res.get("title") or res.get("name") or "Task"
+                send_text(sender, f"✅ Start Date updated successfully for *'{t_name}'*!\n📅 New Start Date: {f_date}")
+            else:
+                send_text(sender, "Failed to update Start Date in database.")
+            return
+
+        elif action == "WAITING_FOR_NEW_DEADLINE":
+            supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+            from core.utils import parse_human_date, format_date_human
+            from db import update_task_dates
+            import json as _json
+            
+            raw_meta = wa_state.get("metadata") or {}
+            if isinstance(raw_meta, str):
+                try: raw_meta = _json.loads(raw_meta)
+                except Exception: raw_meta = {}
+            task_id = wa_state.get("task_id") or raw_meta.get("task_id")
+            
+            parsed_date = parse_human_date(text)
+            res = update_task_dates(task_id, deadline=parsed_date)
+            if res:
+                f_date = format_date_human(parsed_date)
+                t_name = res.get("title") or res.get("name") or "Task"
+                send_text(sender, f"✅ Deadline updated successfully for *'{t_name}'*!\n📅 New Deadline: {f_date}")
+            else:
+                send_text(sender, "Failed to update Deadline in database.")
             return
 
         elif action == "WAITING_FOR_TASK_UPDATE":

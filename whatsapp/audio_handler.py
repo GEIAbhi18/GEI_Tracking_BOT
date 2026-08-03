@@ -38,35 +38,34 @@ def download_audio(media_id: str) -> str:
     Step 1: Get the CDN URL for the audio file from Meta Graph API
     Step 2: Download the audio binary using the Bearer token
     Step 3: Save to a temp .ogg file and return the path
-
-    Args:
-        media_id: The media ID from the WhatsApp message payload
-
-    Returns:
-        Absolute path to the downloaded .ogg file in /tmp
-
-    Raises:
-        ValueError: If the media URL cannot be retrieved
-        requests.HTTPError: If the download fails
     """
+    token = getattr(config, "META_ACCESS_TOKEN", None) or os.getenv("META_ACCESS_TOKEN") or os.getenv("WHATSAPP_ACCESS_TOKEN")
+    if not token:
+        logger.error("Missing META_ACCESS_TOKEN or WHATSAPP_ACCESS_TOKEN environment variable")
+        raise ValueError("WhatsApp access token not configured")
+
     # Step 1 — Get media URL from Meta Graph API
-    url_endpoint = (
-        f"https://graph.facebook.com/{GRAPH_API_VERSION}"
-        f"/{media_id}"
-    )
-    headers = {"Authorization": f"Bearer {config.META_ACCESS_TOKEN}"}
+    url_endpoint = f"https://graph.facebook.com/{GRAPH_API_VERSION}/{media_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "User-Agent": "curl/7.64.1"
+    }
 
     logger.info(f"Fetching media URL for media_id: {media_id}")
-    url_response = requests.get(url_endpoint, headers=headers, timeout=10)
+    url_response = requests.get(url_endpoint, headers=headers, timeout=15)
+    if url_response.status_code != 200:
+        logger.error(f"Meta Graph API failed ({url_response.status_code}): {url_response.text}")
     url_response.raise_for_status()
+    
     media_url = url_response.json().get("url")
-
     if not media_url:
         raise ValueError(f"Could not retrieve media URL for media_id: {media_id}")
 
     # Step 2 — Download audio binary from CDN
-    logger.info(f"Downloading audio from Meta CDN")
+    logger.info("Downloading audio from Meta CDN...")
     audio_response = requests.get(media_url, headers=headers, timeout=30)
+    if audio_response.status_code != 200:
+        logger.error(f"Meta CDN audio download failed ({audio_response.status_code}): {audio_response.text[:200]}")
     audio_response.raise_for_status()
 
     # Step 3 — Write to temp file

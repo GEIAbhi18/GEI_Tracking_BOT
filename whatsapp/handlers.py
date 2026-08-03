@@ -10,7 +10,9 @@ def set_wa_state(phone: str, state: str, metadata: dict = None):
     try:
         payload = {"whatsapp_number": phone, "action": state}
         if metadata:
-            payload["task_id"] = metadata.get("task_id")
+            payload["metadata"] = metadata
+            if metadata.get("task_id"):
+                payload["task_id"] = metadata.get("task_id")
             
         supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
     except Exception as e:
@@ -52,6 +54,13 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                 {"id": "update_task_team", "title": "Team Task"}
             ]
             send_interactive_buttons(sender_phone, "Which task list would you like to update?", buttons)
+            
+        elif button_id == "menu_update_date":
+            buttons = [
+                {"id": "update_date_personal", "title": "Personal Task"},
+                {"id": "update_date_team", "title": "Team Task"}
+            ]
+            send_interactive_buttons(sender_phone, "Which task list would you like to update date for?", buttons)
             
         elif button_id == "menu_admin":
             if user.get("role") != "Developer" and user.get("original_role") != "Developer":
@@ -207,6 +216,82 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             
         set_wa_state(sender_phone, "WAITING_FOR_TASK_UPDATE", metadata={"task_id": task_ids[0] if task_ids else None})
         send_text(sender_phone, msg)
+        return
+
+    # ── Update Date Routing ──────────────────────────────────────────────────
+    if button_id.startswith("update_date_"):
+        from auth.middleware import authenticate_whatsapp_request
+        from core.utils import format_date_human
+        user_info = authenticate_whatsapp_request(sender_phone)
+        user_id = user_info["id"] if user_info else None
+        
+        if button_id == "update_date_personal":
+            raw_tasks = supabase.table("tasks").select("*, projects(name)").neq("status", "Completed").execute().data or []
+            tasks = [
+                t for t in raw_tasks 
+                if t.get("task_type") == "PERSONAL" and (
+                    not user_id or 
+                    str(t.get("created_by")) == str(user_id) or 
+                    str(t.get("assigned_to")) == str(user_id)
+                )
+            ]
+            task_type_label = "Personal Tasks"
+        elif button_id == "update_date_team":
+            raw_tasks = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").neq("status", "Completed").execute().data or []
+            tasks = [
+                t for t in raw_tasks 
+                if t.get("task_type") != "PERSONAL" and (
+                    not user_id or 
+                    str(t.get("assigned_to")) == str(user_id) or 
+                    str(t.get("created_by")) == str(user_id) or
+                    str(t.get("assigned_by")) == str(user_id) or
+                    (user_info and user_info.get("role") in ["Developer", "Director"])
+                )
+            ]
+            task_type_label = "Team Tasks"
+        else:
+            tasks = []
+            task_type_label = "Tasks"
+
+        if not tasks:
+            send_text(sender_phone, f"No active {task_type_label.lower()} found to update date.")
+            return
+
+        lines = [f"📋 *Select a {task_type_label[:-1]} to Update Date:*\n"]
+        task_ids = []
+        for idx, t in enumerate(tasks, 1):
+            task_ids.append(t["id"])
+            title = t.get("title") or t.get("name") or "Task"
+            f_start = format_date_human(t.get("planned_start_date") or t.get("created_at"))
+            f_dl = format_date_human(t.get("deadline"))
+            lines.append(f"{idx}. *{title}*\n   📅 Start: {f_start} | Deadline: {f_dl}")
+
+        lines.append("\n💬 *Reply with the task number* (e.g., *1* or *task 2*) to change its date.")
+        
+        msg = "\n".join(lines)
+        from core.context_manager import update_context
+        update_context(sender_phone, last_task_list=task_ids)
+        if user_id:
+            update_context(user_id, last_task_list=task_ids)
+            
+        set_wa_state(sender_phone, "WAITING_FOR_UPDATE_DATE_TASK_SELECTION", metadata={"task_ids": task_ids})
+        send_text(sender_phone, msg)
+        return
+
+    if button_id.startswith("date_type_start_"):
+        task_id = button_id.replace("date_type_start_", "")
+        t_row = supabase.table("tasks").select("title").eq("id", task_id).execute().data
+        t_title = t_row[0].get("title", "Task") if t_row else "Task"
+        send_text(sender_phone, f"Please enter new Start Date for *'{t_title}'*\n(e.g., *today*, *tomorrow*, *next Monday*, or *2026-08-10*):")
+        set_wa_state(sender_phone, "WAITING_FOR_NEW_START_DATE", metadata={"task_id": task_id})
+        return
+
+    if button_id.startswith("date_type_dl_"):
+        task_id = button_id.replace("date_type_dl_", "")
+        t_row = supabase.table("tasks").select("title").eq("id", task_id).execute().data
+        t_title = t_row[0].get("title", "Task") if t_row else "Task"
+        send_text(sender_phone, f"Please enter new Deadline for *'{t_title}'*\n(e.g., *tomorrow*, *next Friday*, *in 2 weeks*, or *2026-08-15*):")
+        set_wa_state(sender_phone, "WAITING_FOR_NEW_DEADLINE", metadata={"task_id": task_id})
         return
 
     # ── Guest Menu Routing ───────────────────────────────────────────────────
