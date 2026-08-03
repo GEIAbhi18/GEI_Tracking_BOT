@@ -580,6 +580,35 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 return
             
             await send_reply_func("Please upload an image proof or type 'done' to finish.")
+
+    elif action == "task_update_note":
+        clean_t = text.strip().lower()
+        t_id = state.get("task_id")
+        t_name = state.get("task_name", "Task")
+        initial_note = state.get("initial_note")
+
+        if clean_t in ["no", "n", "skip", "none", "nope", "cancel"]:
+            clear_state(user_id)
+            await send_reply_func(f"✅ Task update completed for '{t_name}'!")
+            return
+
+        comment_text = text.strip()
+        u_info = _resolve_user_ue(user_id)
+        emp_uuid = u_info['id'] if u_info else None
+
+        from tasks.timeline import add_timeline_event
+        if t_id:
+            add_timeline_event(t_id, emp_uuid, "Additional note added to update", note=comment_text)
+            try:
+                from db import supabase
+                full_note = f"{initial_note}\n{comment_text}" if initial_note else comment_text
+                supabase.table("tasks").update({"notes": full_note}).eq("id", t_id).execute()
+            except Exception as e:
+                logger.warning(f"Could not update task notes in DB: {e}")
+
+        clear_state(user_id)
+        await send_reply_func(f"📝 Note added to task '{t_name}' successfully! ✅")
+        return
     
     elif action == "complete_task":
         if step == "waiting_for_project":

@@ -596,12 +596,26 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         action = wa_state.get("action")
         task_id = wa_state.get("task_id")
         
-        if action == "WAITING_FOR_NOTE":
+        if action in ["WAITING_FOR_NOTE", "WAITING_FOR_UPDATE_NOTE", "task_update_note"]:
+            clean_t = text.strip().lower()
+            if clean_t in ["no", "n", "skip", "none", "nope", "cancel"]:
+                supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
+                send_text(sender, "✅ Task update completed!")
+                return
+
             from tasks.timeline import add_timeline_event
             user_id = supabase.table("users").select("id").eq("whatsapp_number", sender).execute().data[0]["id"]
-            add_timeline_event(task_id, user_id, "Note added", note=text)
+            if task_id:
+                add_timeline_event(task_id, user_id, "Note added to task update", note=text.strip())
+                try:
+                    t_row = supabase.table("tasks").select("notes").eq("id", task_id).execute()
+                    exist_n = t_row.data[0].get("notes") if t_row.data else ""
+                    full_n = f"{exist_n}\n{text.strip()}".strip() if exist_n else text.strip()
+                    supabase.table("tasks").update({"notes": full_n}).eq("id", task_id).execute()
+                except Exception:
+                    pass
             supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-            send_text(sender, "✅ Note added successfully!")
+            send_text(sender, "📝 Note added successfully! ✅")
             return
         elif action == "WAITING_FOR_REMINDER":
             try:
@@ -684,6 +698,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                     deadline=parsed_dl,
                     start_date=start_date,
                     assigned_by=user_id,
+                    created_by=user_id,
                     assigned_to=user_id if is_personal else None,
                     task_type=task_type,
                     team_id=team_id

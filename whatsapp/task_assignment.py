@@ -208,23 +208,14 @@ def clear_wa_state(phone: str):
 
 def on_task_created_by_kanav(task_id: str, task_name: str, project_name: str,
                               due_date: str, creator_wa: str, assignee_wa: str,
-                              kanav_wa: str):
+                              kanav_wa: str = None, creator_name: str = "A team member", assignee_name: str = "Team Member"):
     """
-    Called after Kanav successfully creates a task.
-    Sends interactive approval message to Asif and confirms to Kanav.
-
-    Args:
-        task_id:      UUID of the newly created task
-        task_name:    Human-readable task name
-        project_name: Name of the project
-        due_date:     Deadline string (formatted for display)
-        creator_wa:   Kanav's WhatsApp number (to confirm)
-        assignee_wa:  Asif's WhatsApp number (to request approval)
-        kanav_wa:     Kanav's number (same as creator_wa, kept for clarity)
+    Called after a task creator creates a task.
+    Sends interactive approval message to the assignee and confirms to creator.
     """
-    # 1. Send interactive approval request to Asif
+    confirm_wa = creator_wa or kanav_wa
     body = (
-        f"Kanav created a task for you:\n\n"
+        f"*{creator_name}* created a task for you:\n\n"
         f"📌 Task: {task_name}\n"
         f"📂 Project: {project_name}\n"
         f"📅 Planned completion date: {due_date}\n\n"
@@ -240,14 +231,16 @@ def on_task_created_by_kanav(task_id: str, task_name: str, project_name: str,
     sent = send_interactive_buttons(assignee_wa, body, buttons)
 
     if sent:
-        logger.info(f"Task assignment message sent to {assignee_wa} for task {task_id}")
+        logger.info(f"Task assignment message sent to {assignee_name} ({assignee_wa}) for task {task_id}")
         # Mark assignment as pending in DB
         update_task_assignment(task_id, assignment_status="pending_acceptance")
-        # 2. Confirm to Kanav
-        send_text(kanav_wa, f"✅ Task Created.\n📩 Message sent to Asif for approval.")
+        # Confirm to Creator
+        if confirm_wa:
+            send_text(confirm_wa, f"✅ Task Created.\n📩 Message sent to *{assignee_name}* for approval.")
     else:
-        logger.error(f"Failed to send task assignment message to {assignee_wa}")
-        send_text(kanav_wa, f"✅ Task Created.\n⚠️ Could not reach Asif on WhatsApp. Please notify manually.")
+        logger.error(f"Failed to send task assignment message to {assignee_name} ({assignee_wa})")
+        if confirm_wa:
+            send_text(confirm_wa, f"✅ Task Created.\n⚠️ Could not reach *{assignee_name}* on WhatsApp. Please notify manually.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -309,11 +302,10 @@ def handle_text_reply(sender_phone: str, text: str) -> bool:
 # INTERNAL FLOW HANDLERS
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _get_kanav_number(task: dict):
-    """Extract Kanav's WhatsApp number from a task's assigned_by_user field."""
+def _get_creator_number(task: dict):
+    """Extract creator's WhatsApp number from a task's assigned_by_user or created_by_user field."""
     try:
-        creator = task.get("assigned_by_user") or {}
-        # Handle both dict and list forms from Supabase joins
+        creator = task.get("assigned_by_user") or task.get("created_by_user") or {}
         if isinstance(creator, list):
             creator = creator[0] if creator else {}
         return creator.get("whatsapp_number")
@@ -322,12 +314,12 @@ def _get_kanav_number(task: dict):
 
 
 def _handle_accept(sender_phone: str, task_id: str):
-    """Asif clicked Accept."""
+    """Assignee clicked Accept."""
     sender = get_user_by_whatsapp(sender_phone)
     task = get_task_by_id(task_id)
 
     if not task:
-        send_text(sender_phone, "Couldn't find that task — it may have been removed.\nPlease contact Kanav.")
+        send_text(sender_phone, "Couldn't find that task — it may have been removed.")
         return
 
     # Idempotency: skip if already accepted
@@ -343,22 +335,24 @@ def _handle_accept(sender_phone: str, task_id: str):
                            accepted_by=accepted_by)
     clear_wa_state(sender_phone)
 
-    # Confirm to Asif
+    # Confirm to Assignee
     send_text(sender_phone, "✅ You accepted the task.")
 
-    # Notify Kanav
-    kanav_number = _get_kanav_number(task)
-    if kanav_number:
-        send_text(kanav_number, "✅ Task has been accepted by Asif.")
+    # Notify Creator
+    creator_number = _get_creator_number(task)
+    if creator_number:
+        task_name = task.get("name", "Team Task")
+        assignee_name = sender.get("name", "Assignee") if sender else "Assignee"
+        send_text(creator_number, f"✅ Task *'{task_name}'* has been accepted by *{assignee_name}*.")
     else:
-        logger.warning(f"Could not find Kanav's WhatsApp number to notify for task {task_id}")
+        logger.warning(f"Could not find creator's WhatsApp number to notify for task {task_id}")
 
 
 def _handle_reject_step1(sender_phone: str, task_id: str):
-    """Asif clicked Reject — ask for reason."""
+    """Assignee clicked Reject — ask for reason."""
     task = get_task_by_id(task_id)
     if not task:
-        send_text(sender_phone, "Couldn't find that task — it may have been removed.\nPlease contact Kanav.")
+        send_text(sender_phone, "Couldn't find that task — it may have been removed.")
         return
 
     if task.get("assignment_status") == "rejected":
@@ -374,7 +368,8 @@ def _handle_reject_step1(sender_phone: str, task_id: str):
 
 
 def _handle_reject_step2(sender_phone: str, task_id: str, reason: str):
-    """Asif sent rejection reason."""
+    """Assignee sent rejection reason."""
+    sender = get_user_by_whatsapp(sender_phone)
     task = get_task_by_id(task_id)
 
     # Update DB with final rejected status + reason
@@ -383,21 +378,22 @@ def _handle_reject_step2(sender_phone: str, task_id: str, reason: str):
                            rejection_reason=reason)
     clear_wa_state(sender_phone)
 
-    # Notify Kanav
-    kanav_number = _get_kanav_number(task) if task else None
-    if kanav_number:
+    # Notify Creator
+    creator_number = _get_creator_number(task) if task else None
+    if creator_number:
         task_name = task.get("name", "the task")
-        send_text(kanav_number,
-                  f"❌ Task has been rejected by Asif due to: {reason}")
+        assignee_name = sender.get("name", "Assignee") if sender else "Assignee"
+        send_text(creator_number,
+                  f"❌ Task *'{task_name}'* has been rejected by *{assignee_name}* due to: {reason}")
     else:
-        logger.warning(f"Could not find Kanav's number for rejection notification, task {task_id}")
+        logger.warning(f"Could not find creator's number for rejection notification, task {task_id}")
 
 
 def _handle_editdate_step1(sender_phone: str, task_id: str):
-    """Asif clicked Edit Date — ask for new date."""
+    """Assignee clicked Edit Date — ask for new date."""
     task = get_task_by_id(task_id)
     if not task:
-        send_text(sender_phone, "Couldn't find that task — it may have been removed.\nPlease contact Kanav.")
+        send_text(sender_phone, "Couldn't find that task — it may have been removed.")
         return
 
     update_task_assignment(task_id, assignment_status="awaiting_new_date")
@@ -435,16 +431,18 @@ def _handle_editdate_step2(sender_phone: str, task_id: str, date_text: str):
                            deadline=date_text)
     clear_wa_state(sender_phone)
 
-    # Confirm to Asif
+    # Confirm to Assignee
     send_text(sender_phone, f"✅ Task accepted with updated date: {date_text}")
 
-    # Notify Kanav
-    kanav_number = _get_kanav_number(task) if task else None
-    if kanav_number:
-        send_text(kanav_number,
-                  f"✅ Task has been accepted by Asif.\n📅 New completion date: {date_text}")
+    # Notify Creator
+    creator_number = _get_creator_number(task) if task else None
+    if creator_number:
+        task_name = task.get("name", "the task") if task else "the task"
+        assignee_name = sender.get("name", "Assignee") if sender else "Assignee"
+        send_text(creator_number,
+                  f"✅ Task *'{task_name}'* has been accepted by *{assignee_name}*.\n📅 New completion date: {date_text}")
     else:
-        logger.warning(f"Could not notify Kanav for edit-date on task {task_id}")
+        logger.warning(f"Could not notify creator for edit-date on task {task_id}")
 
 
 def _check_yes_no_shorthand(sender_phone: str, text: str) -> bool:

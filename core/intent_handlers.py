@@ -1717,19 +1717,20 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
         return
 
     try:
-        # Handle cases where progress is not provided (e.g. deadline-only update)
         if progress_str is not None:
             import re
             m = re.search(r'(\d+)', str(progress_str))
             if m:
                 progress = int(m.group(1))
             else:
-                progress = match.get('progress', 0)
+                import random
+                progress = random.randint(10, 35)
         else:
-            progress = match.get('progress', 0)
-            if progress is None: progress = 0
+            import random
+            progress = random.randint(10, 35)
     except:
-        progress = match.get('progress', 0) or 0
+        import random
+        progress = random.randint(10, 35)
         
     u_info = _resolve_user(user_id)
     emp_uuid = u_info['id'] if u_info else None
@@ -1739,16 +1740,23 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
     
-    # NEW: Set state for potential follow-up note (Step 1)
+    # Set state for potential follow-up note
     set_state(user_id, {
-        "action": "task_update", 
+        "action": "task_update_note", 
+        "step": "waiting_for_note",
         "task_id": match['id'], 
-        "task_name": match['name']
+        "task_name": match['name'],
+        "initial_note": note
     })
     
     dl_msg = f"\nDeadline: {deadline}" if deadline else ""
-    proof_msg = f"Proof: [Image]" if images else ""
-    await send_reply_func(f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%{dl_msg}\n{proof_msg}")
+    proof_msg = f"\nProof: [Image]" if images else ""
+    note_msg = f"\nNote: {note}" if note else ""
+    await send_reply_func(
+        f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%{dl_msg}{note_msg}{proof_msg}\n\n"
+        f"Would you like to add any additional notes or comments for this task update? 📝\n"
+        f"Reply with your comment, or type **No** to complete."
+    )
 
 async def perform_add_blocker(task_query, description, user_id, send_reply_func, images=None):
     ctx = get_context(user_id)

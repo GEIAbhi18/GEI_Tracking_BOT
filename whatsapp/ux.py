@@ -8,10 +8,29 @@ WHATSAPP_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 WA_API_BASE = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}"
 
+def clean_phone_number(phone) -> str:
+    """
+    Cleans phone numbers for WhatsApp API.
+    Strips non-digit characters except numeric digits.
+    If 10 digits (e.g. 9996221554), prefixes default country code '91'.
+    Returns clean numeric string (e.g. '919996221554').
+    """
+    if not phone:
+        return ""
+    digits = "".join(c for c in str(phone) if c.isdigit())
+    if len(digits) == 10:
+        digits = "91" + digits
+    return digits
+
+
 def _post_wa(payload: dict) -> bool:
     if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WA UX: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
         return False
+
+    if "to" in payload:
+        payload["to"] = clean_phone_number(payload["to"])
+
     url = f"{WA_API_BASE}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
@@ -19,11 +38,11 @@ def _post_wa(payload: dict) -> bool:
     }
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=10)
-        logger.info(f"WA API {r.status_code}: {r.text[:200]}")
+        logger.info(f"WA API {r.status_code} [to={payload.get('to')} type={payload.get('type')}]: {r.text[:200]}")
         r.raise_for_status()
         return True
     except Exception as e:
-        logger.error(f"WA API error: {e}")
+        logger.error(f"WA API error [to={payload.get('to')}]: {e}")
         return False
 
 def send_text(to: str, body: str) -> bool:

@@ -356,7 +356,7 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                     d_date_str = str(due_val).split("T")[0] if due_val != "No due date" and "T" in str(due_val) else str(due_val)
                     assignor_id = t_data.get("assigned_by") or t_data.get("created_by")
 
-                    if assignor_id and str(assignor_id) != str(user.get("id")):
+                    if assignor_id and str(assignor_id).lower() != str(user.get("id")).lower():
                         from db import get_user_by_id
                         creator_user = get_user_by_id(assignor_id)
                         if creator_user:
@@ -380,7 +380,13 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                                         f"📌 *Task:* {t_title}\n"
                                         f"📅 *Due Date:* {d_date_str}"
                                     )
-                                send_text(creator_wa, notify_creator_msg)
+                                sent = send_text(creator_wa, notify_creator_msg)
+                                if sent:
+                                    logger.info(f"✅ Creator notification sent to {creator_name} ({creator_wa}) that task '{t_title}' was {action}ed by {assignee_name}")
+                                else:
+                                    logger.error(f"❌ Failed to send creator notification to {creator_name} ({creator_wa}) for task '{t_title}'")
+                            else:
+                                logger.warning(f"⚠️ Creator {creator_user.get('name')} (ID: {assignor_id}) has no valid whatsapp_number")
             except Exception as notify_err:
                 logger.error(f"Error sending creator notification for task {action}: {notify_err}")
             return
@@ -526,7 +532,11 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                             f"📅 *Due Date:* {due_date_str}\n\n"
                             f"Please check your task list in GEI_BOT for details."
                         )
-                        send_text(assigned_wa, notify_msg)
+                        sent = send_text(assigned_wa, notify_msg)
+                        if sent:
+                            logger.info(f"✅ Self-assignment notification sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                        else:
+                            logger.error(f"❌ Failed to send self-assignment notification to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
                     else:
                         body = (
                             f"📋 *New Task Assigned to You!*\n\n"
@@ -540,7 +550,13 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                             {"id": f"task_accept_{task_id}", "title": "Accept"},
                             {"id": f"task_reject_{task_id}", "title": "Reject"}
                         ]
-                        send_interactive_buttons(assigned_wa, body, buttons)
+                        sent = send_interactive_buttons(assigned_wa, body, buttons)
+                        if sent:
+                            logger.info(f"✅ Task assignment interactive message (Accept/Reject) sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                        else:
+                            logger.error(f"❌ Failed to send task assignment interactive message to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                else:
+                    logger.warning(f"⚠️ Assigned user {member_name} (ID: {member_id}) has no valid whatsapp_number configured")
         return
 
 

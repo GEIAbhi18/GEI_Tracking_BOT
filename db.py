@@ -185,7 +185,7 @@ def create_project_db(name, created_by=None):
     resp = supabase.table("projects").insert(data).execute()
     return resp.data[0] if resp.data else None
 
-def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None, task_type="PROJECT", team_id=None):
+def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None, assigned_by=None, task_type="PROJECT", team_id=None, created_by=None):
     # Ensure project_id is never None to satisfy Supabase NOT NULL constraint
     if not project_id:
         try:
@@ -207,6 +207,9 @@ def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None,
         "status": "Pending",
         "task_type": task_type
     }
+    creator_id = created_by or assigned_by
+    if creator_id:
+        data["created_by"] = creator_id
     if assigned_to:
         data["assigned_to"] = assigned_to
     if deadline:
@@ -284,8 +287,25 @@ def update_user_activity(tid):
         logging.warning(f"Could not update last_activity_at: {e}")
 
 def get_user_by_name(name):
-    r = supabase.table("users").select("*").ilike("name", f"%{name}%").execute()
-    return r.data[0] if r.data else None
+    if not name:
+        return None
+    clean_n = name.strip()
+    r = supabase.table("users").select("*").ilike("name", f"%{clean_n}%").execute()
+    if r.data:
+        return r.data[0]
+
+    alt_name = None
+    if clean_n.lower() == "vikas":
+        alt_name = "Vikash"
+    elif clean_n.lower() == "vikash":
+        alt_name = "Vikas"
+
+    if alt_name:
+        r2 = supabase.table("users").select("*").ilike("name", f"%{alt_name}%").execute()
+        if r2.data:
+            return r2.data[0]
+
+    return None
 
 def get_tasks_for_user(user_uuid):
     # We apply project task numbering globally first to be safe, but since this is filtered,
