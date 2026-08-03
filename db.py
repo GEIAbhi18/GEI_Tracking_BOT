@@ -103,6 +103,8 @@ def save_update(task_id, progress, blockers, images, employee_id=None, new_deadl
         task_deadline = None
     
     rag_color, _ = calculate_rag(progress, task_start_date, task_deadline, blockers, 0)
+    if not rag_color or rag_color not in ["RED", "AMBER", "GREEN"]:
+        rag_color = "GREEN"
     
     data = {
         "task_id": task_id,
