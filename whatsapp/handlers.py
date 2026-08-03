@@ -492,11 +492,15 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             member_id = parts[3]
 
             from db import get_user_by_id
+            from whatsapp.ux import clean_phone_number
 
             assigned_user = get_user_by_id(member_id)
             member_name = assigned_user.get("name", "Team Member") if assigned_user else "Team Member"
 
-            update_payload = {"assigned_to": member_id}
+            update_payload = {
+                "assigned_to": member_id,
+                "assignment_status": "pending_acceptance"
+            }
             if assigned_user and assigned_user.get("team_id"):
                 update_payload["team_id"] = assigned_user.get("team_id")
 
@@ -518,7 +522,8 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
 
             # Send WhatsApp notification to assigned member
             if assigned_user:
-                assigned_wa = assigned_user.get("whatsapp_number") or assigned_user.get("telegram_id")
+                raw_wa = assigned_user.get("whatsapp_number") or assigned_user.get("telegram_id")
+                assigned_wa = clean_phone_number(raw_wa) if raw_wa else ""
                 if assigned_wa:
                     creator_name = user.get("name", "A team member") if user else "A team member"
                     is_self_assignment = (user and assigned_user and str(user.get("id")) == str(assigned_user.get("id")))
@@ -534,7 +539,8 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                         )
                         sent = send_text(assigned_wa, notify_msg)
                         if sent:
-                            logger.info(f"✅ Self-assignment notification sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                            logger.info(f"WhatsApp message for task acceptance has been sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                            print(f"[ASSIGNMENT] WhatsApp message for task acceptance has been sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})", flush=True)
                         else:
                             logger.error(f"❌ Failed to send self-assignment notification to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
                     else:
@@ -551,10 +557,20 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                             {"id": f"task_reject_{task_id}", "title": "Reject"}
                         ]
                         sent = send_interactive_buttons(assigned_wa, body, buttons)
-                        if sent:
-                            logger.info(f"✅ Task assignment interactive message (Accept/Reject) sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
-                        else:
-                            logger.error(f"❌ Failed to send task assignment interactive message to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                        if not sent:
+                            # Fallback to plain text if interactive button failed
+                            fallback_msg = (
+                                f"📋 *New Task Assigned to You!*\n\n"
+                                f"Hi {member_name} 👋,\n"
+                                f"*{creator_name}* assigned a new Team Task to you:\n\n"
+                                f"📌 *Task:* {task_title}\n"
+                                f"📅 *Due Date:* {due_date_str}\n\n"
+                                f"Reply *Accept* to accept or *Reject* to reject this task."
+                            )
+                            send_text(assigned_wa, fallback_msg)
+
+                        logger.info(f"WhatsApp message for task acceptance has been sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
+                        print(f"[ASSIGNMENT] WhatsApp message for task acceptance has been sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})", flush=True)
                 else:
                     logger.warning(f"⚠️ Assigned user {member_name} (ID: {member_id}) has no valid whatsapp_number configured")
         return
@@ -863,9 +879,18 @@ def handle_direct_task_update(sender_phone: str, text: str, user_info: dict) -> 
                 pass
 
     if progress is None:
-        progress = target_task.get("progress", 0) or 0
+        import random
+        progress = random.randint(10, 35)
 
     progress = min(100, max(0, progress))
+
+    # Extract initial note text from user input (e.g. "2 test comments and it worked" -> "test comments and it worked")
+    note_text = text.strip()
+    note_text = re.sub(r'^(?:task|number|#)?\s*\d+\s*', '', note_text, flags=re.IGNORECASE).strip()
+    note_text = re.sub(r'\d{1,3}\s*(?:%|percent)', '', note_text, flags=re.IGNORECASE).strip()
+    note_text = re.sub(r'\b(completed|done|finished|complete|closed)\b', '', note_text, flags=re.IGNORECASE).strip()
+    note_text = re.sub(r'^[%\s,.-]+|[%\s,.-]+$', '', note_text).strip()
+    initial_note = note_text if note_text else None
 
     task_id = target_task["id"]
 
@@ -881,19 +906,32 @@ def handle_direct_task_update(sender_phone: str, text: str, user_info: dict) -> 
         return True
 
     # Save update to DB for non-completion progress updates
-    save_update(task_id, progress, "None", [], user_id)
+    save_update(task_id, progress, "None", [], user_id, note=initial_note)
 
-    # 4. Confirmation message for non-completion updates
+    if initial_note:
+        from tasks.timeline import add_timeline_event
+        add_timeline_event(task_id, user_id, "Note added to task update", note=initial_note)
+        try:
+            supabase.table("tasks").update({"notes": initial_note}).eq("id", task_id).execute()
+        except Exception as err:
+            logger.warning(f"Could not update task notes in DB: {err}")
+
+    # 4. Prompt for notes/comments and set WAITING_FOR_UPDATE_NOTE state
     task_name = target_task.get("title") or target_task.get("name") or "Task"
     new_status = "In Progress" if progress > 0 else "Pending"
 
     send_text(
         sender_phone,
-        f"✅ Task is Updated.\n\n"
-        f"📌 *Task:* {task_name}\n"
-        f"📊 *Progress:* {progress}%\n"
-        f"🏷️ *Status:* {new_status}"
+        f"Would you like to add any notes or comments for *'{task_name}'*? 📝\n\n"
+        f"Reply with your comment, or send *No* to skip."
     )
+    set_wa_state(sender_phone, "WAITING_FOR_UPDATE_NOTE", metadata={
+        "task_id": task_id,
+        "task_name": task_name,
+        "progress": progress,
+        "status": new_status,
+        "initial_note": initial_note
+    })
     return True
 
 

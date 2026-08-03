@@ -213,9 +213,15 @@ def add_task(project_id, name, deadline=None, assigned_to=None, start_date=None,
     if assigned_to:
         data["assigned_to"] = assigned_to
     if deadline:
-        data["deadline"] = deadline
+        from core.utils import parse_human_date
+        parsed_dl = parse_human_date(str(deadline))
+        if parsed_dl:
+            data["deadline"] = parsed_dl
     if start_date:
-        data["planned_start_date"] = start_date
+        from core.utils import parse_human_date
+        parsed_start = parse_human_date(str(start_date))
+        if parsed_start:
+            data["planned_start_date"] = parsed_start
     if assigned_by:
         data["assigned_by"] = assigned_by
     if team_id:

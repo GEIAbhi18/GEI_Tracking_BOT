@@ -2,6 +2,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock
 from core.intent_handlers import perform_update
 from core.update_engine import continue_conversation
+from whatsapp.handlers import handle_direct_task_update
 
 @pytest.mark.asyncio
 async def test_perform_update_explicit_progress_and_note(mocker):
@@ -68,25 +69,46 @@ async def test_continue_conversation_task_update_note_no(mocker):
     assert "Task update completed for 'Set meeting with Goyal'" in reply_text
 
 
-@pytest.mark.asyncio
-async def test_continue_conversation_task_update_note_with_comment(mocker):
-    mock_send_reply = AsyncMock()
-    mock_clear_state = mocker.patch("core.update_engine.clear_state")
-    mocker.patch("core.update_engine._resolve_user_ue", return_value={"id": "user-123"})
-    mocker.patch("tasks.timeline.add_timeline_event")
+def test_handle_direct_task_update_number_and_note(mocker):
+    """Test '2 test comments and it worked' extracts task 2, generates default progress (10-35%), saves note, and displays note in update reply."""
+    mocker.patch("core.context_manager.get_context", return_value={"last_task_list": ["t-1", "t-2", "t-3"]})
     mock_supabase = mocker.patch("db.supabase")
 
-    state = {
-        "action": "task_update_note",
-        "step": "waiting_for_note",
-        "task_id": "t-101",
-        "task_name": "Set meeting with Goyal",
-        "initial_note": "meeting requested"
-    }
+    mock_tasks = [
+        {"id": "t-1", "title": "Pay water bill", "progress": 0, "status": "Pending"},
+        {"id": "t-2", "title": "Dummy Test Task", "progress": 0, "status": "Pending"},
+        {"id": "t-3", "title": "Notification testing", "progress": 0, "status": "Pending"},
+    ]
+    
+    mock_query = MagicMock()
+    mock_query.execute.return_value.data = mock_tasks
+    mock_supabase.table.return_value.select.return_value = mock_query
 
-    await continue_conversation("Meeting scheduled for Friday at 3 PM", "user-123", state, [], mock_send_reply)
+    mock_save_update = mocker.patch("db.save_update")
+    mock_send_text = mocker.patch("whatsapp.handlers.send_text")
+    mock_set_wa_state = mocker.patch("whatsapp.handlers.set_wa_state")
+    mocker.patch("tasks.timeline.add_timeline_event")
 
-    mock_clear_state.assert_called_once_with("user-123")
-    mock_supabase.table.return_value.update.assert_called_once_with({"notes": "meeting requested\nMeeting scheduled for Friday at 3 PM"})
-    reply_text = mock_send_reply.call_args[0][0]
-    assert "Note added to task 'Set meeting with Goyal' successfully!" in reply_text
+    user_info = {"id": "user-123", "name": "Abhijeet"}
+
+    # Run direct update with "2 test comments and it worked"
+    res = handle_direct_task_update("917717754421", "2 test comments and it worked", user_info)
+
+    assert res is True
+    # Verify save_update was called with task id t-2, progress in 10-35, and note='test comments and it worked'
+    mock_save_update.assert_called_once()
+    call_args = mock_save_update.call_args[0]
+    kwargs = mock_save_update.call_args.kwargs
+    assert call_args[0] == "t-2" # task_id
+    assert 10 <= call_args[1] <= 35 # progress in 10-35%
+    note_val = kwargs.get("note") or (call_args[5] if len(call_args) > 5 else None)
+    assert note_val == "test comments and it worked" # note
+
+    # Verify Step 1 prompt asks for notes/comments
+    reply_msg = mock_send_text.call_args[0][1]
+    assert "Dummy Test Task" in reply_msg
+    assert "Would you like to add any notes or comments" in reply_msg
+
+    # Verify state set to WAITING_FOR_UPDATE_NOTE
+    mock_set_wa_state.assert_called_once()
+    assert mock_set_wa_state.call_args[0][1] == "WAITING_FOR_UPDATE_NOTE"

@@ -22,13 +22,13 @@ def parse_human_date(date_text: str) -> str:
     
     today = datetime.now()
     
-    # 1. Basic Constants
-    if text == "today":
-        return today.strftime("%Y-%m-%d")
-    if text == "tomorrow":
-        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-    if text in ["day after tomorrow", "next to tomorrow", "day after"]:
+    # 1. Basic Constants with typo handling
+    if text in ["day after tomorrow", "day after tommorow", "day after tomorow", "next to tomorrow", "next to tommorow", "day after"]:
         return (today + timedelta(days=2)).strftime("%Y-%m-%d")
+    if text in ["today", "tday"]:
+        return today.strftime("%Y-%m-%d")
+    if text in ["tomorrow", "tommorow", "tomorow", "tomrow", "tomm", "tom"] or re.search(r'\bto?m+o+r+o+w\b', text):
+        return (today + timedelta(days=1)).strftime("%Y-%m-%d")
     
     # 2. Relative Days/Weeks (e.g., "in 3 days", "after 2 weeks", "3 days after")
     # Match "3 days", "2 weeks", "in 1 month" (approx)
@@ -115,15 +115,17 @@ def parse_human_date(date_text: str) -> str:
             return f"{today.year}-{int(match_short.group(2)):02d}-{int(match_short.group(1)):02d}"
         except: pass
 
-    # Finally try generic parser if available or just return original
+    # Finally check if it's already YYYY-MM-DD
     try:
-        # Check if it's already YYYY-MM-DD
+        if re.match(r'^\d{4}-\d{2}-\d{2}', text):
+            return text.split('T')[0]
         datetime.strptime(text, "%Y-%m-%d")
         return text
     except:
         pass
 
-    return date_text
+    # Return None for unparseable text so DB receives NULL instead of invalid text syntax
+    return None
 
 def resolve_project(query, projects):
     """

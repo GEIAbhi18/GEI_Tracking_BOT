@@ -297,7 +297,7 @@ def test_create_team_task_assignment_and_notification(mocker):
     # Assignee gets interactive buttons (Accept / Reject) with task title, creator name, and due date
     mock_send_buttons.assert_called_once()
     btn_args = mock_send_buttons.call_args[0]
-    assert btn_args[0] == "+919800000002"
+    assert btn_args[0] in ["919800000002", "+919800000002"]
     assert "Kanav" in btn_args[1]
     assert "Pay water bill" in btn_args[1]
     assert "2026-08-10" in btn_args[1]
@@ -398,13 +398,12 @@ def test_handle_direct_task_update_text_and_voice(mocker):
     
     res = handle_direct_task_update("+919876543210", "1 75% done", user_info)
     assert res is True
-    mock_save_update.assert_called_once_with("t-1", 75, "None", [], "user-123")
+    mock_save_update.assert_called_once_with("t-1", 75, "None", [], "user-123", note=None)
     
     mock_send_text.assert_called_once()
     reply = mock_send_text.call_args[0][1]
-    assert "Task is Updated." in reply
     assert "Personal Task 1" in reply
-    assert "75%" in reply
+    assert "Would you like to add any notes or comments" in reply
 
 
 def test_task_completion_flow_no_image_with_comment(mocker):

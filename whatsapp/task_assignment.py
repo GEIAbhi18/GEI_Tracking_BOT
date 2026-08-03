@@ -213,7 +213,10 @@ def on_task_created_by_kanav(task_id: str, task_name: str, project_name: str,
     Called after a task creator creates a task.
     Sends interactive approval message to the assignee and confirms to creator.
     """
-    confirm_wa = creator_wa or kanav_wa
+    from whatsapp.ux import clean_phone_number
+    assignee_wa = clean_phone_number(assignee_wa)
+    confirm_wa = clean_phone_number(creator_wa or kanav_wa)
+
     body = (
         f"*{creator_name}* created a task for you:\n\n"
         f"📌 Task: {task_name}\n"
@@ -229,18 +232,25 @@ def on_task_created_by_kanav(task_id: str, task_name: str, project_name: str,
     ]
 
     sent = send_interactive_buttons(assignee_wa, body, buttons)
+    if not sent:
+        fallback_msg = (
+            f"📋 *New Task Assigned to You!*\n\n"
+            f"Hi {assignee_name} 👋,\n"
+            f"*{creator_name}* created a task for you:\n\n"
+            f"📌 Task: {task_name}\n"
+            f"📂 Project: {project_name}\n"
+            f"📅 Planned completion date: {due_date}\n\n"
+            f"Reply *Accept* to accept or *Reject* to reject this task."
+        )
+        send_text(assignee_wa, fallback_msg)
 
-    if sent:
-        logger.info(f"Task assignment message sent to {assignee_name} ({assignee_wa}) for task {task_id}")
-        # Mark assignment as pending in DB
-        update_task_assignment(task_id, assignment_status="pending_acceptance")
-        # Confirm to Creator
-        if confirm_wa:
-            send_text(confirm_wa, f"✅ Task Created.\n📩 Message sent to *{assignee_name}* for approval.")
-    else:
-        logger.error(f"Failed to send task assignment message to {assignee_name} ({assignee_wa})")
-        if confirm_wa:
-            send_text(confirm_wa, f"✅ Task Created.\n⚠️ Could not reach *{assignee_name}* on WhatsApp. Please notify manually.")
+    # Mark assignment as pending in DB
+    update_task_assignment(task_id, assignment_status="pending_acceptance")
+    logger.info(f"WhatsApp message for task acceptance has been sent to {assignee_name} ({assignee_wa}) for task '{task_name}' (ID: {task_id})")
+    print(f"[ASSIGNMENT] WhatsApp message for task acceptance has been sent to {assignee_name} ({assignee_wa}) for task '{task_name}' (ID: {task_id})", flush=True)
+
+    if confirm_wa:
+        send_text(confirm_wa, f"✅ Task Created.\n📩 Message sent to *{assignee_name}* for approval.")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -451,7 +461,7 @@ def _check_yes_no_shorthand(sender_phone: str, text: str) -> bool:
     Returns True if handled.
     """
     t = text.strip().lower()
-    if t not in ("yes", "no"):
+    if t not in ("yes", "y", "accept", "accepted", "no", "n", "reject", "rejected", "1", "2"):
         return False
 
     # Look for a task in pending_acceptance for this phone
@@ -470,7 +480,7 @@ def _check_yes_no_shorthand(sender_phone: str, text: str) -> bool:
 
         task_id = r.data[0]["id"]
 
-        if t == "yes":
+        if t in ("yes", "y", "accept", "accepted", "1"):
             _handle_accept(sender_phone, task_id)
         else:
             _handle_reject_step1(sender_phone, task_id)

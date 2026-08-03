@@ -598,24 +598,36 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         
         if action in ["WAITING_FOR_NOTE", "WAITING_FOR_UPDATE_NOTE", "task_update_note"]:
             clean_t = text.strip().lower()
+            import json as _json
+            raw_meta = wa_state.get("metadata") or {}
+            if isinstance(raw_meta, str):
+                try: raw_meta = _json.loads(raw_meta)
+                except Exception: raw_meta = {}
+            
+            tid = task_id or raw_meta.get("task_id")
+            tname = raw_meta.get("task_name", "Task")
+            initial_n = raw_meta.get("initial_note")
+
             if clean_t in ["no", "n", "skip", "none", "nope", "cancel"]:
                 supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-                send_text(sender, "✅ Task update completed!")
+                send_text(sender, f"✅ Task update completed for *'{tname}'*!")
                 return
 
             from tasks.timeline import add_timeline_event
             user_id = supabase.table("users").select("id").eq("whatsapp_number", sender).execute().data[0]["id"]
-            if task_id:
-                add_timeline_event(task_id, user_id, "Note added to task update", note=text.strip())
+            if tid:
+                add_timeline_event(tid, user_id, "Note added to task update", note=text.strip())
                 try:
-                    t_row = supabase.table("tasks").select("notes").eq("id", task_id).execute()
+                    t_row = supabase.table("tasks").select("notes").eq("id", tid).execute()
                     exist_n = t_row.data[0].get("notes") if t_row.data else ""
+                    if not exist_n and initial_n:
+                        exist_n = initial_n
                     full_n = f"{exist_n}\n{text.strip()}".strip() if exist_n else text.strip()
-                    supabase.table("tasks").update({"notes": full_n}).eq("id", task_id).execute()
+                    supabase.table("tasks").update({"notes": full_n}).eq("id", tid).execute()
                 except Exception:
                     pass
             supabase.table("wa_task_states").delete().eq("whatsapp_number", sender).execute()
-            send_text(sender, "📝 Note added successfully! ✅")
+            send_text(sender, f"📝 Note added to task *'{tname}'* successfully! ✅")
             return
         elif action == "WAITING_FOR_REMINDER":
             try:
