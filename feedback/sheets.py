@@ -218,12 +218,13 @@ def update_master_feedback(complaint_id: str, feedback_data: dict) -> bool:
         for col_name, value in feedback_data.items():
             col_idx = _get_col_index(headers, col_name)
             if col_idx:
-                cells_to_update.append(gspread.Cell(row, col_idx, str(value) if value is not None else ""))
+                cell_val = value if isinstance(value, (int, float)) else (str(value) if value is not None else "")
+                cells_to_update.append(gspread.Cell(row, col_idx, cell_val))
             else:
                 logger.warning(f"Column '{col_name}' not found in MASTER headers")
         
         if cells_to_update:
-            _retry_on_429(ws.update_cells, cells_to_update)
+            _retry_on_429(ws.update_cells, cells_to_update, value_input_option="USER_ENTERED")
             logger.info(f"Updated MASTER sheet for complaint {complaint_id}: {len(cells_to_update)} columns")
             return True
         
@@ -283,10 +284,11 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
         for col_name, value in feedback_data.items():
             col_idx = _get_col_index(headers, col_name)
             if col_idx:
-                cells_to_update.append(gspread.Cell(row, col_idx, str(value) if value is not None else ""))
+                cell_val = value if isinstance(value, (int, float)) else (str(value) if value is not None else "")
+                cells_to_update.append(gspread.Cell(row, col_idx, cell_val))
         
         if cells_to_update:
-            _retry_on_429(ws.update_cells, cells_to_update)
+            _retry_on_429(ws.update_cells, cells_to_update, value_input_option="USER_ENTERED")
             logger.info(f"Updated {sheet_name} sheet for complaint {complaint_id}")
             return True
         
@@ -340,7 +342,8 @@ def append_escalation(escalation_data: dict) -> bool:
             matched = False
             for key, value in escalation_data.items():
                 if key.strip().lower() == h_lower:
-                    row.append(str(value) if value is not None else "")
+                    cell_val = value if isinstance(value, (int, float)) else (str(value) if value is not None else "")
+                    row.append(cell_val)
                     matched = True
                     break
             if not matched:
@@ -473,14 +476,14 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
         
         reminder_col = _get_col_index(headers, "Reminder Count")
         if reminder_col:
-            cells_to_update.append(gspread.Cell(target_row, reminder_col, str(count)))
+            cells_to_update.append(gspread.Cell(target_row, reminder_col, count if isinstance(count, (int, float)) else str(count)))
         
         last_reminder_col = _get_col_index(headers, "Last Reminder At")
         if last_reminder_col:
             cells_to_update.append(gspread.Cell(target_row, last_reminder_col, last_reminder_at))
         
         if cells_to_update:
-            _retry_on_429(ws.update_cells, cells_to_update)
+            _retry_on_429(ws.update_cells, cells_to_update, value_input_option="USER_ENTERED")
             logger.info(f"Updated reminder count for {phone}: count={count}")
         
         return True
