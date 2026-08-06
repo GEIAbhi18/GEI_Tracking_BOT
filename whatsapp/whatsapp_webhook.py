@@ -339,6 +339,11 @@ def handle_whatsapp_message():
                         print(f"[WEBHOOK] Interactive sub-type={i_type} from {sender} — dispatching to background", flush=True)
                         threading.Thread(target=_handle_interactive, args=(sender, message), daemon=False).start()
 
+                    # ── Template Quick Reply button ───────────────────────────
+                    elif msg_type == "button":
+                        print(f"[WEBHOOK] Template button reply from {sender} — dispatching to background", flush=True)
+                        threading.Thread(target=_handle_template_button, args=(sender, message), daemon=False).start()
+
                     # ── Voice note (audio) ─────────────────────────────────────
                     elif msg_type == "audio":
                         threading.Thread(target=_handle_audio, args=(sender, message), daemon=True).start()
@@ -469,6 +474,29 @@ def _handle_interactive(sender: str, message: dict):
         # exception silently killed the thread with zero log output.
         logger.error(f"Error in _handle_interactive from {sender}: {e}", exc_info=True)
         print(f"[INTERACTIVE] EXCEPTION from {sender}: {type(e).__name__}: {e}", flush=True)
+
+
+def _handle_template_button(sender: str, message: dict):
+    """
+    Route template quick reply button messages (msg_type == "button").
+    Meta sends message.button.payload or message.button.text.
+    """
+    try:
+        from auth.middleware import authenticate_whatsapp_request
+        auth_user = authenticate_whatsapp_request(sender)
+        if not auth_user:
+            logger.error(f"Auth failed for {sender}")
+            return
+
+        button = message.get("button", {})
+        payload = button.get("payload") or button.get("text", "")
+        print(f"[TEMPLATE_BUTTON] Processing button payload='{payload}' from {sender}", flush=True)
+
+        from whatsapp.handlers import handle_interactive_reply
+        handle_interactive_reply(sender, payload, auth_user)
+    except Exception as e:
+        logger.error(f"Error in _handle_template_button from {sender}: {e}", exc_info=True)
+        print(f"[TEMPLATE_BUTTON] EXCEPTION from {sender}: {type(e).__name__}: {e}", flush=True)
 
 
 def _handle_flow_response(sender: str, interactive: dict):

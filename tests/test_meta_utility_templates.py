@@ -111,3 +111,21 @@ def test_creator_template_fallback_on_session_failure(mocker):
     handle_interactive_reply("918595818474", "task_accept_task-123", assignee_user)
 
     mock_status_template.assert_called_once_with("917717754421", "Abhijeet", "Gautam", "ACCEPTED", "Testing Meta Template", "2026-08-10")
+
+
+def test_handle_template_button_webhook(mocker):
+    from whatsapp.whatsapp_webhook import _handle_template_button
+    mocker.patch("auth.middleware.authenticate_whatsapp_request", return_value={"id": "gautam-uuid", "name": "Gautam"})
+    mock_handler = mocker.patch("whatsapp.handlers.handle_interactive_reply")
+
+    msg = {
+        "from": "918595818474",
+        "type": "button",
+        "button": {
+            "text": "Accept",
+            "payload": "task_accept_task-777"
+        }
+    }
+
+    _handle_template_button("918595818474", msg)
+    mock_handler.assert_called_once_with("918595818474", "task_accept_task-777", {"id": "gautam-uuid", "name": "Gautam"})
