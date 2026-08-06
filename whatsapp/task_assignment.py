@@ -79,6 +79,71 @@ def send_interactive_buttons(to: str, body: str, buttons: list) -> bool:
     }
     return _post_wa(payload)
 
+
+def send_task_assignment_template(to_phone: str, member_name: str, creator_name: str, task_title: str, due_date_str: str, task_id: str) -> bool:
+    """Sends task assignment notification via approved Meta Utility Template (bypasses 24h window)."""
+    from whatsapp.ux import clean_phone_number
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": clean_phone_number(to_phone),
+        "type": "template",
+        "template": {
+            "name": "task_assignment_notification",
+            "language": {"code": "en"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": member_name},
+                        {"type": "text", "text": creator_name},
+                        {"type": "text", "text": task_title},
+                        {"type": "text", "text": due_date_str}
+                    ]
+                },
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": "0",
+                    "parameters": [{"type": "payload", "payload": f"task_accept_{task_id}"}]
+                },
+                {
+                    "type": "button",
+                    "sub_type": "quick_reply",
+                    "index": "1",
+                    "parameters": [{"type": "payload", "payload": f"task_reject_{task_id}"}]
+                }
+            ]
+        }
+    }
+    return _post_wa(payload)
+
+
+def send_task_status_template(to_phone: str, creator_name: str, assignee_name: str, action_status: str, task_title: str, due_date_str: str) -> bool:
+    """Sends task status update (ACCEPTED / REJECTED) to creator via approved Meta Utility Template (bypasses 24h window)."""
+    from whatsapp.ux import clean_phone_number
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": clean_phone_number(to_phone),
+        "type": "template",
+        "template": {
+            "name": "task_status_update",
+            "language": {"code": "en"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": creator_name},
+                        {"type": "text", "text": assignee_name},
+                        {"type": "text", "text": action_status},
+                        {"type": "text", "text": task_title},
+                        {"type": "text", "text": due_date_str}
+                    ]
+                }
+            ]
+        }
+    }
+    return _post_wa(payload)
+
 def _send_document_wa(to: str, file_path: str) -> bool:
     """Upload a file to WhatsApp and send it as a document."""
     if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
@@ -497,15 +562,17 @@ def check_and_deliver_pending_task_notifications(user: dict):
             ]
             sent = send_interactive_buttons(user_wa, body, buttons)
             if not sent:
-                fallback_msg = (
-                    f"📋 *Pending Task Assignment!*\n\n"
-                    f"Hi {member_name} 👋,\n"
-                    f"*{creator_name}* assigned a task to you:\n\n"
-                    f"📌 *Task:* {task_title}\n"
-                    f"📅 *Due Date:* {due_date_str}\n\n"
-                    f"Reply *Accept* to accept or *Reject* to reject this task."
-                )
-                send_text(user_wa, fallback_msg)
+                sent_template = send_task_assignment_template(user_wa, member_name, creator_name, task_title, due_date_str, task_id)
+                if not sent_template:
+                    fallback_msg = (
+                        f"📋 *Pending Task Assignment!*\n\n"
+                        f"Hi {member_name} 👋,\n"
+                        f"*{creator_name}* assigned a task to you:\n\n"
+                        f"📌 *Task:* {task_title}\n"
+                        f"📅 *Due Date:* {due_date_str}\n\n"
+                        f"Reply *Accept* to accept or *Reject* to reject this task."
+                    )
+                    send_text(user_wa, fallback_msg)
             
             logger.info(f"Delivered pending task notification to {member_name} ({user_wa}) for task '{task_title}' (ID: {task_id})")
             print(f"[PENDING_ASSIGNMENT] Delivered pending task notification to {member_name} ({user_wa}) for task '{task_title}' (ID: {task_id})", flush=True)

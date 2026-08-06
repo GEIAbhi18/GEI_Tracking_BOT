@@ -381,6 +381,11 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                                         f"📅 *Due Date:* {d_date_str}"
                                     )
                                 sent = send_text(creator_wa, notify_creator_msg)
+                                if not sent:
+                                    from whatsapp.task_assignment import send_task_status_template
+                                    act_str = "ACCEPTED" if action == "accept" else "REJECTED"
+                                    sent = send_task_status_template(creator_wa, creator_name, assignee_name, act_str, t_title, d_date_str)
+
                                 if sent:
                                     logger.info(f"✅ Creator notification sent to {creator_name} ({creator_wa}) that task '{t_title}' was {action}ed by {assignee_name}")
                                 else:
@@ -558,16 +563,20 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
                         ]
                         sent = send_interactive_buttons(assigned_wa, body, buttons)
                         if not sent:
-                            # Fallback to plain text if interactive button failed
-                            fallback_msg = (
-                                f"📋 *New Task Assigned to You!*\n\n"
-                                f"Hi {member_name} 👋,\n"
-                                f"*{creator_name}* assigned a new Team Task to you:\n\n"
-                                f"📌 *Task:* {task_title}\n"
-                                f"📅 *Due Date:* {due_date_str}\n\n"
-                                f"Reply *Accept* to accept or *Reject* to reject this task."
-                            )
-                            send_text(assigned_wa, fallback_msg)
+                            # Fallback to Meta Utility Template task_assignment_notification (bypasses 24h window)
+                            from whatsapp.task_assignment import send_task_assignment_template
+                            sent_template = send_task_assignment_template(assigned_wa, member_name, creator_name, task_title, due_date_str, task_id)
+                            if not sent_template:
+                                # Fallback to plain text if template also fails
+                                fallback_msg = (
+                                    f"📋 *New Task Assigned to You!*\n\n"
+                                    f"Hi {member_name} 👋,\n"
+                                    f"*{creator_name}* assigned a new Team Task to you:\n\n"
+                                    f"📌 *Task:* {task_title}\n"
+                                    f"📅 *Due Date:* {due_date_str}\n\n"
+                                    f"Reply *Accept* to accept or *Reject* to reject this task."
+                                )
+                                send_text(assigned_wa, fallback_msg)
 
                         logger.info(f"WhatsApp message for task acceptance has been sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})")
                         print(f"[ASSIGNMENT] WhatsApp message for task acceptance has been sent to {member_name} ({assigned_wa}) for task '{task_title}' (ID: {task_id})", flush=True)
