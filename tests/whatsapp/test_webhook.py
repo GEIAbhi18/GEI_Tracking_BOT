@@ -111,24 +111,28 @@ def test_handle_interactive_reply_my_tasks(mocker):
     mock_send_text = mocker.patch("whatsapp.handlers.send_text")
     mocker.patch("core.intent_handlers.get_all_tasks", return_value=[])
     mocker.patch("core.intent_handlers._resolve_user", return_value={"id": "user-123", "name": "Abhijeet", "role": "Developer"})
+    mocker.patch("db.get_tasks_by_buildings", return_value=[])
+    mocker.patch("db.get_user_buildings", return_value=[])
     
     from whatsapp.handlers import handle_interactive_reply
     user = {"id": "user-123", "name": "Abhijeet", "role": "Developer"}
     handle_interactive_reply("+919876543210", "menu_my_tasks", user)
     
-    mock_send_text.assert_called_once_with("+919876543210", "👤 **My Personal Tasks**\n\nNo personal tasks currently assigned.")
+    mock_send_text.assert_called_once_with("+919876543210", "👤 *My Personal Tasks*\n\nNo personal tasks currently assigned.")
 
 def test_handle_interactive_reply_team_tasks(mocker):
     """Test menu_team_tasks sends reply text via WhatsApp send_text."""
     mock_send_text = mocker.patch("whatsapp.handlers.send_text")
     mocker.patch("core.intent_handlers.get_all_tasks", return_value=[])
     mocker.patch("core.intent_handlers._resolve_user", return_value={"id": "user-123", "name": "Abhijeet", "role": "Developer"})
+    mocker.patch("db.get_tasks_by_buildings", return_value=[])
+    mocker.patch("db.get_user_buildings", return_value=[])
     
     from whatsapp.handlers import handle_interactive_reply
     user = {"id": "user-123", "name": "Abhijeet", "role": "Developer"}
     handle_interactive_reply("+919876543210", "menu_team_tasks", user)
     
-    mock_send_text.assert_called_once_with("+919876543210", "📋 **Team Tasks**\n\nNo team tasks currently assigned.")
+    mock_send_text.assert_called_once_with("+919876543210", "📋 *Team Tasks*\n\nNo team tasks currently assigned for your assigned buildings.")
 
 def test_team_task_scoping_for_team_members(mocker):
     """Test team members only see tasks matching their team_id while Developer sees all."""
