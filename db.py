@@ -173,7 +173,7 @@ def create_ticket(created_by, project_id, task_id=None, message=""):
         add_ticket_message(ticket_id, created_by, message)
     return ticket_id
 
-def create_project_db(name, created_by=None):
+def create_project_db(name, created_by=None, building_id=None):
     from datetime import datetime
     data = {
         "name": name,
@@ -182,6 +182,8 @@ def create_project_db(name, created_by=None):
     }
     if created_by:
         data["created_by"] = created_by
+    if building_id:
+        data["building_id"] = building_id
     resp = supabase.table("projects").insert(data).execute()
     return resp.data[0] if resp.data else None
 
@@ -455,3 +457,174 @@ def set_task_reminder(task_id: str, reminder_time: str):
 def bulk_update_tasks(task_ids: list, update_data: dict):
     response = supabase.table("tasks").update(update_data).in_("id", task_ids).execute()
     return response.data
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BUILDING HIERARCHY FUNCTIONS
+# ─────────────────────────────────────────────────────────────────────────────
+
+def get_buildings():
+    """Fetch all buildings ordered by creation time."""
+    response = supabase.table("buildings").select("*").order("created_at").execute()
+    return response.data or []
+
+def get_user_buildings(user_id):
+    """Get buildings mapped to a user via building_users table.
+    Returns list of dicts with building_id and building name."""
+    try:
+        response = supabase.table("building_users").select(
+            "building_id, buildings(id, name)"
+        ).eq("user_id", user_id).execute()
+        result = []
+        for bu in (response.data or []):
+            b = bu.get("buildings")
+            if isinstance(b, dict) and b.get("id"):
+                result.append({"building_id": b["id"], "building_name": b["name"]})
+        return result
+    except Exception as e:
+        import logging
+        logging.error(f"get_user_buildings error: {e}")
+        return []
+
+def get_tasks_by_buildings(user_id, include_completed=True):
+    """Master query: User → Buildings → Projects → Tasks (team tasks only).
+    Returns structured data grouped by building → project → tasks.
+    
+    For users with building mappings: returns only their buildings.
+    For admin users (Director/Developer) with NO mappings: returns ALL buildings.
+    For non-admin users with NO mappings: returns empty list.
+    """
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Resolve user info for role check
+    user_info = get_user_by_id(user_id) if user_id else None
+    user_role = (user_info.get("role", "") if user_info else "").capitalize()
+    is_admin = user_role in ["Director", "Developer"]
+    
+    # Get user's buildings
+    user_buildings = get_user_buildings(user_id)
+    
+    if not user_buildings:
+        if is_admin:
+            # Admin with no mapping → show ALL buildings
+            all_buildings = get_buildings()
+            if not all_buildings:
+                return []
+            user_buildings = [{"building_id": b["id"], "building_name": b["name"]} for b in all_buildings]
+        else:
+            return []
+    
+    building_ids = [b["building_id"] for b in user_buildings]
+    # Preserve building order from the mapping
+    building_map = {b["building_id"]: b["building_name"] for b in user_buildings}
+    
+    # Get projects for those buildings
+    try:
+        proj_res = supabase.table("projects").select(
+            "id, name, building_id"
+        ).in_("building_id", building_ids).eq("status", "active").order("created_at").execute()
+        projects = proj_res.data or []
+    except Exception as e:
+        logger.error(f"get_tasks_by_buildings project query error: {e}")
+        projects = []
+    
+    project_ids = [p["id"] for p in projects]
+    if not project_ids:
+        # Return building structure with empty projects
+        return [{"building_name": building_map[bid], "building_id": bid, "projects": []} for bid in building_ids]
+    
+    # Get tasks for those projects (team tasks only, exclude archived)
+    try:
+        task_query = supabase.table("tasks").select(
+            "*, projects(name, building_id), assigned_to_user:users!assigned_to(name)"
+        ).in_("project_id", project_ids).neq("task_type", "PERSONAL")
+        
+        if not include_completed:
+            task_query = task_query.neq("status", "Completed")
+        
+        # Exclude archived tasks
+        task_query = task_query.or_("is_archived.is.null,is_archived.eq.false")
+        
+        task_res = task_query.execute()
+        tasks = task_res.data or []
+    except Exception as e:
+        logger.error(f"get_tasks_by_buildings task query error: {e}")
+        tasks = []
+    
+    # Group: building → project → tasks
+    result = []
+    for bid in building_ids:
+        b_name = building_map[bid]
+        b_projects = [p for p in projects if str(p.get("building_id")) == str(bid)]
+        b_projects.sort(key=lambda p: p.get("name", ""))
+        
+        project_groups = []
+        for p in b_projects:
+            p_tasks = [t for t in tasks if str(t.get("project_id")) == str(p["id"])]
+            p_tasks.sort(key=lambda t: t.get("created_at") or str(t.get("id")))
+            if p_tasks:
+                project_groups.append({
+                    "project_name": p["name"],
+                    "project_id": p["id"],
+                    "tasks": p_tasks
+                })
+        
+        result.append({
+            "building_name": b_name,
+            "building_id": bid,
+            "projects": project_groups
+        })
+    
+    return result
+
+def check_building_access(user_id, task_id):
+    """Check if a user has building access to a specific task.
+    Returns True if the user can access the task, False otherwise.
+    Tasks without a building (personal/unmapped) are always accessible."""
+    try:
+        # Get task's building via project
+        task_res = supabase.table("tasks").select(
+            "project_id, task_type, projects(building_id)"
+        ).eq("id", task_id).execute()
+        
+        if not task_res.data:
+            return False
+        
+        task = task_res.data[0]
+        
+        # Personal tasks are always accessible (not building-scoped)
+        if task.get("task_type") == "PERSONAL":
+            return True
+        
+        project = task.get("projects", {})
+        building_id = project.get("building_id") if isinstance(project, dict) else None
+        
+        if not building_id:
+            # Task has no building (unmapped project) — allow access
+            return True
+        
+        # Check user role — admins with no building mapping can access all
+        user_info = get_user_by_id(user_id)
+        user_role = (user_info.get("role", "") if user_info else "").capitalize()
+        is_admin = user_role in ["Director", "Developer"]
+        
+        # Check if user has this building
+        bu_res = supabase.table("building_users").select("id").eq(
+            "user_id", user_id
+        ).eq("building_id", building_id).execute()
+        
+        if bu_res.data:
+            return True
+        
+        # If user has NO building mappings at all and is admin → allow
+        if is_admin:
+            all_bu = supabase.table("building_users").select("id").eq("user_id", user_id).execute()
+            if not all_bu.data:
+                return True
+        
+        return False
+    except Exception as e:
+        import logging
+        logging.error(f"check_building_access error: {e}")
+        return True  # Fail open to avoid blocking legitimate updates

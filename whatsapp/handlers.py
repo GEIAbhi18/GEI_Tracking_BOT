@@ -177,21 +177,34 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             ]
             task_type_label = "Personal Tasks"
         elif button_id == "update_task_team":
-            raw_tasks = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").neq("status", "Completed").execute().data or []
-            tasks = [
-                t for t in raw_tasks 
-                if t.get("task_type") != "PERSONAL" and (
-                    not user_id or 
-                    str(t.get("assigned_to")) == str(user_id) or 
-                    str(t.get("created_by")) == str(user_id) or
-                    str(t.get("assigned_by")) == str(user_id) or
-                    (user_info and user_info.get("role") in ["Developer", "Director"])
-                )
-            ]
-            task_type_label = "Team Tasks"
-        else:
+            from db import get_tasks_by_buildings
+            b_data = get_tasks_by_buildings(user_id, include_completed=False)
             tasks = []
-            task_type_label = "Tasks"
+            building_lines = []
+            task_ids = []
+            serial = 1
+            for b in (b_data or []):
+                b_name = b.get("building_name", "Building")
+                b_projects = b.get("projects", [])
+                has_t = any(p.get("tasks") for p in b_projects)
+                if not has_t:
+                    continue
+                building_lines.append(f"*{b_name}*")
+                for p in b_projects:
+                    p_name = p.get("project_name", "Project")
+                    p_tasks = p.get("tasks", [])
+                    if not p_tasks:
+                        continue
+                    building_lines.append(f"  *{p_name}*")
+                    for t in p_tasks:
+                        task_ids.append(t["id"])
+                        tasks.append(t)
+                        title = t.get("title") or t.get("name") or "Task"
+                        prog = t.get("progress", 0) or 0
+                        status = t.get("status", "Pending")
+                        building_lines.append(f"    {serial}. *{title}* ({prog}%, Status: {status})")
+                        serial += 1
+            task_type_label = "Team Tasks"
 
         if not tasks:
             send_text(sender_phone, f"No active {task_type_label.lower()} found to update.")
@@ -237,21 +250,34 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             ]
             task_type_label = "Personal Tasks"
         elif button_id == "update_date_team":
-            raw_tasks = supabase.table("tasks").select("*, projects(name), assigned_to_user:users!assigned_to(name)").neq("status", "Completed").execute().data or []
-            tasks = [
-                t for t in raw_tasks 
-                if t.get("task_type") != "PERSONAL" and (
-                    not user_id or 
-                    str(t.get("assigned_to")) == str(user_id) or 
-                    str(t.get("created_by")) == str(user_id) or
-                    str(t.get("assigned_by")) == str(user_id) or
-                    (user_info and user_info.get("role") in ["Developer", "Director"])
-                )
-            ]
-            task_type_label = "Team Tasks"
-        else:
+            from db import get_tasks_by_buildings
+            b_data = get_tasks_by_buildings(user_id, include_completed=False)
             tasks = []
-            task_type_label = "Tasks"
+            building_lines = []
+            task_ids = []
+            serial = 1
+            for b in (b_data or []):
+                b_name = b.get("building_name", "Building")
+                b_projects = b.get("projects", [])
+                has_t = any(p.get("tasks") for p in b_projects)
+                if not has_t:
+                    continue
+                building_lines.append(f"*{b_name}*")
+                for p in b_projects:
+                    p_name = p.get("project_name", "Project")
+                    p_tasks = p.get("tasks", [])
+                    if not p_tasks:
+                        continue
+                    building_lines.append(f"  *{p_name}*")
+                    for t in p_tasks:
+                        task_ids.append(t["id"])
+                        tasks.append(t)
+                        title = t.get("title") or t.get("name") or "Task"
+                        f_start = format_date_human(t.get("planned_start_date") or t.get("created_at"))
+                        f_dl = format_date_human(t.get("deadline"))
+                        building_lines.append(f"    {serial}. *{title}* (Start: {f_start} | Deadline: {f_dl})")
+                        serial += 1
+            task_type_label = "Team Tasks"
 
         if not tasks:
             send_text(sender_phone, f"No active {task_type_label.lower()} found to update date.")
@@ -851,6 +877,13 @@ def handle_direct_task_update(sender_phone: str, text: str, user_info: dict) -> 
     if not target_task:
         send_text(sender_phone, "Could not identify which task you want to update. Please reply with the task number (e.g., '1 75% done').")
         return True
+
+    # Check building access for update permission
+    if user_id:
+        from db import check_building_access
+        if not check_building_access(user_id, target_task["id"]):
+            send_text(sender_phone, "🚫 Unauthorized: You do not have permission to update tasks from this building.")
+            return True
 
     # 2. Extract progress
     progress = None

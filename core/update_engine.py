@@ -744,10 +744,37 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             clear_state(user_id)
 
     elif action == "create_project":
-        if step == "waiting_for_name":
+        if step == "waiting_for_building":
+            from db import get_buildings
+            buildings = get_buildings()
+            selected_b_id = None
+            clean_text = text.strip().lower()
+            
+            try:
+                idx = int(clean_text) - 1
+                if 0 <= idx < len(buildings):
+                    selected_b_id = buildings[idx]["id"]
+            except Exception:
+                for b in buildings:
+                    if b["name"].lower() == clean_text:
+                        selected_b_id = b["id"]
+                        break
+            
+            if not selected_b_id:
+                b_list = "\n".join([f"{i+1}. {b['name']}" for i, b in enumerate(buildings)])
+                await send_reply_func(f"Please select a valid building number:\n\n{b_list}")
+                return
+                
+            state["building_id"] = selected_b_id
+            state["step"] = "waiting_for_name"
+            set_state(user_id, state)
+            await send_reply_func("What is the name of the new project?")
+
+        elif step == "waiting_for_name":
             u_info = _resolve_user_ue(user_id)
             uid = u_info['id'] if u_info else None
-            create_project_db(text, created_by=uid)
+            b_id = state.get("building_id")
+            create_project_db(text, created_by=uid, building_id=b_id)
             clear_state(user_id)
             await send_reply_func(f"Project '{text}' created successfully! ✅")
 

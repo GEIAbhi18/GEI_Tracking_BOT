@@ -444,6 +444,105 @@ def filter_tasks(tasks, filters):
         
     return filtered
 
+def build_building_grouped_tasks(building_structured_data, personal_tasks=None):
+    """
+    Formats tasks grouped by Building → Project → Tasks with continuous serial numbering.
+    Returns (formatted_text, stored_task_ids)
+    """
+    from core.utils import format_date_human
+    lines = []
+    stored_task_ids = []
+    serial = 1
+    
+    for b in (building_structured_data or []):
+        b_name = b.get("building_name", "Unknown Building")
+        projects = b.get("projects", [])
+        
+        has_tasks = any(p.get("tasks") for p in projects)
+        if not has_tasks:
+            continue
+            
+        lines.append(f"*{b_name}*")
+        lines.append("")
+        
+        for p in projects:
+            p_name = p.get("project_name", "Unknown Project")
+            p_tasks = p.get("tasks", [])
+            if not p_tasks:
+                continue
+                
+            lines.append(f"*{p_name}*")
+            lines.append("")
+            
+            for t in p_tasks:
+                t_id = t.get("id")
+                stored_task_ids.append(t_id)
+                
+                t_title = t.get("title") or t.get("name") or "Unknown Task"
+                start_val = t.get("planned_start_date") or t.get("created_at")
+                start_str = format_date_human(start_val)
+                dl_str = format_date_human(t.get("deadline"))
+                
+                prog = t.get("progress", 0) or 0
+                is_done = False
+                try:
+                    is_done = int(float(prog)) >= 100 or str(t.get("status", "")).lower() == "completed"
+                except Exception:
+                    pass
+                    
+                done_marker = " ✅" if is_done else ""
+                
+                updates = t.get("updates") or []
+                blocker_count = 0
+                for u in updates:
+                    b_val = str(u.get("blockers") or "").lower()
+                    if b_val and b_val not in ["none", "null", "undefined"]:
+                        blocker_count += 1
+                br = str(t.get("blocker_reason") or "").lower()
+                if br and br not in ["none", "null"] and not any(str(u.get("blockers") or "").lower() == br for u in updates):
+                    blocker_count += 1
+                if t.get("is_blocked"):
+                    blocker_count = max(1, blocker_count)
+                    
+                blocker_marker = " 🛑" if (not is_done and blocker_count > 0) else ""
+                
+                line = f"{serial}. {t_title} – Start: {start_str} | Deadline: {dl_str} | {prog}% done{done_marker} | {blocker_count} blocker(s){blocker_marker}"
+                lines.append(line)
+                serial += 1
+                
+            lines.append("")
+            
+    if personal_tasks:
+        lines.append("👤 *My Personal Tasks*")
+        lines.append("")
+        for t in personal_tasks:
+            t_id = t.get("id")
+            stored_task_ids.append(t_id)
+            
+            t_title = t.get("title") or t.get("name") or "Unknown Task"
+            start_val = t.get("planned_start_date") or t.get("created_at")
+            start_str = format_date_human(start_val)
+            dl_str = format_date_human(t.get("deadline"))
+            
+            prog = t.get("progress", 0) or 0
+            is_done = False
+            try:
+                is_done = int(float(prog)) >= 100 or str(t.get("status", "")).lower() == "completed"
+            except Exception:
+                pass
+                
+            done_marker = " ✅" if is_done else ""
+            blocker_count = 1 if t.get("is_blocked") else 0
+            blocker_marker = " 🛑" if (not is_done and blocker_count > 0) else ""
+            
+            line = f"{serial}. {t_title} – Start: {start_str} | Deadline: {dl_str} | {prog}% done{done_marker} | {blocker_count} blocker(s){blocker_marker}"
+            lines.append(line)
+            serial += 1
+            
+        lines.append("")
+        
+    return "\n".join(lines).strip(), stored_task_ids
+
 def build_grouped_tasks_list_py(tasks):
     if not tasks: return "No tasks found."
     
@@ -496,7 +595,6 @@ def build_grouped_tasks_list_py(tasks):
             continue
         
     msg = ""
-    # Sort projects by their absolute order in the database (Feature Request 1)
     all_projects = get_projects() or []
     project_order_map = {p['name']: i for i, p in enumerate(all_projects) if isinstance(p, dict) and 'name' in p}
     
@@ -505,7 +603,6 @@ def build_grouped_tasks_list_py(tasks):
     for proj_idx, p_name in enumerate(sorted_p_names, 1):
         t_list = grouped[p_name]
         msg += f"**{proj_idx}. {p_name}**\n"
-        # Sort tasks by their project_task_number
         t_list = sorted(t_list, key=lambda x: (float(x['number']) if str(x['number']).replace('.','').isdigit() else 999))
         for t in t_list:
             from core.utils import format_date_human
@@ -615,86 +712,67 @@ def _resolve_user(user_id):
 
 async def handle_query_tasks(entities, user_id, context, send_reply_func):
     u_info = _resolve_user(user_id)
-    filters = entities.get("query_filters") or {}
+    target_user_id = u_info['id'] if u_info else None
+    
+    if not target_user_id:
+        await send_reply_func("Your account is not registered. Please contact Kanav.")
+        return
+
+    from db import get_tasks_by_buildings, get_all_tasks
     
     raw_message = (entities.get("raw_text") or "").lower()
     if not raw_message and context and context.get("messages"):
         raw_message = str(context.get("messages", [])[-1]).lower()
     
-    explicit_assignee = str(filters.get("assignee") or entities.get("assignee", "")).lower()
+    filters = entities.get("query_filters") or {}
     
-    target_user_id = u_info['id'] if u_info else None
-    user_role = str(u_info.get('role', '')).lower() if u_info else ''
-    original_role = str(u_info.get('original_role', '')).lower() if u_info else ''
-    is_admin = user_role in ['director', 'developer'] or original_role == 'developer'
-    u_team_id = u_info.get('team_id') if u_info else None
-    
-    all_tasks = get_all_tasks(user_id=target_user_id, include_personal=True)
-    
-    # Categorize into Team Tasks vs Personal Tasks
-    
-    # 1. Team Tasks (task_type != 'PERSONAL')
-    if is_admin:
-        team_tasks = [t for t in all_tasks if t.get('task_type') != 'PERSONAL']
-    else:
-        team_tasks = [
-            t for t in all_tasks 
-            if t.get('task_type') != 'PERSONAL' and (
-                (u_team_id and str(t.get('team_id')) == str(u_team_id)) or
-                str(t.get('assigned_to')) == str(target_user_id) or
-                str(t.get('assigned_by')) == str(target_user_id) or
-                str(t.get('created_by')) == str(target_user_id) or
-                (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id)) or
-                not t.get('team_id')
-            )
-        ]
-
-    # 2. Personal Tasks (task_type == 'PERSONAL')
-    personal_tasks = [
-        t for t in all_tasks 
-        if t.get('task_type') == 'PERSONAL' and (
-            not target_user_id or
-            str(t.get('created_by')) == str(target_user_id) or
-            str(t.get('assigned_to')) == str(target_user_id) or
-            str(t.get('assigned_by')) == str(target_user_id) or
-            (t.get('assigned_to_user') and str(t['assigned_to_user'].get('id')) == str(target_user_id))
-        )
-    ]
-    
-    if explicit_assignee and explicit_assignee != "all":
-        team_tasks = [t for t in team_tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == explicit_assignee) or explicit_assignee in str(t.get('assigned_to', '')).lower()]
-        personal_tasks = [t for t in personal_tasks if (t.get('assigned_to_user') and str(t['assigned_to_user'].get('name', '')).lower() == explicit_assignee) or explicit_assignee in str(t.get('assigned_to', '')).lower()]
-
-    filtered_team = filter_tasks(team_tasks, filters)
-    filtered_personal = filter_tasks(personal_tasks, filters)
-
     is_only_team = ("show team tasks" in raw_message or raw_message == "team tasks") and "personal" not in raw_message
     is_only_personal = ("show my personal tasks" in raw_message or "personal tasks" in raw_message) and "team" not in raw_message
 
-    if is_only_team:
-        if not filtered_team:
-            msg = "📋 **Team Tasks**\n\nNo team tasks currently assigned."
+    building_data = get_tasks_by_buildings(target_user_id, include_completed=True) if not is_only_personal else []
+    
+    # Filter building tasks if filters applied
+    if filters and building_data:
+        for b in building_data:
+            for p in b.get("projects", []):
+                p["tasks"] = filter_tasks(p.get("tasks", []), filters)
+
+    # Personal tasks
+    personal_tasks = []
+    if not is_only_team:
+        all_tasks = get_all_tasks(user_id=target_user_id, include_personal=True)
+        raw_personal = [
+            t for t in all_tasks 
+            if t.get('task_type') == 'PERSONAL' and (
+                str(t.get('created_by')) == str(target_user_id) or
+                str(t.get('assigned_to')) == str(target_user_id) or
+                str(t.get('assigned_by')) == str(target_user_id)
+            )
+        ]
+        personal_tasks = filter_tasks(raw_personal, filters)
+
+    if not building_data and not personal_tasks:
+        if is_only_personal:
+            msg = "👤 *My Personal Tasks*\n\nNo personal tasks currently assigned."
+        elif is_only_team:
+            msg = "📋 *Team Tasks*\n\nNo team tasks currently assigned for your assigned buildings."
         else:
-            msg = f"📋 **Team Tasks**\n\n{build_grouped_tasks_list_py(filtered_team)}"
-        stored_tasks = filtered_team
+            from db import get_user_buildings
+            u_b = get_user_buildings(target_user_id)
+            if not u_b and u_info.get("role") not in ["Director", "Developer"]:
+                msg = "No building/task access assigned to your profile."
+            else:
+                msg = "No active tasks found."
+        await send_reply_func(msg)
+        return
 
-    elif is_only_personal:
-        if not filtered_personal:
-            msg = "👤 **My Personal Tasks**\n\nNo personal tasks currently assigned."
-        else:
-            msg = f"👤 **My Personal Tasks**\n\n{build_personal_tasks_list_py(filtered_personal)}"
-        stored_tasks = filtered_personal
-
-    else:
-        # Default & explicit multi-type requests: Team Tasks FIRST, Personal Tasks SECOND
-        team_str = build_grouped_tasks_list_py(filtered_team) if filtered_team else "No team tasks currently assigned."
-        personal_str = build_personal_tasks_list_py(filtered_personal) if filtered_personal else "No personal tasks currently assigned."
-
-        msg = f"📋 **Team Tasks**\n\n{team_str}\n\n👤 **My Personal Tasks**\n\n{personal_str}"
-        stored_tasks = filtered_team + filtered_personal
-
-    update_context(user_id, last_task_list=[t['id'] for t in stored_tasks if t.get('id')], active_project_id=None)
-    await send_reply_func(msg)
+    formatted_text, stored_task_ids = build_building_grouped_tasks(
+        building_data if not is_only_personal else [],
+        personal_tasks=personal_tasks if not is_only_team else []
+    )
+    
+    update_context(user_id, last_task_list=stored_task_ids, active_project_id=None)
+    await send_reply_func(formatted_text)
 
 async def handle_get_task_detail(entities, user_id, context, send_reply_func):
     task_reference = entities.get("task_reference") or entities.get("task_name")
@@ -741,6 +819,15 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
         else:
             await send_reply_func(friendly_task_not_found(str(task_reference)))
         return
+
+    # Access control check for building
+    u_info = _resolve_user(user_id)
+    target_uid = u_info['id'] if u_info else None
+    if target_uid:
+        from db import check_building_access
+        if not check_building_access(target_uid, match['id']):
+            await send_reply_func("🚫 Unauthorized: You do not have access to view details for tasks in this building.")
+            return
 
     # Fetch full details
     from db import supabase
@@ -1479,8 +1566,16 @@ async def handle_create_ticket(entities, user_id, context, send_reply_func):
     await send_reply_func(msg)
 
 async def handle_create_project(entities, user_id, context, send_reply_func):
-    set_state(user_id, {"action": "create_project", "step": "waiting_for_name"})
-    await send_reply_func("What is the name of the new project?")
+    from db import get_buildings
+    buildings = get_buildings()
+    if not buildings:
+        set_state(user_id, {"action": "create_project", "step": "waiting_for_name"})
+        await send_reply_func("What is the name of the new project?")
+        return
+        
+    b_list = "\n".join([f"{idx+1}. {b['name']}" for idx, b in enumerate(buildings)])
+    set_state(user_id, {"action": "create_project", "step": "waiting_for_building", "buildings": [b['id'] for b in buildings]})
+    await send_reply_func(f"Which building is this new project for? (Type the number)\n\n{b_list}")
 
 async def handle_create_task(entities, user_id, context, send_reply_func):
     projects = get_projects()
@@ -1715,6 +1810,15 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     if not match:
         await send_reply_func(friendly_task_not_found(str(task_query)))
         return
+
+    # Check building access for update permission
+    u_info = _resolve_user(user_id)
+    emp_uuid = u_info['id'] if u_info else None
+    if emp_uuid:
+        from db import check_building_access
+        if not check_building_access(emp_uuid, match['id']):
+            await send_reply_func("🚫 Unauthorized: You do not have permission to update tasks from this building.")
+            return
 
     try:
         if progress_str is not None:
