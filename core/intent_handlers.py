@@ -459,13 +459,16 @@ def build_building_grouped_tasks(building_structured_data, personal_tasks=None):
         projects = b.get("projects", [])
         
         has_tasks = any(p.get("tasks") for p in projects)
-        if not has_tasks:
-            continue
             
         lines.append(f"━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"🏢 *{b_name}*")
         lines.append(f"━━━━━━━━━━━━━━━━━━━━")
         lines.append("")
+        
+        if not has_tasks:
+            lines.append("_No active tasks in this building_")
+            lines.append("")
+            continue
         
         for p in projects:
             p_name = p.get("project_name", "Unknown Project")
