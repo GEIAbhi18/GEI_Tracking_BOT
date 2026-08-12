@@ -105,6 +105,25 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             send_text(sender_phone, f"You selected: {button_id} (Coming soon)")
         return
         
+    # ── Building selection for Create Project ────────────────────────────────
+    if button_id.startswith("create_proj_b_"):
+        building_name = button_id.replace("create_proj_b_", "")
+        from db import get_buildings
+        from core.conversation_state import get_state, set_state
+        buildings = get_buildings()
+        matched = next((b for b in buildings if b["name"] == building_name), None)
+        if not matched:
+            send_text(sender_phone, "Invalid building selection. Please try again.")
+            return
+        
+        state = get_state(sender_phone) or {}
+        state["action"] = "create_project"
+        state["step"] = "waiting_for_name"
+        state["building_id"] = matched["id"]
+        set_state(sender_phone, state)
+        send_text(sender_phone, "What is the name of the new project?")
+        return
+
     # ── Admin Switch Routing ─────────────────────────────────────────────────
     if button_id.startswith("admin_switch_"):
         if user.get("role") != "Developer" and user.get("original_role") != "Developer":

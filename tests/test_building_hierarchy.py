@@ -63,10 +63,10 @@ def test_build_building_grouped_tasks_formatting_and_continuous_numbering():
 
     formatted_text, stored_task_ids = build_building_grouped_tasks(building_data, personal_tasks=personal_tasks)
 
-    # 1. Verify building headings exist
-    assert "*GETT*" in formatted_text
-    assert "*GEBB1*" in formatted_text
-    assert "*GEBB2*" in formatted_text
+    # 1. Verify building headings exist with emoji
+    assert "🏢 *GETT*" in formatted_text
+    assert "🏢 *GEBB1*" in formatted_text
+    assert "🏢 *GEBB2*" in formatted_text
     assert "👤 *My Personal Tasks*" in formatted_text
 
     # 2. Verify continuous serial numbering

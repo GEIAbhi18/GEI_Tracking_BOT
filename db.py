@@ -502,17 +502,16 @@ def get_tasks_by_buildings(user_id, include_completed=True):
     user_role = (user_info.get("role", "") if user_info else "").capitalize()
     is_admin = user_role in ["Director", "Developer"]
     
-    # Get user's buildings
-    user_buildings = get_user_buildings(user_id)
-    
-    if not user_buildings:
-        if is_admin:
-            # Admin with no mapping → show ALL buildings
-            all_buildings = get_buildings()
-            if not all_buildings:
-                return []
-            user_buildings = [{"building_id": b["id"], "building_name": b["name"]} for b in all_buildings]
-        else:
+    if is_admin:
+        # Admins (Director/Developer) ALWAYS see ALL buildings
+        all_buildings = get_buildings()
+        if not all_buildings:
+            return []
+        user_buildings = [{"building_id": b["id"], "building_name": b["name"]} for b in all_buildings]
+    else:
+        # Non-admin users see only their mapped buildings
+        user_buildings = get_user_buildings(user_id)
+        if not user_buildings:
             return []
     
     building_ids = [b["building_id"] for b in user_buildings]

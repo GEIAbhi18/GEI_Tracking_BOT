@@ -462,7 +462,9 @@ def build_building_grouped_tasks(building_structured_data, personal_tasks=None):
         if not has_tasks:
             continue
             
-        lines.append(f"*{b_name}*")
+        lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+        lines.append(f"🏢 *{b_name}*")
+        lines.append(f"━━━━━━━━━━━━━━━━━━━━")
         lines.append("")
         
         for p in projects:
@@ -1573,9 +1575,16 @@ async def handle_create_project(entities, user_id, context, send_reply_func):
         await send_reply_func("What is the name of the new project?")
         return
         
-    b_list = "\n".join([f"{idx+1}. {b['name']}" for idx, b in enumerate(buildings)])
     set_state(user_id, {"action": "create_project", "step": "waiting_for_building", "buildings": [b['id'] for b in buildings]})
-    await send_reply_func(f"Which building is this new project for? (Type the number)\n\n{b_list}")
+    # Try WhatsApp interactive buttons (max 3)
+    try:
+        from whatsapp.ux import send_interactive_buttons
+        buttons = [{"id": f"create_proj_b_{b['name']}", "title": b['name']} for b in buildings[:3]]
+        send_interactive_buttons(str(user_id), "Which building is this new project for?", buttons)
+    except Exception:
+        # Fallback to text list for non-WhatsApp channels
+        b_list = "\n".join([f"{idx+1}. {b['name']}" for idx, b in enumerate(buildings)])
+        await send_reply_func(f"Which building is this new project for? (Type the number)\n\n{b_list}")
 
 async def handle_create_task(entities, user_id, context, send_reply_func):
     projects = get_projects()
