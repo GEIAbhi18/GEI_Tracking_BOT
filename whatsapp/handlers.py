@@ -25,6 +25,12 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         
     logger.info(f"UX Handler processing button ID: {button_id}")
     
+    # ── Facilities Module Routing ───────────────────────────────────────────
+    if button_id.startswith("fac_") or user.get("department") == "Facilities":
+        from facilities.flows.router import route_facilities_message
+        route_facilities_message(sender_phone, button_id=button_id, user=user)
+        return
+        
     # ── Main Menu Routing ────────────────────────────────────────────────────
     if button_id.startswith("menu_"):
         if button_id == "menu_team_tasks":

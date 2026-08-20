@@ -237,6 +237,28 @@ _bg_scheduler.add_job(
 )
 logging.info(f"Keep-alive self-ping registered (every {_KEEP_ALIVE_INTERVAL}s → {_RENDER_URL}/health)")
 
+# ── Facilities Google Sheets Polling & Retry Jobs ───────────────────────────
+try:
+    from facilities.sync_engine import poll_sheet_changes, retry_failed_syncs
+    from facilities.config import FACILITIES_POLL_INTERVAL
+    _bg_scheduler.add_job(
+        poll_sheet_changes,
+        'interval',
+        seconds=FACILITIES_POLL_INTERVAL,
+        id='facilities_poll_sheet',
+        replace_existing=True,
+    )
+    _bg_scheduler.add_job(
+        retry_failed_syncs,
+        'interval',
+        seconds=FACILITIES_POLL_INTERVAL,
+        id='facilities_retry_syncs',
+        replace_existing=True,
+    )
+    logging.info(f"Facilities Sheet polling & retry jobs registered (every {FACILITIES_POLL_INTERVAL}s)")
+except Exception as _fac_sched_err:
+    logging.warning(f"Facilities background jobs failed to schedule: {_fac_sched_err}")
+
 
 # ── Deferred Startup ────────────────────────────────────────────────────────
 # Start scheduler + restore sessions AFTER gunicorn binds the port.
@@ -549,15 +571,21 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
     """
     Route text messages:
       1. Check for UNDO command (voice note context)
-      2. If sender is in a WA task-assignment state → task_assignment module
-      3. For voice notes: check if batch update (multiple tasks) → batch handler
-      4. Otherwise → core bot engine with a WhatsApp-native send_reply_func
-
-    Args:
-        sender: WhatsApp phone number (E.164 without '+')
-        text: The message text (typed or transcribed from voice)
-        voice_note: True if this text originated from a voice note transcription
+      2. Check for Facilities user / Facilities active session
+      3. If sender is in a WA task-assignment state → task_assignment module
+      4. For voice notes: check if batch update (multiple tasks) → batch handler
+      5. Otherwise → core bot engine with a WhatsApp-native send_reply_func
     """
+    # Facilities routing check
+    try:
+        from facilities.flows.router import is_facilities_user, get_session, route_facilities_message
+        session = get_session(sender)
+        if is_facilities_user(sender) or (session and session.get("current_flow_state")):
+            route_facilities_message(sender, text=text)
+            return
+    except Exception as fac_err:
+        logger.error(f"Facilities routing error in _handle_text: {fac_err}", exc_info=True)
+
     # Check for clear/reset command (works from both text and voice)
     if text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
         try:
@@ -1274,14 +1302,19 @@ def _handle_audio(sender: str, message: dict):
         f"_I heard:_ \"{transcript}\""
     )
 
-    # Step 4: Check for UNDO command
+    # Step 4: Check for Facilities routing
+    try:
+        from facilities.flows.router import is_facilities_user, route_facilities_message
+        if is_facilities_user(sender):
+            route_facilities_message(sender, voice_transcript=transcript, user=auth_user)
+            return
+    except Exception as fac_err:
+        logger.error(f"Facilities voice routing error: {fac_err}", exc_info=True)
+
+    # Step 5: Check for UNDO command
     if transcript.strip().upper() == "UNDO":
         _handle_voice_undo(sender)
         return
-
-    # Step 5: Store voice action context for potential UNDO
-    #         (will be populated AFTER the task update completes)
-    #         The _handle_text pipeline handles everything else.
 
     # Step 6: Feed transcript into the SAME pipeline as typed messages
     _handle_text(sender, transcript, voice_note=True)
@@ -1311,6 +1344,16 @@ def _handle_image(sender: str, message: dict):
     if not media_id:
         logger.warning(f"Image message from {sender} has no media ID")
         return
+
+    # Facilities routing for image attachments
+    try:
+        from facilities.flows.router import is_facilities_user, get_session, route_facilities_message
+        session = get_session(sender)
+        if is_facilities_user(sender) or (session and session.get("current_flow_state", "").startswith("attach_")):
+            route_facilities_message(sender, image_data=image_obj, user=auth_user)
+            return
+    except Exception as fac_err:
+        logger.error(f"Facilities image routing error: {fac_err}", exc_info=True)
 
     logger.info(f"Image received from {sender}, media_id: {media_id}")
 
