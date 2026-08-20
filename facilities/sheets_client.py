@@ -15,6 +15,7 @@ Read paths use row_cache for fast reads; polling keeps the cache fresh.
 """
 
 import logging
+import os
 import uuid
 import threading
 import time
@@ -72,19 +73,49 @@ def _get_client():
                 "FACILITIES_SHEET_ID not configured in .env"
             )
 
+        pk = FACILITIES_SA_PRIVATE_KEY.strip().strip("'").strip('"').replace("\\n", "\n")
+
+        # Derive project_id dynamically from service account email domain if available
+        project_id = "facilities-tracker"
+        if FACILITIES_SA_EMAIL and "@" in FACILITIES_SA_EMAIL:
+            domain = FACILITIES_SA_EMAIL.split("@")[1]
+            if "." in domain:
+                project_id = domain.split(".")[0]
+
         creds_info = {
             "type": "service_account",
-            "project_id": "facilities-tracker",
-            "private_key": FACILITIES_SA_PRIVATE_KEY.replace("\\n", "\n"),
+            "project_id": project_id,
+            "private_key": pk,
             "client_email": FACILITIES_SA_EMAIL,
             "token_uri": "https://oauth2.googleapis.com/token",
         }
 
-        creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
-        _gc = gspread.authorize(creds)
-        _ss = _gc.open_by_key(FACILITIES_SHEET_ID)
-        logger.info(f"Connected to Facilities Sheet: {_ss.title}")
-        return _ss
+        try:
+            creds = Credentials.from_service_account_info(creds_info, scopes=SCOPES)
+            _gc = gspread.authorize(creds)
+            _ss = _gc.open_by_key(FACILITIES_SHEET_ID)
+            logger.info(f"Connected to Facilities Sheet: {_ss.title}")
+            return _ss
+        except Exception as primary_err:
+            # Fallback check if feedback module credentials (GOOGLE_SERVICE_ACCOUNT_EMAIL + GOOGLE_PRIVATE_KEY) exist
+            alt_email = os.getenv("GOOGLE_SERVICE_ACCOUNT_EMAIL")
+            alt_pk = os.getenv("GOOGLE_PRIVATE_KEY", "").strip().strip("'").strip('"').replace("\\n", "\n")
+            if alt_email and alt_pk and alt_email != FACILITIES_SA_EMAIL:
+                logger.warning(f"Facilities SA auth failed with {FACILITIES_SA_EMAIL}. Trying fallback SA {alt_email}...")
+                alt_project_id = alt_email.split("@")[1].split(".")[0] if "@" in alt_email else "facilities-tracker"
+                alt_creds_info = {
+                    "type": "service_account",
+                    "project_id": alt_project_id,
+                    "private_key": alt_pk,
+                    "client_email": alt_email,
+                    "token_uri": "https://oauth2.googleapis.com/token",
+                }
+                alt_creds = Credentials.from_service_account_info(alt_creds_info, scopes=SCOPES)
+                _gc = gspread.authorize(alt_creds)
+                _ss = _gc.open_by_key(FACILITIES_SHEET_ID)
+                logger.info(f"Connected to Facilities Sheet via fallback SA: {_ss.title}")
+                return _ss
+            raise primary_err
 
 
 def _get_worksheet(building: str):
