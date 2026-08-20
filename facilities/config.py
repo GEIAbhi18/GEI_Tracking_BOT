@@ -13,19 +13,26 @@ load_dotenv()
 # ── Google Sheets ────────────────────────────────────────────────────────────
 # Spreadsheet ID for Facilities_Master_Tracker_Final
 FACILITIES_SHEET_ID = os.getenv("FACILITIES_SHEET_ID", "")
+FACILITIES_API_KEY = os.getenv("FACILITIES_API_KEY", "")
 
-# Reuse the same service account credentials as the feedback module
-# (same GCP project — the service account just needs Editor access on the sheet)
-FACILITIES_SA_EMAIL = (
-    os.getenv("FACILITIES_SA_EMAIL") or
+# Service Account credentials for Facilities module
+_fac_sa_email = (
     os.getenv("FACILITIES_SERVICE_ACCOUNT_EMAIL") or
-    os.getenv("GOOGLE_SERVICE_ACCOUNT_EMAIL", "")
+    os.getenv("FACILITIES_SA_EMAIL")
 )
-FACILITIES_SA_PRIVATE_KEY = (
+_fac_sa_key = (
+    os.getenv("FACILITIES_SERVICE_ACCOUNT_PRIVATE_KEY") or
     os.getenv("FACILITIES_SA_PRIVATE_KEY") or
-    os.getenv("GOOGLE_PRIVATE_KEY") or
-    os.getenv("FACILITIES_PRIVATE_KEY", "")
+    os.getenv("FACILITIES_PRIVATE_KEY")
 )
+
+if _fac_sa_email:
+    FACILITIES_SA_EMAIL = _fac_sa_email
+    # Use dedicated key if provided, else fall back to GOOGLE_PRIVATE_KEY
+    FACILITIES_SA_PRIVATE_KEY = _fac_sa_key or os.getenv("GOOGLE_PRIVATE_KEY", "")
+else:
+    FACILITIES_SA_EMAIL = os.getenv("GOOGLE_SERVICE_ACCOUNT_EMAIL", "")
+    FACILITIES_SA_PRIVATE_KEY = os.getenv("GOOGLE_PRIVATE_KEY", "")
 
 # ── Polling ──────────────────────────────────────────────────────────────────
 # How often (seconds) the sync engine polls the Sheet for external edits

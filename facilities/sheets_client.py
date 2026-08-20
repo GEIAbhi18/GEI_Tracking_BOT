@@ -101,20 +101,26 @@ def _get_client():
             alt_email = os.getenv("GOOGLE_SERVICE_ACCOUNT_EMAIL")
             alt_pk = os.getenv("GOOGLE_PRIVATE_KEY", "").strip().strip("'").strip('"').replace("\\n", "\n")
             if alt_email and alt_pk and alt_email != FACILITIES_SA_EMAIL:
-                logger.warning(f"Facilities SA auth failed with {FACILITIES_SA_EMAIL}. Trying fallback SA {alt_email}...")
-                alt_project_id = alt_email.split("@")[1].split(".")[0] if "@" in alt_email else "facilities-tracker"
-                alt_creds_info = {
-                    "type": "service_account",
-                    "project_id": alt_project_id,
-                    "private_key": alt_pk,
-                    "client_email": alt_email,
-                    "token_uri": "https://oauth2.googleapis.com/token",
-                }
-                alt_creds = Credentials.from_service_account_info(alt_creds_info, scopes=SCOPES)
-                _gc = gspread.authorize(alt_creds)
-                _ss = _gc.open_by_key(FACILITIES_SHEET_ID)
-                logger.info(f"Connected to Facilities Sheet via fallback SA: {_ss.title}")
-                return _ss
+                logger.warning(
+                    f"Facilities SA auth failed for {FACILITIES_SA_EMAIL}: {primary_err}. "
+                    f"Trying fallback SA {alt_email}..."
+                )
+                try:
+                    alt_project_id = alt_email.split("@")[1].split(".")[0] if "@" in alt_email else "facilities-tracker"
+                    alt_creds_info = {
+                        "type": "service_account",
+                        "project_id": alt_project_id,
+                        "private_key": alt_pk,
+                        "client_email": alt_email,
+                        "token_uri": "https://oauth2.googleapis.com/token",
+                    }
+                    alt_creds = Credentials.from_service_account_info(alt_creds_info, scopes=SCOPES)
+                    _gc = gspread.authorize(alt_creds)
+                    _ss = _gc.open_by_key(FACILITIES_SHEET_ID)
+                    logger.info(f"Connected to Facilities Sheet via fallback SA: {_ss.title}")
+                    return _ss
+                except Exception as alt_err:
+                    logger.error(f"Fallback SA {alt_email} also failed: {alt_err}")
             raise primary_err
 
 
