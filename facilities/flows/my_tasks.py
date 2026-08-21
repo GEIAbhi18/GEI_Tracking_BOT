@@ -18,6 +18,13 @@ logger = logging.getLogger(__name__)
 
 def show_my_tasks(sender: str, user: dict):
     """Show tasks for the user's permitted buildings, grouped by Building → Type."""
+    # Live poll Google Sheet first
+    from facilities.sync_engine import poll_sheet_changes
+    try:
+        poll_sheet_changes()
+    except Exception as e:
+        logger.warning(f"Live poll in show_my_tasks failed: {e}")
+
     buildings = get_permitted_buildings(user)
 
     # Get all tasks across permitted buildings

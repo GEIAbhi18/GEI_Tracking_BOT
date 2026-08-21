@@ -57,8 +57,20 @@ def send_text(to: str, body: str) -> bool:
 def send_interactive_buttons(to: str, body: str, buttons: list) -> bool:
     """
     buttons: [{"id": "btn_id", "title": "Button Title"}, ...]
-    Max 3 buttons.
+    Max 3 buttons. Meta body limit: 1024 chars.
     """
+    if len(body) > 1000:
+        send_text(to, body)
+        body = "Please select an option:"
+
+    # Sanitize button titles (max 20 chars for WhatsApp API)
+    sanitized_buttons = []
+    for b in buttons[:3]:
+        title = b["title"]
+        if len(title) > 20:
+            title = title[:20]
+        sanitized_buttons.append({"type": "reply", "reply": {"id": b["id"], "title": title}})
+
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -67,10 +79,7 @@ def send_interactive_buttons(to: str, body: str, buttons: list) -> bool:
             "type": "button",
             "body": {"text": body},
             "action": {
-                "buttons": [
-                    {"type": "reply", "reply": {"id": b["id"], "title": b["title"]}}
-                    for b in buttons
-                ]
+                "buttons": sanitized_buttons
             },
         },
     }
@@ -84,7 +93,42 @@ def send_list_message(to: str, body: str, button_text: str, sections: list) -> b
         "rows": [{"id": "row_id", "title": "Row Title", "description": "Optional"}, ...]
       }
     ]
+    Meta body limit: 1024 chars.
     """
+    if len(body) > 1000:
+        send_text(to, body)
+        body = "Tap below to select an option:"
+
+    # Sanitize button_text (max 20 chars)
+    if len(button_text) > 20:
+        button_text = button_text[:20]
+
+    # Sanitize sections
+    sanitized_sections = []
+    for sec in sections:
+        sec_title = sec.get("title", "Options")
+        if len(sec_title) > 24:
+            sec_title = sec_title[:24]
+
+        sanitized_rows = []
+        for r in sec.get("rows", []):
+            rtitle = r.get("title", "")
+            if len(rtitle) > 24:
+                rtitle = rtitle[:24]
+            rdesc = r.get("description", "")
+            if rdesc and len(rdesc) > 72:
+                rdesc = rdesc[:72]
+
+            row_obj = {"id": r["id"], "title": rtitle}
+            if rdesc:
+                row_obj["description"] = rdesc
+            sanitized_rows.append(row_obj)
+
+        sanitized_sections.append({
+            "title": sec_title,
+            "rows": sanitized_rows[:10]  # Max 10 rows per section
+        })
+
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
@@ -94,7 +138,7 @@ def send_list_message(to: str, body: str, button_text: str, sections: list) -> b
             "body": {"text": body},
             "action": {
                 "button": button_text,
-                "sections": sections
+                "sections": sanitized_sections
             }
         }
     }

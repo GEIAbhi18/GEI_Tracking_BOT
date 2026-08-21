@@ -16,6 +16,13 @@ logger = logging.getLogger(__name__)
 
 def show_team_tasks(sender: str, building: str, user: dict):
     """Show all tasks for a building (Screen 03)."""
+    # Live poll Google Sheet first
+    from facilities.sync_engine import poll_sheet_changes
+    try:
+        poll_sheet_changes()
+    except Exception as e:
+        logger.warning(f"Live poll in show_team_tasks failed: {e}")
+
     # Enforce permission
     try:
         assert_building_access(user, building)

@@ -148,6 +148,10 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         from facilities.flows.building_filter import prompt_building_filter
         prompt_building_filter(sender, user, next_action="team_tasks")
 
+    elif button_id == "fac_completed_tasks":
+        from facilities.flows.completed_tasks import prompt_completed_tasks_building
+        prompt_completed_tasks_building(sender, user)
+
     elif button_id == "fac_create_task":
         from facilities.flows.create_task import start_create_flow
         start_create_flow(sender, user)
@@ -291,6 +295,12 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         from facilities.flows.daily_digest import show_daily_digest
         show_daily_digest(sender, user)
 
+    # ── Completed Tasks ──────────────────────────────────────────────────
+    elif button_id.startswith("fac_completed_bldg_"):
+        bldg = button_id.replace("fac_completed_bldg_", "")
+        from facilities.flows.completed_tasks import show_completed_tasks
+        show_completed_tasks(sender, user, bldg)
+
     else:
         logger.warning(f"Unknown Facilities button ID: {button_id}")
         from whatsapp.ux import send_text
@@ -307,6 +317,21 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
         clear_session(sender)
         from facilities.flows.home import show_home
         show_home(sender, user)
+        return
+
+    # Check for completed tasks triggers
+    if any(k in clean for k in ("completed task", "completed tasks", "closed task", "closed tasks", "show completed", "show closed")):
+        from facilities.auth import fuzzy_match_building
+        matched_bldg = fuzzy_match_building(text)
+        if matched_bldg:
+            from facilities.flows.completed_tasks import show_completed_tasks
+            show_completed_tasks(sender, user, matched_bldg)
+        elif "all" in clean:
+            from facilities.flows.completed_tasks import show_completed_tasks
+            show_completed_tasks(sender, user, "all")
+        else:
+            from facilities.flows.completed_tasks import prompt_completed_tasks_building
+            prompt_completed_tasks_building(sender, user)
         return
 
     # Check if user is in a multi-step flow
@@ -416,6 +441,20 @@ def _route_in_flow_text(sender: str, text: str, user: dict, session: dict):
     elif state == "building_filter":
         from facilities.flows.building_filter import handle_building_text
         handle_building_text(sender, text, user, session)
+
+    # Completed tasks building filter
+    elif state == "completed_tasks_building":
+        from facilities.auth import fuzzy_match_building
+        bldg = fuzzy_match_building(text)
+        if bldg:
+            from facilities.flows.completed_tasks import show_completed_tasks
+            show_completed_tasks(sender, user, bldg)
+        elif text.strip().lower() in ("all", "all buildings", "every building"):
+            from facilities.flows.completed_tasks import show_completed_tasks
+            show_completed_tasks(sender, user, "all")
+        else:
+            from facilities.flows.completed_tasks import prompt_completed_tasks_building
+            prompt_completed_tasks_building(sender, user)
 
     # Reassign flow
     elif state.startswith("reassign_"):
