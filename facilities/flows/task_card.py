@@ -59,8 +59,8 @@ def show_task_card(sender: str, ref_no: str, user: dict):
         f"📅 *Target Date:* {row.get('target_date', '—')}\n"
         f"{rag['emoji']} *Status:* {rag['label']}\n"
         f"📝 *Latest Update:* {row.get('latest_update', '—')}\n"
-        f"📅 *Created:* {row.get('created_date', '—')}\n"
-        f"🔄 *Last Modified:* {row.get('last_modified_by_at', '—')}\n"
+        f"📅 *Date Raised:* {row.get('created_date', '—')}\n"
+        f"👤 *Added by:* {row.get('last_modified_by_at', '—')}\n"
     )
 
     if attach_line:

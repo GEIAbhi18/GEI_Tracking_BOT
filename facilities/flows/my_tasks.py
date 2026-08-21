@@ -10,19 +10,20 @@ from collections import defaultdict
 
 from whatsapp.ux import send_text, send_list_message
 from facilities.auth import get_permitted_buildings
-from facilities.sheets_client import list_rows_by_owner
+from facilities.sheets_client import list_rows_by_building
 from facilities.config import RAG_STATUS_MAP
 
 logger = logging.getLogger(__name__)
 
 
 def show_my_tasks(sender: str, user: dict):
-    """Show the user's assigned tasks grouped by Building → Type."""
-    name = user.get("name", "")
+    """Show tasks for the user's permitted buildings, grouped by Building → Type."""
     buildings = get_permitted_buildings(user)
 
-    # Get all tasks owned by this user
-    tasks = list_rows_by_owner(name)
+    # Get all tasks across permitted buildings
+    tasks = []
+    for building in buildings:
+        tasks.extend(list_rows_by_building(building))
 
     if not tasks:
         send_text(
@@ -111,12 +112,11 @@ def show_my_tasks(sender: str, user: dict):
 
 def show_tasks_by_type(sender: str, user: dict, building: str, task_type: str):
     """Show all tasks for a specific building+type (expanded view)."""
-    name = user.get("name", "")
-    tasks = list_rows_by_owner(name)
+    tasks = list_rows_by_building(building)
 
     filtered = [
         t for t in tasks
-        if t.get("building") == building and t.get("type") == task_type
+        if t.get("type") == task_type
     ]
 
     if not filtered:

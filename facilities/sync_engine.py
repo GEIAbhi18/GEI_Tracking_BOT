@@ -23,8 +23,8 @@ from datetime import datetime, timezone
 from db import supabase
 from facilities.config import (
     BUILDING_TABS,
-    COLUMN_MAP,
-    COLUMN_INDEX,
+    get_column_map,
+    get_column_index,
     FACILITIES_MAX_RETRIES,
 )
 
@@ -85,7 +85,8 @@ def _poll_building_tab(building: str) -> int:
         if not ref_no:
             continue
 
-        sheet_row = _row_to_dict(row_values)
+        sheet_row = _row_to_dict(row_values, building)
+        sheet_row["building"] = building
 
         # Get the cached version
         try:
@@ -103,9 +104,10 @@ def _poll_building_tab(building: str) -> int:
         cached = cache_res.data[0]
 
         # Compare each field
-        for field in COLUMN_MAP.values():
-            if field in ("ref_no", "building"):
-                continue  # These don't change
+        col_map = get_column_map(building)
+        for field in col_map.values():
+            if field in ("ref_no", "delay_days"):
+                continue  # ref_no is immutable; delay_days is not stored in row_cache
 
             sheet_val = (sheet_row.get(field) or "").strip()
             cached_val = (cached.get(field) or "").strip()
@@ -311,12 +313,8 @@ def _retry_single_sync(item: dict):
             _increment_retry_count(sync_id)
             return
 
-        col_idx = COLUMN_INDEX[field]
+        col_idx = get_column_index(building)[field]
         _retry_on_429(ws.update_cell, row_idx, col_idx, value)
-
-        # Update column J
-        now_str = f"GEI_BOT (retry) / {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-        _retry_on_429(ws.update_cell, row_idx, COLUMN_INDEX["last_modified_by_at"], now_str)
 
         # Mark synced
         supabase.table("sync_queue").update({
@@ -325,7 +323,7 @@ def _retry_single_sync(item: dict):
         }).eq("id", sync_id).execute()
 
         # Update cache
-        _update_cache_field(ref_no, field, value, now_str)
+        _update_cache_field(ref_no, field, value)
 
         logger.info(f"Retry successful: {ref_no}.{field} synced to Sheet")
 

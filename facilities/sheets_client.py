@@ -30,8 +30,8 @@ from facilities.config import (
     FACILITIES_SA_EMAIL,
     FACILITIES_SA_PRIVATE_KEY,
     BUILDING_TABS,
-    COLUMN_MAP,
-    COLUMN_INDEX,
+    get_column_map,
+    get_column_index,
     WRITABLE_FIELDS,
     CONFLICT_WINDOW_SECONDS,
 )
@@ -158,10 +158,11 @@ def _retry_on_429(func, *args, max_retries=5, **kwargs):
 
 # ── Row Parsing ──────────────────────────────────────────────────────────────
 
-def _row_to_dict(row_values: list) -> dict:
+def _row_to_dict(row_values: list, building: str) -> dict:
     """Convert a Sheet row (list of cell values) to a field dict."""
     result = {}
-    columns = list(COLUMN_MAP.values())
+    col_map = get_column_map(building)
+    columns = list(col_map.values())
     for i, field in enumerate(columns):
         result[field] = row_values[i] if i < len(row_values) else ""
     return result
@@ -206,7 +207,8 @@ def read_row(ref_no: str) -> dict | None:
             return None
 
         row_values = _retry_on_429(ws.row_values, row_idx)
-        row_dict = _row_to_dict(row_values)
+        row_dict = _row_to_dict(row_values, building)
+        row_dict["building"] = building
 
         # Update cache
         _upsert_row_cache(row_dict)
@@ -322,12 +324,12 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
             _mark_sync_failed(sync_id, f"Row {ref_no} not found in Sheet")
             return {"status": "failed", "sync_queue_id": sync_id, "error": "Row not found"}
 
-        col_idx = COLUMN_INDEX[field]
+        col_idx = get_column_index(building)[field]
         _retry_on_429(ws.update_cell, row_idx, col_idx, value)
 
-        # Update column J (Last Modified By/At)
-        now_str = f"{actor or source} / {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
-        _retry_on_429(ws.update_cell, row_idx, COLUMN_INDEX["last_modified_by_at"], now_str)
+        # Note: Column E ("Added by") is stored as last_modified_by_at.
+        # We do NOT overwrite it on every edit — it records who originally added the task.
+        # Conflict detection uses the audit_log table instead.
 
         # 5. Mark synced
         supabase.table("sync_queue").update({
@@ -336,7 +338,7 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
         }).eq("id", sync_id).execute()
 
         # Update row_cache
-        _update_cache_field(ref_no, field, value, now_str)
+        _update_cache_field(ref_no, field, value)
 
         # Log to audit
         _log_audit(ref_no, source, actor, f"Updated {field}", field, old_value, value)
@@ -388,18 +390,21 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
         "last_modified_by_at": modified_str,
     }
 
-    # Build Sheet row as a list in column order
+    # Build Sheet row as a list matching actual column order (A-J):
+    # A: Ref No, B: Type, C: Issue/Action, D: Latest Update,
+    # E: Added by, F: Owner, G: Date Raised, H: Target Date,
+    # I: Delay Days, J: Status
     sheet_row = [
-        row_data["ref_no"],
-        row_data["building"],
-        row_data["type"],
-        row_data["issue_action"],
-        row_data["owner"],
-        row_data["target_date"],
-        row_data["status"],
-        row_data["latest_update"],
-        row_data["created_date"],
-        row_data["last_modified_by_at"],
+        row_data["ref_no"],                # A: Ref. No.
+        row_data["type"],                  # B: Type
+        row_data["issue_action"],           # C: Key Issue / Action
+        row_data["latest_update"],          # D: Latest Update
+        row_data["last_modified_by_at"],    # E: Added by
+        row_data["owner"],                 # F: Owner
+        row_data["created_date"],           # G: Date Raised
+        row_data["target_date"],            # H: Target Date
+        "",                                # I: Delay Days (computed)
+        row_data["status"],                # J: Status
     ]
 
     # 3. Enqueue and write to Sheet
@@ -558,12 +563,11 @@ def _upsert_row_cache(row_dict: dict):
         logger.error(f"row_cache upsert failed for {row_dict.get('ref_no')}: {e}")
 
 
-def _update_cache_field(ref_no: str, field: str, value: str, modified_str: str):
+def _update_cache_field(ref_no: str, field: str, value: str, modified_str: str = None):
     """Update a single field in the cache."""
     try:
         update_data = {
             field: value,
-            "last_modified_by_at": modified_str,
             "last_synced_at": datetime.now(timezone.utc).isoformat(),
         }
         supabase.table("row_cache").update(update_data).eq("ref_no", ref_no).execute()
