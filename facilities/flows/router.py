@@ -101,15 +101,15 @@ def route_facilities_message(sender: str, text: str = None,
         image_data: Image attachment data (if any)
         voice_transcript: Transcribed voice note text (if any)
     """
-    # Resolve Facilities user
-    if not user:
-        user = resolve_facilities_user(sender)
-
-    if not user or not user.get("is_facilities_user"):
+    # Always resolve through Facilities auth to get is_facilities_user flag.
+    # The `user` dict from auth middleware doesn't include this field.
+    fac_user = resolve_facilities_user(sender)
+    if not fac_user or not fac_user.get("is_facilities_user"):
         # Not a Facilities user — shouldn't reach here, but handle gracefully
         from whatsapp.ux import send_text
         send_text(sender, "You are not registered as a Facilities team member. Please contact your administrator.")
         return
+    user = fac_user
 
     # Update session timestamp
     session = get_session(sender)
