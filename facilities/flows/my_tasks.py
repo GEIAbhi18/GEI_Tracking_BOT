@@ -17,20 +17,46 @@ logger = logging.getLogger(__name__)
 
 
 def show_my_tasks(sender: str, user: dict):
-    """Show tasks for the user's permitted buildings, grouped by Building → Type."""
+    """Show tasks assigned to the user (via Owner Position mapping), grouped by Building → Type."""
     # Live poll Google Sheet first
     from facilities.sync_engine import poll_sheet_changes
+    from facilities.owner_resolver import get_position_titles_for_user
+    from facilities.task_filter import enrich_task_with_responsible
     try:
         poll_sheet_changes()
     except Exception as e:
         logger.warning(f"Live poll in show_my_tasks failed: {e}")
 
     buildings = get_permitted_buildings(user)
+    user_name = user.get("name", "")
+
+    # Get user's owner position titles
+    user_positions = [p.lower() for p in get_position_titles_for_user(user_name)]
 
     # Get all tasks across permitted buildings
-    tasks = []
+    raw_tasks = []
     for building in buildings:
-        tasks.extend(list_rows_by_building(building))
+        raw_tasks.extend(list_rows_by_building(building))
+
+    # Filter to user's tasks if user has mapped positions; otherwise show tasks matching their name directly
+    tasks = []
+    for task in raw_tasks:
+        enrich_task_with_responsible(task)
+        owner = (task.get("owner") or "").strip().lower()
+        if user_positions:
+            if owner in user_positions or task.get("responsible_user", "").lower() == user_name.lower():
+                tasks.append(task)
+        elif user_name:
+            if owner == user_name.lower() or task.get("responsible_user", "").lower() == user_name.lower():
+                tasks.append(task)
+        else:
+            tasks.append(task)
+
+    # If no specific tasks found and user is Director/Developer, fallback to showing all permitted
+    if not tasks and user.get("role") in ("Director", "Developer"):
+        tasks = raw_tasks
+        for task in tasks:
+            enrich_task_with_responsible(task)
 
     if not tasks:
         send_text(

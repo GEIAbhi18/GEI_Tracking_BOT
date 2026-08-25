@@ -37,7 +37,7 @@ You help the Facilities team manage tasks across buildings: GEBB1, GEBB2, GETT, 
 
 Your job is to:
 1. Extract the user's INTENT from their message
-2. Extract relevant ENTITIES (building, type, dates, owner, status, ref_no)
+2. Extract relevant ENTITIES (building, type, dates, owner, status, ref_no, employee_name, etc.)
 3. Return structured JSON
 
 ALLOWED INTENTS:
@@ -52,20 +52,42 @@ ALLOWED INTENTS:
 - reassign_task: User wants to reassign a task to someone else
 - attach_file: User wants to attach a file to a task
 - filter_building: User wants to filter by a specific building
+- show_overdue_tasks: User wants to see overdue tasks (e.g., "show overdue tasks", "what tasks are overdue", "show overdue")
+- filter_tasks: User wants to filter/view tasks by criteria (employee name, status, date range, etc.)
+  Examples: "show Vikash tasks", "show pending tasks", "show tasks between 20 and 29 Aug",
+            "show Vikramjeet's overdue tasks in GEBB1", "show future tasks for GETT"
 - daily_digest: User wants their daily activity digest
 - greeting: Simple hello/hi
 - help: User needs help or guidance
 - unknown: Cannot determine intent
 
+IMPORTANT CONTEXT — OWNER POSITION vs EMPLOYEE NAME:
+The Google Sheet "Owner" column contains POSITION TITLES, not employee names.
+Known positions and their mapped employees:
+- "Facility Head" → Anoop
+- "Facility Manager GEBB1" → Vikramjeet (also known as Vikram)
+- "Facility Manager GEBB2" → Vikramjeet (also known as Vikram)
+- "Facility Manager GETT" → Vikash
+- "Facility Director" → Kanav
+
+When users refer to employees by name (e.g., "show Vikash tasks"), extract the employee_name entity.
+When they mention positions directly (e.g., "tasks for Facility Manager"), extract owner.
+
 ENTITY EXTRACTION:
 - building: One of GEBB1, GEBB2, GETT, Common (fuzzy match from aliases like "bay 1" → GEBB1, "tech tower" → GETT)
 - type: One of Electrical, Plumbing, Civil, Housekeeping
 - issue_action: The task description/action to be taken
-- owner: Person name to assign/reassign to
+- owner: Position name to assign/reassign to (e.g., "Facility Manager GEBB1")
+- employee_name: Person name (e.g., "Vikash", "Vikramjeet", "Anoop", "Kanav")
 - target_date: Due date (parse natural language dates)
-- status: One of Open, WIP, Closed, On Hold, Escalated
+- status: One of Open, WIP, Closed, On Hold, Escalated, or descriptive terms like "pending" (→ Open), "in progress" (→ WIP), "completed" (→ Closed)
 - ref_no: Task reference number (e.g., GEBB1-001, GETT-042)
 - latest_update: Free text update/note about the task
+- overdue: Boolean — true if user is asking about overdue tasks
+- future: Boolean — true if user is asking about future/upcoming tasks
+- date_range_start: Start date for date range queries (YYYY-MM-DD)
+- date_range_end: End date for date range queries (YYYY-MM-DD)
+- date_field: Which date field to filter on — "target_date" (default, for due-date queries) or "created_date" (for "raised" queries)
 
 IMPORTANT RULES:
 - Extract as many entities as you can from the message
@@ -75,22 +97,32 @@ IMPORTANT RULES:
 - ref_no must match the pattern BUILDING-NNN
 - If multiple intents are present (e.g., voice note with multiple tasks), return them all in the intents array
 - Set confidence 0.0–1.0 based on how certain you are
+- "Vikram" and "Vikramjeet" are the same person — normalize to "Vikramjeet"
+- "show overdue" or "overdue tasks" → intent = show_overdue_tasks
+- "show pending tasks" or "show Vikash tasks" → intent = filter_tasks
+- "show overdue tasks in GEBB1" → intent = show_overdue_tasks with building = GEBB1
 
 OUTPUT FORMAT (JSON only):
 {
   "intents": [
     {
-      "intent": "create_task",
+      "intent": "filter_tasks",
       "confidence": 0.95,
       "entities": {
         "building": "GEBB1",
-        "type": "Plumbing",
-        "issue_action": "Fix leaking pipe in washroom 3rd floor",
-        "owner": "Ritesh",
-        "target_date": "2026-09-01",
-        "status": "Open",
+        "type": null,
+        "issue_action": null,
+        "owner": null,
+        "employee_name": "Vikramjeet",
+        "target_date": null,
+        "status": null,
         "ref_no": null,
-        "latest_update": null
+        "latest_update": null,
+        "overdue": true,
+        "future": false,
+        "date_range_start": null,
+        "date_range_end": null,
+        "date_field": "target_date"
       }
     }
   ]
@@ -348,6 +380,70 @@ def _fallback_intent_extraction(message: str) -> dict:
     # Greeting
     if msg in ("hi", "hello", "hey", "menu", "start"):
         return {"intents": [{"intent": "greeting", "confidence": 0.95, "entities": {}}]}
+
+    # Overdue tasks
+    if any(kw in msg for kw in ["overdue", "over due", "past due", "delayed"]):
+        entities = {}
+        # Extract building if mentioned
+        from facilities.auth import fuzzy_match_building
+        for word in msg.split():
+            bldg = fuzzy_match_building(word)
+            if bldg:
+                entities["building"] = bldg
+                break
+        entities["overdue"] = True
+        return {"intents": [{"intent": "show_overdue_tasks", "confidence": 0.85, "entities": entities}]}
+
+    # Employee name-based task queries
+    try:
+        from facilities.owner_resolver import match_employee_name
+        # Check for patterns like "show Vikash tasks", "Vikramjeet's tasks"
+        for name_pattern in [
+            r"(?:show|view|list|get)\s+(\w+)(?:'s)?\s+tasks?",
+            r"tasks?\s+(?:for|of|assigned\s+to)\s+(\w+)",
+            r"(\w+)(?:'s)?\s+(?:overdue|pending|completed|tasks?)",
+        ]:
+            m = re.search(name_pattern, msg, re.IGNORECASE)
+            if m:
+                potential_name = m.group(1)
+                matched = match_employee_name(potential_name)
+                if matched:
+                    entities = {"employee_name": matched}
+                    # Check if overdue
+                    if "overdue" in msg:
+                        entities["overdue"] = True
+                        return {"intents": [{"intent": "filter_tasks", "confidence": 0.8, "entities": entities}]}
+                    # Check for building
+                    bldg_match = fuzzy_match_building(msg)
+                    if bldg_match:
+                        entities["building"] = bldg_match
+                    return {"intents": [{"intent": "filter_tasks", "confidence": 0.8, "entities": entities}]}
+    except Exception:
+        pass
+
+    # Status-based queries: "show pending tasks", "show completed tasks", etc.
+    status_keywords = {
+        "pending": "Open",
+        "in progress": "WIP",
+        "completed": "Closed",
+        "blocked": "Escalated",
+        "on hold": "On Hold",
+    }
+    for keyword, status_val in status_keywords.items():
+        if keyword in msg and any(w in msg for w in ["task", "tasks", "show", "view", "list"]):
+            entities = {"status": status_val}
+            from facilities.auth import fuzzy_match_building
+            for word in msg.split():
+                bldg = fuzzy_match_building(word)
+                if bldg:
+                    entities["building"] = bldg
+                    break
+            return {"intents": [{"intent": "filter_tasks", "confidence": 0.8, "entities": entities}]}
+
+    # Future tasks
+    if any(kw in msg for kw in ["future task", "future tasks", "upcoming task", "upcoming tasks"]):
+        entities = {"future": True}
+        return {"intents": [{"intent": "filter_tasks", "confidence": 0.8, "entities": entities}]}
 
     # View intents
     if any(kw in msg for kw in ["my task", "my tasks"]):

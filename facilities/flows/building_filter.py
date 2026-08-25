@@ -55,6 +55,9 @@ def handle_building_text(sender: str, text: str, user: dict, session: dict):
         elif next_action == "create_task":
             from facilities.flows.create_task import handle_building_selection
             handle_building_selection(sender, building, user)
+        elif next_action == "overdue_tasks":
+            from facilities.flows.overdue_tasks import show_overdue_tasks
+            show_overdue_tasks(sender, user, building)
         else:
             from facilities.flows.team_tasks import show_team_tasks
             show_team_tasks(sender, building, user)

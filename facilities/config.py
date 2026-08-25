@@ -170,6 +170,9 @@ VALID_STATUSES = [
     "Escalated",
 ]
 
+# Statuses that are considered "closed/completed" — excluded from overdue results
+CLOSED_STATUSES = ["Closed", "Completed", "Done"]
+
 # Status transitions that are always valid
 STATUS_TRANSITIONS = {
     "Open": ["WIP", "Closed", "On Hold", "Escalated"],

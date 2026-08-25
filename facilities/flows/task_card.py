@@ -41,6 +41,15 @@ def show_task_card(sender: str, ref_no: str, user: dict):
     # Determine sync status
     sync_indicator = _get_sync_indicator(ref_no)
 
+    # Enrich with responsible user
+    from facilities.task_filter import enrich_task_with_responsible
+    enrich_task_with_responsible(row)
+    owner = row.get('owner', 'Unassigned')
+    responsible = row.get('responsible_user')
+    owner_display = owner
+    if responsible and responsible.lower() != owner.lower():
+        owner_display = f"{owner} (Responsible: {responsible})"
+
     # Build the card
     status = row.get("status", "Open")
     rag = RAG_STATUS_MAP.get(status, {"emoji": "⚪", "label": status})
@@ -55,7 +64,7 @@ def show_task_card(sender: str, ref_no: str, user: dict):
         f"🏗️ *Building:* {building}\n"
         f"📁 *Type:* {row.get('type', '—')}\n"
         f"🔧 *Issue/Action:* {row.get('issue_action', '—')}\n"
-        f"👤 *Owner:* {row.get('owner', 'Unassigned')}\n"
+        f"👤 *Owner:* {owner_display}\n"
         f"📅 *Target Date:* {row.get('target_date', '—')}\n"
         f"{rag['emoji']} *Status:* {rag['label']}\n"
         f"📝 *Latest Update:* {row.get('latest_update', '—')}\n"
@@ -243,11 +252,19 @@ def handle_reassign_text(sender: str, text: str, user: dict, session: dict):
 def _notify_new_owner(ref_no: str, new_owner: str, reassigned_by: str):
     """Notify the newly assigned owner via WhatsApp."""
     try:
-        user_res = supabase.table("users").select("whatsapp_number").eq("name", new_owner).execute()
-        if not user_res.data:
-            return
+        from facilities.owner_resolver import get_responsible_user_whatsapp
+        recipient = get_responsible_user_whatsapp(new_owner)
+        wa = None
+        target_name = new_owner
+        if recipient:
+            wa = recipient["whatsapp_number"]
+            target_name = recipient["user_name"]
+        else:
+            user_res = supabase.table("users").select("whatsapp_number, name").eq("name", new_owner).execute()
+            if user_res.data and user_res.data[0].get("whatsapp_number"):
+                wa = user_res.data[0]["whatsapp_number"]
+                target_name = user_res.data[0]["name"]
 
-        wa = user_res.data[0].get("whatsapp_number")
         if not wa:
             return
 
@@ -257,7 +274,7 @@ def _notify_new_owner(ref_no: str, new_owner: str, reassigned_by: str):
             f"Type the ref number to view details."
         )
         send_text(wa, msg)
-        logger.info(f"Notified {new_owner} ({wa}) about reassignment of {ref_no}")
+        logger.info(f"Notified {target_name} ({wa}) about reassignment of {ref_no}")
 
     except Exception as e:
         logger.error(f"Failed to notify new owner {new_owner}: {e}")

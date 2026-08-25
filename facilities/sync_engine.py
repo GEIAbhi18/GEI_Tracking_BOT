@@ -193,27 +193,32 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
       3. Users who have an active facilities_session
     """
     try:
-        # Find the owner of this task
+        # Find the owner position of this task
         cache_res = supabase.table("row_cache").select("owner").eq("ref_no", ref_no).execute()
-        owner_name = cache_res.data[0].get("owner") if cache_res.data else None
+        owner_pos = cache_res.data[0].get("owner") if cache_res.data else None
 
-        if not owner_name:
+        if not owner_pos:
             return  # No owner to notify
 
-        # Find the user by name
-        user_res = supabase.table("users").select(
-            "whatsapp_number, name"
-        ).eq("name", owner_name).execute()
+        # Resolve position to responsible user and WhatsApp number
+        from facilities.owner_resolver import get_responsible_user_whatsapp
+        recipient = get_responsible_user_whatsapp(owner_pos)
 
-        if not user_res.data:
-            return
+        if recipient and recipient.get("whatsapp_number"):
+            _send_external_edit_notification(recipient["whatsapp_number"], ref_no, change_type, details)
+        else:
+            # Fallback: check if owner field directly matches a user name
+            user_res = supabase.table("users").select(
+                "whatsapp_number, name"
+            ).eq("name", owner_pos).execute()
 
-        for user in user_res.data:
-            wa_number = user.get("whatsapp_number")
-            if not wa_number:
-                continue
-
-            _send_external_edit_notification(wa_number, ref_no, change_type, details)
+            if user_res.data:
+                for user in user_res.data:
+                    wa_number = user.get("whatsapp_number")
+                    if wa_number:
+                        _send_external_edit_notification(wa_number, ref_no, change_type, details)
+            else:
+                logger.warning(f"Owner position '{owner_pos}' for task {ref_no} has no mapped user or WhatsApp number.")
 
     except Exception as e:
         logger.error(f"Failed to notify about external change for {ref_no}: {e}")
@@ -352,29 +357,33 @@ def _send_retry_success_notification(ref_no: str, field: str, value: str):
     try:
         # Find the owner of this task
         cache_res = supabase.table("row_cache").select("owner").eq("ref_no", ref_no).execute()
-        owner_name = cache_res.data[0].get("owner") if cache_res.data else None
-        if not owner_name:
+        owner_pos = cache_res.data[0].get("owner") if cache_res.data else None
+        if not owner_pos:
             return
 
-        user_res = supabase.table("users").select("whatsapp_number").eq("name", owner_name).execute()
-        if not user_res.data:
-            return
+        from facilities.owner_resolver import get_responsible_user_whatsapp
+        from whatsapp.ux import send_text
 
-        for user in user_res.data:
-            wa = user.get("whatsapp_number")
-            if not wa:
-                continue
+        msg = (
+            f"✅ *Sync Update — {ref_no}*\n\n"
+            f"*Google Sheets:* ✅ Synced\n"
+            f"The {field} update to *\"{value}\"* has been successfully "
+            f"synced to Google Sheets after a previous failure.\n\n"
+            f"_No action needed._"
+        )
 
-            from whatsapp.ux import send_text
-            msg = (
-                f"✅ *Sync Update — {ref_no}*\n\n"
-                f"*Google Sheets:* ✅ Synced\n"
-                f"The {field} update to *\"{value}\"* has been successfully "
-                f"synced to Google Sheets after a previous failure.\n\n"
-                f"_No action needed._"
-            )
-            send_text(wa, msg)
-            logger.info(f"Retry success notification sent to {wa} for {ref_no}")
+        recipient = get_responsible_user_whatsapp(owner_pos)
+        if recipient and recipient.get("whatsapp_number"):
+            send_text(recipient["whatsapp_number"], msg)
+            logger.info(f"Retry success notification sent to {recipient['user_name']} ({recipient['whatsapp_number']}) for {ref_no}")
+        else:
+            user_res = supabase.table("users").select("whatsapp_number").eq("name", owner_pos).execute()
+            if user_res.data:
+                for user in user_res.data:
+                    wa = user.get("whatsapp_number")
+                    if wa:
+                        send_text(wa, msg)
+                        logger.info(f"Retry success notification sent to {wa} for {ref_no}")
 
     except Exception as e:
         logger.error(f"Failed to send retry success notification for {ref_no}: {e}")

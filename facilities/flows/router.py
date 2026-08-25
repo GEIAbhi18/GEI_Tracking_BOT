@@ -301,6 +301,16 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         from facilities.flows.completed_tasks import show_completed_tasks
         show_completed_tasks(sender, user, bldg)
 
+    # ── Overdue Tasks ────────────────────────────────────────────────────
+    elif button_id == "fac_overdue_tasks":
+        from facilities.flows.overdue_tasks import handle_overdue_request
+        handle_overdue_request(sender, user)
+
+    elif button_id.startswith("fac_overdue_bldg_"):
+        bldg = button_id.replace("fac_overdue_bldg_", "")
+        from facilities.flows.overdue_tasks import show_overdue_tasks
+        show_overdue_tasks(sender, user, bldg)
+
     else:
         logger.warning(f"Unknown Facilities button ID: {button_id}")
         from whatsapp.ux import send_text
@@ -333,6 +343,25 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
             from facilities.flows.completed_tasks import prompt_completed_tasks_building
             prompt_completed_tasks_building(sender, user)
         return
+
+    # Check for overdue tasks triggers (rule-based, before LLM)
+    if any(k in clean for k in ("overdue", "over due", "past due", "show overdue")):
+        from facilities.flows.overdue_tasks import handle_overdue_request
+        from facilities.auth import fuzzy_match_building
+        matched_bldg = fuzzy_match_building(text)
+        handle_overdue_request(sender, user, building=matched_bldg)
+        return
+
+    # Check for task filter queries (employee names, status, future)
+    if _is_task_filter_query(clean):
+        from facilities.task_filter import parse_filter_from_text, TaskFilterCriteria
+        from facilities.flows.overdue_tasks import show_filtered_tasks
+        criteria = parse_filter_from_text(text, user)
+        # If we got meaningful criteria, run the filter
+        if (criteria.employee_name or criteria.status or criteria.overdue
+                or criteria.future or criteria.date_range_start):
+            show_filtered_tasks(sender, user, criteria)
+            return
 
     # Check if user is in a multi-step flow
     if session and session.get("current_flow_state"):
@@ -411,6 +440,26 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
             from whatsapp.ux import send_text
             send_text(sender, "Please provide the task Ref No to view history (e.g., GEBB1-001).")
 
+    elif intent == "show_overdue_tasks":
+        building = entities.get("building")
+        from facilities.flows.overdue_tasks import handle_overdue_request
+        handle_overdue_request(sender, user, building=building)
+
+    elif intent == "filter_tasks":
+        from facilities.task_filter import TaskFilterCriteria
+        from facilities.flows.overdue_tasks import show_filtered_tasks
+        criteria = TaskFilterCriteria(
+            building=entities.get("building"),
+            employee_name=entities.get("employee_name"),
+            status=entities.get("status"),
+            overdue=bool(entities.get("overdue")),
+            future=bool(entities.get("future")),
+            date_range_start=entities.get("date_range_start"),
+            date_range_end=entities.get("date_range_end"),
+            date_field=entities.get("date_field", "target_date"),
+        )
+        show_filtered_tasks(sender, user, criteria)
+
     elif intent == "daily_digest":
         from facilities.flows.daily_digest import show_daily_digest
         show_daily_digest(sender, user)
@@ -456,6 +505,19 @@ def _route_in_flow_text(sender: str, text: str, user: dict, session: dict):
             from facilities.flows.completed_tasks import prompt_completed_tasks_building
             prompt_completed_tasks_building(sender, user)
 
+    # Overdue tasks building filter
+    elif state == "overdue_tasks_building":
+        from facilities.auth import fuzzy_match_building
+        bldg = fuzzy_match_building(text)
+        if bldg:
+            from facilities.flows.overdue_tasks import show_overdue_tasks
+            show_overdue_tasks(sender, user, bldg)
+        else:
+            from whatsapp.ux import send_text as _st
+            _st(sender, f"I couldn't find a building matching \"{text}\". Please select from the list.")
+            from facilities.flows.overdue_tasks import prompt_overdue_building_selection
+            prompt_overdue_building_selection(sender, user)
+
     # Reassign flow
     elif state.startswith("reassign_"):
         from facilities.flows.task_card import handle_reassign_text
@@ -492,6 +554,32 @@ def _route_voice(sender: str, transcript: str, user: dict, session: dict):
     handle_voice_note(sender, transcript, user)
 
 
+def _is_task_filter_query(clean: str) -> bool:
+    """Check if free text is a task filter query."""
+    # Check for employee names
+    try:
+        from facilities.owner_resolver import match_employee_name
+        for word in clean.split():
+            clean_word = word.strip(".,'\"?!:;").lower()
+            if clean_word.endswith("'s"):
+                clean_word = clean_word[:-2]
+            if match_employee_name(clean_word):
+                return True
+    except Exception:
+        pass
+
+    # Check for status queries
+    status_keywords = ["pending", "open", "wip", "in progress", "in-progress", "closed", "completed", "done", "on hold", "on-hold", "escalated", "blocked", "future", "upcoming"]
+    if any(k in clean for k in status_keywords) and any(w in clean for w in ["task", "tasks", "show", "view", "list", "what", "which"]):
+        return True
+
+    # Check for date queries
+    if any(w in clean for w in ["between", "from", "due this week", "due next week", "raised between", "due between", "tasks due", "tasks raised"]):
+        return True
+
+    return False
+
+
 def _handle_building_selection(sender: str, building: str, user: dict, session: dict):
     """Handle a building selection from the filter."""
     next_action = None
@@ -504,6 +592,9 @@ def _handle_building_selection(sender: str, building: str, user: dict, session: 
     elif next_action == "create_task":
         from facilities.flows.create_task import handle_building_selection
         handle_building_selection(sender, building, user)
+    elif next_action == "overdue_tasks":
+        from facilities.flows.overdue_tasks import show_overdue_tasks
+        show_overdue_tasks(sender, user, building)
     else:
         from facilities.flows.team_tasks import show_team_tasks
         show_team_tasks(sender, building, user)

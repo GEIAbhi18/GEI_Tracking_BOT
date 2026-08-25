@@ -120,7 +120,18 @@ def handle_update_flow_text(sender: str, text: str, user: dict, session: dict):
     state = session.get("current_flow_state", "")
     context = session.get("context_json", {})
 
-    if state == "update_status":
+    if state == "update_ref_no_input":
+        import re
+        ref_match = re.search(r'(GEBB[12]|GETT|Common)[-\s]?(\d{1,3})', text.strip(), re.IGNORECASE)
+        if ref_match:
+            bldg = ref_match.group(1).upper()
+            num = int(ref_match.group(2))
+            ref_no = f"{bldg}-{num:03d}"
+            start_update_flow(sender, ref_no, user)
+        else:
+            send_text(sender, "Could not find a valid Ref No (e.g. GEBB1-001). Please try again or type *menu*.")
+
+    elif state == "update_status":
         # User typed a status instead of tapping
         from rapidfuzz import fuzz, process as fuzz_process
         match = fuzz_process.extractOne(text.strip(), VALID_STATUSES, scorer=fuzz.WRatio)

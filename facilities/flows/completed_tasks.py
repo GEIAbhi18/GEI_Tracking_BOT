@@ -87,16 +87,24 @@ def show_completed_tasks(sender: str, user: dict, building: str):
         f"Total Completed: *{len(completed)}*\n"
     ]
 
+    from facilities.task_filter import enrich_task_with_responsible
+
     list_rows = []
     for task in completed[:10]:
+        enrich_task_with_responsible(task)
         ref = task.get("ref_no", "—")
         issue = task.get("issue_action", "No description")
         owner = task.get("owner", "Unassigned")
+        responsible = task.get("responsible_user")
         b = task.get("building", "")
         ttype = task.get("type", "General")
 
+        owner_display = owner
+        if responsible and responsible.lower() != owner.lower():
+            owner_display = f"{owner} ({responsible})"
+
         msg_parts.append(f"🟢 *{ref}* [{b}] — {issue[:40]}")
-        msg_parts.append(f"   👤 {owner} | 📁 {ttype}\n")
+        msg_parts.append(f"   👤 {owner_display} | 📁 {ttype}\n")
 
         row_title = f"{ref} (Closed)"
         if len(row_title) > 24:
@@ -105,7 +113,7 @@ def show_completed_tasks(sender: str, user: dict, building: str):
         list_rows.append({
             "id": f"fac_view_{ref}",
             "title": row_title,
-            "description": f"{owner}: {issue[:50]}" if issue else "",
+            "description": f"{owner_display}: {issue[:50]}" if issue else "",
         })
 
     if len(completed) > 10:

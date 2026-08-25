@@ -55,16 +55,24 @@ def show_team_tasks(sender: str, building: str, user: dict):
         f"🔴 Open: {open_count} | 🟡 WIP: {wip_count} | 🟢 Closed: {closed_count}\n"
     )
 
+    from facilities.task_filter import enrich_task_with_responsible
+
     list_rows = []
     for task in tasks[:10]:  # Max 10 for List Message
+        enrich_task_with_responsible(task)
         status = task.get("status", "Open")
         rag = RAG_STATUS_MAP.get(status, {"emoji": "⚪", "label": status})
         ref = task.get("ref_no", "—")
         issue = task.get("issue_action", "No description")
         owner = task.get("owner", "Unassigned")
+        responsible = task.get("responsible_user")
+
+        owner_display = owner
+        if responsible and responsible.lower() != owner.lower():
+            owner_display = f"{owner} ({responsible})"
 
         msg_parts.append(f"{rag['emoji']} *{ref}* — {issue[:40]}")
-        msg_parts.append(f"   👤 {owner} | 📅 {task.get('target_date', '—')}\n")
+        msg_parts.append(f"   👤 {owner_display} | 📅 {task.get('target_date', '—')}\n")
 
         row_title = f"{ref} ({rag['label']})"
         if len(row_title) > 24:
@@ -72,7 +80,7 @@ def show_team_tasks(sender: str, building: str, user: dict):
         list_rows.append({
             "id": f"fac_view_{ref}",
             "title": row_title,
-            "description": f"{owner}: {issue[:50]}" if issue else "",
+            "description": f"{owner_display}: {issue[:50]}" if issue else "",
         })
 
     if len(tasks) > 10:

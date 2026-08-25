@@ -31,6 +31,7 @@ def show_home(sender: str, user: dict):
 
     rows = [
         {"id": "fac_my_tasks", "title": "📋 My Tasks", "description": "View your assigned tasks"},
+        {"id": "fac_overdue_tasks", "title": "🔴 Overdue Tasks", "description": "View overdue tasks by building"},
         {"id": "fac_team_tasks", "title": "👥 Team Tasks", "description": "View tasks by building"},
         {"id": "fac_completed_tasks", "title": "🟢 Completed Tasks", "description": "View closed/completed tasks"},
         {"id": "fac_create_task", "title": "➕ Create Task", "description": "Create a new facilities task"},
