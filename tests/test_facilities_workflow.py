@@ -255,19 +255,34 @@ class TestCreateTaskFlowAndDirectorAccess:
             mock_team_tasks.assert_not_called()
 
     def test_description_with_employee_name_not_hijacked(self):
-        from facilities.flows.router import route_facilities_message, get_session, set_session, clear_session
+        from facilities.flows.router import route_facilities_message
         sender = "919811867829"
-        clear_session(sender)
         user = {"name": "Kanav", "role": "Director", "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"]}
-        draft = {"building": "GEBB1", "type": "Project", "status": "Open"}
-        set_session(sender, "create_issue", draft=draft, context={"next_action": "create_task"})
+        session_store = {
+            "current_flow_state": "create_issue",
+            "draft_task_json": {"building": "GEBB1", "type": "Project", "status": "Open"},
+            "context_json": {"next_action": "create_task"}
+        }
 
-        with patch("whatsapp.ux.send_text"):
+        def mock_set_session(s, state, draft=None, context=None):
+            session_store["current_flow_state"] = state
+            if draft:
+                session_store["draft_task_json"] = draft
+            if context:
+                session_store["context_json"] = context
+
+        def mock_get_session(s):
+            return session_store
+
+        with patch("facilities.flows.create_task.set_session", side_effect=mock_set_session), \
+             patch("facilities.flows.create_task.get_session", side_effect=mock_get_session), \
+             patch("facilities.flows.router.set_session", side_effect=mock_set_session), \
+             patch("facilities.flows.router.get_session", side_effect=mock_get_session), \
+             patch("whatsapp.ux.send_text"):
             route_facilities_message(sender, text="Test task created by Kanav", user=user)
-            session = get_session(sender)
-            assert session.get("current_flow_state") == "create_target_date"
-            assert session.get("draft_task_json", {}).get("issue_action") == "Test task"
-            assert session.get("draft_task_json", {}).get("owner") == "Facilities Director"
+            assert session_store.get("current_flow_state") == "create_target_date"
+            assert session_store.get("draft_task_json", {}).get("issue_action") == "Test task"
+            assert session_store.get("draft_task_json", {}).get("owner") == "Facilities Director"
 
     def test_sheet_row_building_for_all_tabs(self):
         from facilities.sheets_client import _build_sheet_row
@@ -300,7 +315,7 @@ class TestCreateTaskFlowAndDirectorAccess:
             row = _build_sheet_row(bldg, task_data, row_idx=12)
             assert len(row) == 10
             assert row[1] in VALID_TASK_TYPES
-            assert "Abhijeet" in row[4]
+            assert row[4] == "Abhijeet"
             assert row[5] in VALID_OWNER_POSITIONS
             assert row[6] == "26-Aug-2026"
             assert row[7] == "15-Sep-2026"

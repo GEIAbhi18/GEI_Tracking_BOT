@@ -455,12 +455,13 @@ def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list
         # E: Added by, F: Owner, G: Date Raised, H: Target Date,
         # I: Delay Days, J: Status
         delay_formula = f'=IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))' if row_idx else ""
+        added_by = row_data.get("added_by") or (row_data.get("last_modified_by_at", "").split(" / ")[0] if row_data.get("last_modified_by_at") else "GEI_BOT")
         return [
             row_data.get("ref_no", ""),
             task_type,
             row_data.get("issue_action", ""),
             row_data.get("latest_update", ""),
-            row_data.get("last_modified_by_at", ""),
+            added_by,  # E: Added by (clean name only, e.g. Abhijeet, Facility Head)
             owner,
             created_date,
             target_date,
@@ -493,13 +494,15 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
     # 2. Build the row
     now_dt = datetime.now(timezone.utc)
     now_str = now_dt.strftime("%d-%b-%Y")
-    modified_str = f"{actor or 'GEI_BOT'} / {now_dt.strftime('%Y-%m-%d %H:%M UTC')}"
+    actor_clean = actor or "GEI_BOT"
+    modified_str = f"{actor_clean} / {now_dt.strftime('%Y-%m-%d %H:%M UTC')}"
 
     row_data = {
         "ref_no": ref_no,
         "building": building,
         "type": task_draft.get("type", "Project"),
         "issue_action": task_draft.get("issue_action", ""),
+        "added_by": actor_clean,
         "owner": normalize_owner_to_sheet_position(task_draft.get("owner", ""), building),
         "target_date": _format_sheet_date(task_draft.get("target_date", "")),
         "status": task_draft.get("status", "Open"),
