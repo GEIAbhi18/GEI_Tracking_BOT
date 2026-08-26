@@ -321,15 +321,39 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
 
 def _route_text(sender: str, text: str, user: dict, session: dict):
     """Route free-text messages."""
-    # Check for greeting/menu triggers
     clean = text.strip().lower()
-    if clean in ("hi", "hello", "hey", "menu", "start", "home"):
+
+    # 1. Check for greeting/menu/cancel triggers
+    if clean in ("hi", "hello", "hey", "menu", "start", "home", "cancel", "reset", "exit"):
         clear_session(sender)
         from facilities.flows.home import show_home
         show_home(sender, user)
         return
 
-    # Check for completed tasks triggers
+    # 2. Check if user is in an active text-entry multi-step flow state
+    state = session.get("current_flow_state", "") if session else ""
+    ACTIVE_INPUT_STATES = (
+        "create_issue", "create_target_date", "create_owner", "create_preview",
+        "update_note", "update_ref_no_input", "update_confirm", "update_reopen_confirm",
+        "reassign_user_input", "voice_confirm"
+    )
+    if state in ACTIVE_INPUT_STATES:
+        _route_in_flow_text(sender, text, user, session)
+        return
+
+    # If in selection / filter states:
+    if state in ("create_building", "create_type", "update_status",
+                 "building_filter", "completed_tasks_building", "overdue_tasks_building"):
+        # If user typed an explicit top-level command, break out of the selection state
+        if any(clean.startswith(p) for p in ("create ", "new task", "add task", "raise task", "update ", "show ", "view ")) or _is_task_filter_query(clean):
+            clear_session(sender)
+            # Proceed to top-level intent/filter routing below
+        else:
+            # Route in-flow (e.g. typing building name, typing type name, etc.)
+            _route_in_flow_text(sender, text, user, session)
+            return
+
+    # 3. Check for completed tasks triggers
     if any(k in clean for k in ("completed task", "completed tasks", "closed task", "closed tasks", "show completed", "show closed")):
         from facilities.auth import fuzzy_match_building
         matched_bldg = fuzzy_match_building(text)
@@ -344,7 +368,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
             prompt_completed_tasks_building(sender, user)
         return
 
-    # Check for overdue tasks triggers (rule-based, before LLM)
+    # 4. Check for overdue tasks triggers (rule-based, before LLM)
     if any(k in clean for k in ("overdue", "over due", "past due", "show overdue")):
         from facilities.flows.overdue_tasks import handle_overdue_request
         from facilities.auth import fuzzy_match_building
@@ -352,7 +376,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
         handle_overdue_request(sender, user, building=matched_bldg)
         return
 
-    # Check for task filter queries (employee names, status, future)
+    # 5. Check for task filter queries (employee names, status, future)
     if _is_task_filter_query(clean):
         from facilities.task_filter import parse_filter_from_text, TaskFilterCriteria
         from facilities.flows.overdue_tasks import show_filtered_tasks
@@ -363,12 +387,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
             show_filtered_tasks(sender, user, criteria)
             return
 
-    # Check if user is in a multi-step flow
-    if session and session.get("current_flow_state"):
-        _route_in_flow_text(sender, text, user, session)
-        return
-
-    # Extract intent via LLM
+    # 6. Extract intent via LLM
     from facilities.llm import extract_intent
     result = extract_intent(text)
 
@@ -572,25 +591,36 @@ def _route_voice(sender: str, transcript: str, user: dict, session: dict):
 
 def _is_task_filter_query(clean: str) -> bool:
     """Check if free text is a task filter query."""
-    # Check for employee names
+    # Never treat creation or update phrases as filter queries!
+    if any(clean.startswith(p) for p in ("create ", "new ", "add ", "raise ", "update ", "change ", "edit ", "reassign ", "attach ")):
+        return False
+
+    has_filter_keyword = any(w in clean for w in ["task", "tasks", "show", "view", "list", "what", "which", "filter", "find", "get", "assigned"])
+
+    # Check for employee names with a filter keyword or possessive
     try:
         from facilities.owner_resolver import match_employee_name
         for word in clean.split():
             clean_word = word.strip(".,'\"?!:;").lower()
             if clean_word.endswith("'s"):
                 clean_word = clean_word[:-2]
-            if match_employee_name(clean_word):
+                if match_employee_name(clean_word) and (has_filter_keyword or "task" in clean):
+                    return True
+            if match_employee_name(clean_word) and has_filter_keyword:
+                # e.g. "show Vikash's tasks", "Vikash tasks", "tasks for Vikash"
+                if any(p in clean for p in ["created by", "done by", "made by", "tested by", "reported by"]):
+                    return False
                 return True
     except Exception:
         pass
 
-    # Check for status queries
+    # Check for status queries with filter keyword
     status_keywords = ["pending", "open", "wip", "in progress", "in-progress", "closed", "completed", "done", "on hold", "on-hold", "escalated", "blocked", "future", "upcoming"]
-    if any(k in clean for k in status_keywords) and any(w in clean for w in ["task", "tasks", "show", "view", "list", "what", "which"]):
+    if any(k in clean for k in status_keywords) and has_filter_keyword:
         return True
 
     # Check for date queries
-    if any(w in clean for w in ["between", "from", "due this week", "due next week", "raised between", "due between", "tasks due", "tasks raised"]):
+    if any(w in clean for w in ["between", "due this week", "due next week", "raised between", "due between", "tasks due", "tasks raised"]):
         return True
 
     return False

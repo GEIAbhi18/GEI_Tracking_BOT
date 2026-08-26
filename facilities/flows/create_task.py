@@ -103,11 +103,19 @@ def handle_building_selection(sender: str, building: str, user: dict):
 
 
 def _prompt_type(sender: str, user: dict):
-    """Ask for task type (4 options → List Message)."""
+    """Ask for task type (List Message matching Google Sheet Types)."""
+    type_display = {
+        "Project": "📁 Project",
+        "Client Escalation": "🚨 Client Escalation",
+        "Management Discussion": "🗣️ Mgmt Discussion",
+        "Improvement / Initiative": "💡 Improvement/Initiative",
+        "Major Concern": "⚠️ Major Concern",
+        "Other": "📌 Other",
+    }
     rows = [
-        {"id": f"fac_type_{t}", "title": f"🔧 {t}"} for t in VALID_TASK_TYPES
+        {"id": f"fac_type_{t}", "title": type_display.get(t, t)[:24]} for t in VALID_TASK_TYPES
     ]
-    sections = [{"title": "Task Type", "rows": rows}]
+    sections = [{"title": "Select Task Type", "rows": rows}]
     send_list_message(
         sender,
         "What type of task is this?",
@@ -125,6 +133,32 @@ def handle_type_selection(sender: str, task_type: str, user: dict):
 
     draft = session.get("draft_task_json", {})
     draft["type"] = task_type
+
+    # If issue_action was already prefilled from conversational input, advance to next missing field
+    if draft.get("issue_action"):
+        if draft.get("target_date") and draft.get("owner"):
+            _show_draft_preview(sender, draft, user)
+            return
+        elif not draft.get("target_date"):
+            set_session(sender, "create_target_date", draft=draft, context={"next_action": "create_task"})
+            send_text(
+                sender,
+                "📅 *Target Date:*\n\n"
+                "When should this be completed?\n"
+                "(e.g., *tomorrow*, *next Friday*, *2026-09-15*, or *skip* for no date)"
+            )
+            return
+        else:
+            set_session(sender, "create_owner", draft=draft, context={"next_action": "create_task"})
+            send_text(
+                sender,
+                f"👤 *Owner:*\n\n"
+                f"Who should this be assigned to?\n"
+                f"(Currently set to: *{draft.get('owner', 'you')}*)\n\n"
+                f"Type a name, or type *me* to keep it assigned to yourself."
+            )
+            return
+
     set_session(sender, "create_issue", draft=draft, context={"next_action": "create_task"})
 
     send_text(
@@ -140,37 +174,43 @@ def handle_create_flow_text(sender: str, text: str, user: dict, session: dict):
     draft = session.get("draft_task_json", {})
 
     if state == "create_building":
-        # Check if user typed a building name
-        building = fuzzy_match_building(text)
-        if building:
+        # If user sent a full sentence (e.g. "Create task for bay 1..."), extract all entities
+        if len(text.strip().split()) > 2 or any(w in text.lower() for w in ["task", "issue", "create", "assign", "for", "due", "manager", "head"]):
+            from facilities.llm import extract_intent
+            result = extract_intent(text)
+            if result and result.get("intents"):
+                extracted = result["intents"][0].get("entities", {})
+                for k in ("building", "type", "issue_action", "owner", "target_date"):
+                    if extracted.get(k):
+                        draft[k] = extracted[k]
+
+        # If building is not set, try direct fuzzy matching
+        if not draft.get("building"):
+            bldg = fuzzy_match_building(text)
+            if bldg:
+                draft["building"] = bldg
+
+        if draft.get("building"):
             try:
-                assert_building_access(user, building)
-                draft["building"] = building
-                set_session(sender, "create_type", draft=draft, context={"next_action": "create_task"})
-                _prompt_type(sender, user)
+                assert_building_access(user, draft["building"])
             except PermissionError as e:
                 send_text(sender, f"🚫 {str(e)}")
-            return
+                return
 
-        # If user sent a full task description (e.g. "Create task ..."), extract entities
-        from facilities.llm import extract_intent
-        result = extract_intent(text)
-        if result and result.get("intents"):
-            extracted = result["intents"][0].get("entities", {})
-            for k in ("building", "type", "issue_action", "owner", "target_date"):
-                if extracted.get(k):
-                    draft[k] = extracted[k]
-
-            if draft.get("building") and draft.get("type") and draft.get("issue_action"):
+            if draft.get("type") and draft.get("issue_action"):
                 _show_draft_preview(sender, draft, user)
                 return
-            elif draft.get("building"):
-                set_session(sender, "create_type", draft=draft, context={"next_action": "create_task"})
-                _prompt_type(sender, user)
+            elif draft.get("type"):
+                set_session(sender, "create_issue", draft=draft, context={"next_action": "create_task"})
+                send_text(
+                    sender,
+                    f"📝 *Describe the issue/action:*\n\n"
+                    f"Type the task description for *{draft['building']}*. Be specific about the location and what needs to be done."
+                )
                 return
             else:
-                # Still missing building, prompt again
-                _prompt_building(sender, user)
+                set_session(sender, "create_type", draft=draft, context={"next_action": "create_task"})
+                _prompt_type(sender, user)
                 return
 
         # Show "did you mean" (Screen 13)
@@ -188,8 +228,23 @@ def handle_create_flow_text(sender: str, text: str, user: dict, session: dict):
             _prompt_type(sender, user)
 
     elif state == "create_issue":
-        draft["issue_action"] = text.strip()
-        set_session(sender, "create_target_date", draft=draft)
+        clean_text = text.strip()
+        import re
+        m = re.search(r'\b(?:created by|by|done by|assigned to|for)\s+([A-Za-z]+)\b', clean_text, re.IGNORECASE)
+        if m:
+            person = m.group(1).lower()
+            if person in ("kanav", "kk", "director"):
+                draft["owner"] = "Facilities Director"
+                clean_text = re.sub(r'\s*(?:created by|by|done by|assigned to|for)\s+[A-Za-z]+["\']?\s*$', '', clean_text, flags=re.IGNORECASE).strip()
+            elif person in ("anoop", "head"):
+                draft["owner"] = "Facility Head"
+                clean_text = re.sub(r'\s*(?:created by|by|done by|assigned to|for)\s+[A-Za-z]+["\']?\s*$', '', clean_text, flags=re.IGNORECASE).strip()
+            elif person in ("vikram", "vikramjeet", "vikash", "fm", "manager"):
+                draft["owner"] = "Facility Manager"
+                clean_text = re.sub(r'\s*(?:created by|by|done by|assigned to|for)\s+[A-Za-z]+["\']?\s*$', '', clean_text, flags=re.IGNORECASE).strip()
+
+        draft["issue_action"] = clean_text or text.strip()
+        set_session(sender, "create_target_date", draft=draft, context={"next_action": "create_task"})
         send_text(
             sender,
             "📅 *Target Date:*\n\n"
@@ -198,28 +253,30 @@ def handle_create_flow_text(sender: str, text: str, user: dict, session: dict):
         )
 
     elif state == "create_target_date":
-        if text.strip().lower() in ("skip", "no", "none", "na"):
+        if text.strip().lower() in ("skip", "no", "none", "na", "-", "—"):
             draft["target_date"] = "—"
         else:
             from core.utils import parse_human_date
             parsed = parse_human_date(text)
             draft["target_date"] = parsed if parsed else text.strip()
 
-        set_session(sender, "create_owner", draft=draft)
+        set_session(sender, "create_owner", draft=draft, context={"next_action": "create_task"})
 
+        current_owner = draft.get("owner") or "Facility Manager"
         send_text(
             sender,
             f"👤 *Owner:*\n\n"
             f"Who should this be assigned to?\n"
-            f"(Currently set to: *{draft.get('owner', 'you')}*)\n\n"
-            f"Type a name, or type *me* to keep it assigned to yourself."
+            f"(Currently set to: *{current_owner}*)\n\n"
+            f"Type a name (e.g. *Kanav*, *Anoop*, *Vikramjeet*), or type *me* to assign to yourself."
         )
 
     elif state == "create_owner":
+        from facilities.sheets_client import normalize_owner_to_sheet_position
         if text.strip().lower() in ("me", "myself", "self"):
-            draft["owner"] = user.get("name")
+            draft["owner"] = normalize_owner_to_sheet_position(user.get("role", "") or user.get("name", ""), draft.get("building"))
         else:
-            draft["owner"] = text.strip()
+            draft["owner"] = normalize_owner_to_sheet_position(text.strip(), draft.get("building"))
 
         _show_draft_preview(sender, draft, user)
 

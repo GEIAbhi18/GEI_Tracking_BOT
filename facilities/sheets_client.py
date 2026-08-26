@@ -316,6 +316,13 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
             return {"status": "duplicate", "ref_no": ref_no, "field": field}
         raise
 
+    # Normalize owner or format target_date if applicable
+    sheet_val = value
+    if field == "owner":
+        sheet_val = normalize_owner_to_sheet_position(value, building)
+    elif field in ("target_date", "created_date"):
+        sheet_val = _format_sheet_date(value)
+
     # 4. Execute Sheets API write
     try:
         ws = _get_worksheet(building)
@@ -325,7 +332,7 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
             return {"status": "failed", "sync_queue_id": sync_id, "error": "Row not found"}
 
         col_idx = get_column_index(building)[field]
-        _retry_on_429(ws.update_cell, row_idx, col_idx, value)
+        _retry_on_429(ws.update_cell, row_idx, col_idx, sheet_val)
 
         # Note: Column E ("Added by") is stored as last_modified_by_at.
         # We do NOT overwrite it on every edit — it records who originally added the task.
@@ -338,12 +345,12 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
         }).eq("id", sync_id).execute()
 
         # Update row_cache
-        _update_cache_field(ref_no, field, value)
+        _update_cache_field(ref_no, field, sheet_val)
 
         # Log to audit
-        _log_audit(ref_no, source, actor, f"Updated {field}", field, old_value, value)
+        _log_audit(ref_no, source, actor, f"Updated {field}", field, old_value, sheet_val)
 
-        logger.info(f"Synced {ref_no}.{field} = '{value}' to Sheet")
+        logger.info(f"Synced {ref_no}.{field} = '{sheet_val}' to Sheet")
         return {"status": "synced", "sync_queue_id": sync_id, "ref_no": ref_no}
 
     except Exception as e:
@@ -352,18 +359,128 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
         return {"status": "failed", "sync_queue_id": sync_id, "error": str(e)}
 
 
+def _format_sheet_date(d_str: str) -> str:
+    """Format date to match Google Sheet DD-Mon-YYYY (e.g. 26-Aug-2026, 09-Sep-2026)."""
+    if not d_str or d_str in ("—", "-", "N/A", "na", "none", "None"):
+        return ""
+    d_clean = d_str.strip()
+    try:
+        from datetime import datetime
+        # Check ISO format YYYY-MM-DD
+        if len(d_clean) == 10 and d_clean[4] == "-" and d_clean[7] == "-":
+            dt = datetime.strptime(d_clean, "%Y-%m-%d")
+            return dt.strftime("%d-%b-%Y")
+
+        # Check if already DD-Mon-YYYY (e.g. 26-Aug-2026 or 09-Sep-2026)
+        if len(d_clean) == 11 and d_clean[2] == "-" and d_clean[6] == "-":
+            return d_clean
+
+        # Fallback to human date parser
+        from core.utils import parse_human_date
+        parsed = parse_human_date(d_clean)
+        if parsed:
+            dt = datetime.strptime(parsed, "%Y-%m-%d")
+            return dt.strftime("%d-%b-%Y")
+    except Exception:
+        pass
+    return d_clean
+
+
+def normalize_owner_to_sheet_position(owner_input: str, building: str = None) -> str:
+    """Ensure the owner string strictly matches one of the Google Sheet dropdown options:
+       'Facility Manager', 'Facility Head', 'Facilities Director'."""
+    if not owner_input:
+        return "Facility Manager"
+
+    clean = owner_input.strip()
+    if clean in ("Facility Manager", "Facility Head", "Facilities Director"):
+        return clean
+    if clean in ("Facility Director", "Director"):
+        return "Facilities Director"
+
+    # Try resolving via owner_resolver
+    try:
+        from facilities.owner_resolver import resolve_user_to_positions
+        positions = resolve_user_to_positions(clean, building)
+        if positions:
+            pos_title = positions[0].get("position_title", "")
+            if "Manager" in pos_title:
+                return "Facility Manager"
+            elif "Head" in pos_title:
+                return "Facility Head"
+            elif "Director" in pos_title:
+                return "Facilities Director"
+    except Exception:
+        pass
+
+    # Keyword fallback
+    lower = clean.lower()
+    if any(w in lower for w in ["head", "anoop"]):
+        return "Facility Head"
+    elif any(w in lower for w in ["director", "kanav", "vidur", "abhijeet"]):
+        return "Facilities Director"
+    elif any(w in lower for w in ["manager", "vikram", "vikash", "fm"]):
+        return "Facility Manager"
+
+    return "Facility Manager"
+
+
+def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list:
+    """Build the row list with the exact column sequence and Delay Days formula for the building tab."""
+    created_date = _format_sheet_date(row_data.get("created_date", ""))
+    target_date = _format_sheet_date(row_data.get("target_date", ""))
+    owner = normalize_owner_to_sheet_position(row_data.get("owner", ""), building)
+    task_type = row_data.get("type", "Project")
+    status = row_data.get("status", "Open")
+
+    if building == "GETT":
+        # GETT layout (9 columns: A to I — NO Added by column):
+        # A: Ref No, B: Type, C: Issue/Action, D: Latest Update,
+        # E: Owner, F: Date Raised, G: Target Date, H: Delay Days, I: Status
+        delay_formula = f'=IF(G{row_idx}="","",IF(I{row_idx}="Closed",0,MAX(0,TODAY()-G{row_idx})))' if row_idx else ""
+        return [
+            row_data.get("ref_no", ""),
+            task_type,
+            row_data.get("issue_action", ""),
+            row_data.get("latest_update", ""),
+            owner,
+            created_date,
+            target_date,
+            delay_formula,  # H: Delay Days formula
+            status,  # I: Status
+        ]
+    else:
+        # GEBB1, GEBB2, Common layout (10 columns: A to J):
+        # A: Ref No, B: Type, C: Issue/Action, D: Latest Update,
+        # E: Added by, F: Owner, G: Date Raised, H: Target Date,
+        # I: Delay Days, J: Status
+        delay_formula = f'=IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))' if row_idx else ""
+        return [
+            row_data.get("ref_no", ""),
+            task_type,
+            row_data.get("issue_action", ""),
+            row_data.get("latest_update", ""),
+            row_data.get("last_modified_by_at", ""),
+            owner,
+            created_date,
+            target_date,
+            delay_formula,  # I: Delay Days formula
+            status,  # J: Status
+        ]
+
+
 def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
     """
     Create a new row on the Sheet and in the local cache.
 
     Flow:
       1. Generate Ref No (atomic, row-locked)
-      2. Append row to Sheet
+      2. Append row to Sheet matching exact tab column schema & Delay Days formula
       3. Insert into row_cache
       4. Log to audit
 
     Args:
-        building: Building code (e.g., 'GEBB1')
+        building: Building code (e.g., 'GEBB1', 'GETT', 'Common')
         task_draft: dict with keys: type, issue_action, owner, target_date, status
         actor: Who created it
 
@@ -374,38 +491,22 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
     ref_no = generate_ref_no(building)
 
     # 2. Build the row
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    modified_str = f"{actor or 'GEI_BOT'} / {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}"
+    now_dt = datetime.now(timezone.utc)
+    now_str = now_dt.strftime("%d-%b-%Y")
+    modified_str = f"{actor or 'GEI_BOT'} / {now_dt.strftime('%Y-%m-%d %H:%M UTC')}"
 
     row_data = {
         "ref_no": ref_no,
         "building": building,
-        "type": task_draft.get("type", ""),
+        "type": task_draft.get("type", "Project"),
         "issue_action": task_draft.get("issue_action", ""),
-        "owner": task_draft.get("owner", ""),
-        "target_date": task_draft.get("target_date", ""),
+        "owner": normalize_owner_to_sheet_position(task_draft.get("owner", ""), building),
+        "target_date": _format_sheet_date(task_draft.get("target_date", "")),
         "status": task_draft.get("status", "Open"),
         "latest_update": task_draft.get("latest_update", ""),
         "created_date": now_str,
         "last_modified_by_at": modified_str,
     }
-
-    # Build Sheet row as a list matching actual column order (A-J):
-    # A: Ref No, B: Type, C: Issue/Action, D: Latest Update,
-    # E: Added by, F: Owner, G: Date Raised, H: Target Date,
-    # I: Delay Days, J: Status
-    sheet_row = [
-        row_data["ref_no"],                # A: Ref. No.
-        row_data["type"],                  # B: Type
-        row_data["issue_action"],           # C: Key Issue / Action
-        row_data["latest_update"],          # D: Latest Update
-        row_data["last_modified_by_at"],    # E: Added by
-        row_data["owner"],                 # F: Owner
-        row_data["created_date"],           # G: Date Raised
-        row_data["target_date"],            # H: Target Date
-        "",                                # I: Delay Days (computed)
-        row_data["status"],                # J: Status
-    ]
 
     # 3. Enqueue and write to Sheet
     idempotency_key = f"create:{ref_no}:{uuid.uuid4().hex[:8]}"
@@ -428,7 +529,16 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
 
     try:
         ws = _get_worksheet(building)
-        _retry_on_429(ws.append_row, sheet_row, value_input_option="USER_ENTERED")
+        col_a = _retry_on_429(ws.col_values, 1)
+        non_empty = [v for v in (col_a or []) if v.strip()]
+        next_row = len(non_empty) + 1
+
+        # Build Sheet row list with exact column sequence and formula for next_row
+        sheet_row = _build_sheet_row(building, row_data, row_idx=next_row)
+
+        end_col = chr(ord('A') + len(sheet_row) - 1)
+        cell_range = f"A{next_row}:{end_col}{next_row}"
+        _retry_on_429(ws.update, cell_range, [sheet_row], value_input_option="USER_ENTERED")
 
         # Mark synced
         supabase.table("sync_queue").update({
@@ -437,7 +547,7 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
         }).eq("idempotency_key", idempotency_key).execute()
 
         sheet_status = "synced"
-        logger.info(f"Created row {ref_no} on Sheet tab {building}")
+        logger.info(f"Created row {ref_no} at row {next_row} on Sheet tab {building}")
 
     except Exception as e:
         logger.error(f"Sheet append_row failed for {ref_no}: {e}")

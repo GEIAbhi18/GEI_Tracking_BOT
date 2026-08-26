@@ -65,22 +65,20 @@ IMPORTANT CONTEXT — OWNER POSITION vs EMPLOYEE NAME:
 The Google Sheet "Owner" column contains POSITION TITLES, not employee names.
 Known positions and their mapped employees:
 - "Facility Head" → Anoop
-- "Facility Manager GEBB1" → Vikramjeet (also known as Vikram)
-- "Facility Manager GEBB2" → Vikramjeet (also known as Vikram)
-- "Facility Manager GETT" → Vikash
-- "Facility Director" → Kanav
+- "Facility Manager" / "Facility Manager GEBB1" / "Facility Manager GEBB2" → Vikramjeet (also known as Vikram)
+- "Facility Manager" / "Facility Manager GETT" → Vikash
+- "Facilities Director" → Kanav (also known as KK, Director)
 
-When users refer to employees by name (e.g., "show Vikash tasks"), extract the employee_name entity.
-When they mention positions directly (e.g., "tasks for Facility Manager"), extract owner.
+When users refer to employees by name (e.g., "created by Kanav", "by kk", "assigned to Anoop"), extract owner = the matching position title (e.g., "Facilities Director", "Facility Head", "Facility Manager") and clean the task description to not duplicate the author attribution if desired.
 
 ENTITY EXTRACTION:
 - building: One of GEBB1, GEBB2, GETT, Common (fuzzy match from aliases like "bay 1" → GEBB1, "tech tower" → GETT)
-- type: One of Electrical, Plumbing, Civil, Housekeeping
-- issue_action: The task description/action to be taken
-- owner: Position name to assign/reassign to (e.g., "Facility Manager GEBB1")
-- employee_name: Person name (e.g., "Vikash", "Vikramjeet", "Anoop", "Kanav")
-- target_date: Due date (parse natural language dates)
-- status: One of Open, WIP, Closed, On Hold, Escalated, or descriptive terms like "pending" (→ Open), "in progress" (→ WIP), "completed" (→ Closed)
+- type: One of: Project, Client Escalation, Management Discussion, Improvement / Initiative, Major Concern, Other
+- issue_action: The task description/action to be taken (e.g. "Test task", "Check AC cooling", "Stack parking civil work")
+- owner: Position name to assign to ("Facilities Director", "Facility Head", "Facility Manager")
+- employee_name: Person name (e.g., "Vikash", "Vikramjeet", "Anoop", "Kanav", "Abhijeet")
+- target_date: Due date (parse natural language dates like "tomorrow", "next Friday" to YYYY-MM-DD)
+- status: One of Open, WIP, On Hold, Closed, or descriptive terms like "pending" (→ Open), "in progress" (→ WIP), "completed" (→ Closed)
 - ref_no: Task reference number (e.g., GEBB1-001, GETT-042)
 - latest_update: Free text update/note about the task
 - overdue: Boolean — true if user is asking about overdue tasks
@@ -93,11 +91,13 @@ IMPORTANT RULES:
 - Extract as many entities as you can from the message
 - If a field is not mentioned, set it to null
 - For dates, normalize to YYYY-MM-DD format
-- For building names, always resolve to the standard code
+- For building names, always resolve to the standard code (GEBB1, GEBB2, GETT, Common)
+- If the user provides a sentence like "Test task created by Kanav" or "dummy task created by kk", extract issue_action = "Test task" (or the full description) and owner = "Facilities Director" (Kanav's position)
 - ref_no must match the pattern BUILDING-NNN
 - If multiple intents are present (e.g., voice note with multiple tasks), return them all in the intents array
 - Set confidence 0.0–1.0 based on how certain you are
 - "Vikram" and "Vikramjeet" are the same person — normalize to "Vikramjeet"
+- "Kanav" and "KK" are the same person — normalize to "Facilities Director"
 - "show overdue" or "overdue tasks" → intent = show_overdue_tasks
 - "show pending tasks" or "show Vikash tasks" → intent = filter_tasks
 - "show overdue tasks in GEBB1" → intent = show_overdue_tasks with building = GEBB1

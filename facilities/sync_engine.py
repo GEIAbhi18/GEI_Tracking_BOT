@@ -119,6 +119,32 @@ def _poll_building_tab(building: str) -> int:
     return changes
 
 
+def _was_recently_synced_by_bot(ref_no: str, field: str = None, window_seconds: int = 300) -> bool:
+    """Check if GEI_BOT recently created or updated this task/field."""
+    try:
+        query = supabase.table("sync_queue").select("id, field, attempted_value, synced_at, created_at").eq("ref_no", ref_no).eq("status", "synced")
+        if field:
+            query = query.in_("field", [field, "_create_row"])
+        res = query.order("created_at", desc=True).limit(5).execute()
+        if not res.data:
+            return False
+
+        for entry in res.data:
+            synced_at = entry.get("synced_at") or entry.get("created_at")
+            if synced_at:
+                try:
+                    sync_time = datetime.fromisoformat(synced_at.replace("Z", "+00:00"))
+                    diff = (datetime.now(timezone.utc) - sync_time).total_seconds()
+                    if diff < window_seconds:
+                        return True
+                except Exception:
+                    pass
+        return False
+    except Exception as e:
+        logger.error(f"Error checking recent bot sync for {ref_no}: {e}")
+        return False
+
+
 def _handle_new_external_row(ref_no: str, row_data: dict, building: str):
     """Handle a row that exists on the Sheet but not in our cache."""
     logger.info(f"New external row detected: {ref_no}")
@@ -140,6 +166,11 @@ def _handle_new_external_row(ref_no: str, row_data: dict, building: str):
         }).execute()
     except Exception as e:
         logger.error(f"Failed to cache new external row {ref_no}: {e}")
+
+    # If created recently by GEI_BOT, suppress external edit notification
+    if _was_recently_synced_by_bot(ref_no, "_create_row"):
+        logger.info(f"Skipping external notification for {ref_no}: created by GEI_BOT")
+        return
 
     # Log to audit
     _log_audit_entry(
@@ -166,6 +197,11 @@ def _handle_field_change(ref_no: str, building: str, field: str,
         supabase.table("row_cache").update(update_data).eq("ref_no", ref_no).execute()
     except Exception as e:
         logger.error(f"Cache update failed for {ref_no}.{field}: {e}")
+
+    # If updated recently by GEI_BOT, suppress external edit notification
+    if _was_recently_synced_by_bot(ref_no, field):
+        logger.info(f"Skipping external notification for {ref_no}.{field}: updated by GEI_BOT")
+        return
 
     # Log to audit
     _log_audit_entry(

@@ -22,17 +22,18 @@ def test_ref_no_format_structure():
 
 
 def test_valid_statuses_and_types():
-    """Verify status and type lists conform to specification."""
+    """Verify status and type lists conform to Google Sheet Lists tab."""
     assert "Open" in VALID_STATUSES
     assert "WIP" in VALID_STATUSES
     assert "Closed" in VALID_STATUSES
     assert "On Hold" in VALID_STATUSES
-    assert "Escalated" in VALID_STATUSES
 
-    assert "Electrical" in VALID_TASK_TYPES
-    assert "Plumbing" in VALID_TASK_TYPES
-    assert "Civil" in VALID_TASK_TYPES
-    assert "Housekeeping" in VALID_TASK_TYPES
+    assert "Project" in VALID_TASK_TYPES
+    assert "Client Escalation" in VALID_TASK_TYPES
+    assert "Management Discussion" in VALID_TASK_TYPES
+    assert "Improvement / Initiative" in VALID_TASK_TYPES
+    assert "Major Concern" in VALID_TASK_TYPES
+    assert "Other" in VALID_TASK_TYPES
 
 
 def test_idempotency_key_format():

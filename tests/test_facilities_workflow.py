@@ -254,3 +254,57 @@ class TestCreateTaskFlowAndDirectorAccess:
             mock_create_bldg.assert_called_once_with("919811867829", "GEBB1", user)
             mock_team_tasks.assert_not_called()
 
+    def test_description_with_employee_name_not_hijacked(self):
+        from facilities.flows.router import route_facilities_message, get_session, set_session, clear_session
+        sender = "919811867829"
+        clear_session(sender)
+        user = {"name": "Kanav", "role": "Director", "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"]}
+        draft = {"building": "GEBB1", "type": "Project", "status": "Open"}
+        set_session(sender, "create_issue", draft=draft, context={"next_action": "create_task"})
+
+        with patch("whatsapp.ux.send_text"):
+            route_facilities_message(sender, text="Test task created by Kanav", user=user)
+            session = get_session(sender)
+            assert session.get("current_flow_state") == "create_target_date"
+            assert session.get("draft_task_json", {}).get("issue_action") == "Test task"
+            assert session.get("draft_task_json", {}).get("owner") == "Facilities Director"
+
+    def test_sheet_row_building_for_all_tabs(self):
+        from facilities.sheets_client import _build_sheet_row
+        from facilities.config import VALID_TASK_TYPES, VALID_STATUSES, VALID_OWNER_POSITIONS
+
+        task_data = {
+            "ref_no": "TEST-001",
+            "type": "Project",
+            "issue_action": "Test task description",
+            "latest_update": "Work in progress",
+            "last_modified_by_at": "Abhijeet / 2026-08-26 10:00 UTC",
+            "owner": "Vikramjeet",
+            "created_date": "2026-08-26",
+            "target_date": "2026-09-15",
+            "status": "Open",
+        }
+
+        # GETT has 9 columns (no Added by)
+        gett_row = _build_sheet_row("GETT", task_data, row_idx=12)
+        assert len(gett_row) == 9
+        assert gett_row[1] in VALID_TASK_TYPES
+        assert gett_row[4] in VALID_OWNER_POSITIONS
+        assert gett_row[5] == "26-Aug-2026"
+        assert gett_row[6] == "15-Sep-2026"
+        assert '=IF(G12="","",IF(I12="Closed",0,MAX(0,TODAY()-G12)))' in gett_row[7]
+        assert gett_row[8] in VALID_STATUSES
+
+        # GEBB1, GEBB2, Common have 10 columns
+        for bldg in ["GEBB1", "GEBB2", "Common"]:
+            row = _build_sheet_row(bldg, task_data, row_idx=12)
+            assert len(row) == 10
+            assert row[1] in VALID_TASK_TYPES
+            assert "Abhijeet" in row[4]
+            assert row[5] in VALID_OWNER_POSITIONS
+            assert row[6] == "26-Aug-2026"
+            assert row[7] == "15-Sep-2026"
+            assert '=IF(H12="","",IF(J12="Closed",0,MAX(0,TODAY()-H12)))' in row[8]
+            assert row[9] in VALID_STATUSES
+
+

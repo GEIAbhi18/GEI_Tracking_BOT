@@ -33,12 +33,35 @@ def generate_ref_no(building: str) -> str:
         RuntimeError: If the RPC call fails or returns no result
     """
     try:
+        from facilities.config import REF_NO_PAD_WIDTH
         result = supabase.rpc("generate_ref_no", {"p_building": building}).execute()
 
         if result.data is None:
             raise RuntimeError(f"generate_ref_no RPC returned None for building '{building}'")
 
         ref_no = result.data
+
+        # Self-healing: Check if this ref_no already exists in row_cache
+        existing = supabase.table("row_cache").select("ref_no").eq("ref_no", ref_no).execute()
+        if existing.data:
+            # Counter in DB is behind existing tasks — advance past highest existing number
+            all_rows = supabase.table("row_cache").select("ref_no").eq("building", building).execute()
+            max_num = 0
+            prefix = "COM" if building == "Common" else building
+            for r in (all_rows.data or []):
+                r_ref = r.get("ref_no", "")
+                if "-" in r_ref:
+                    try:
+                        num = int(r_ref.split("-")[1])
+                        if num > max_num:
+                            max_num = num
+                    except (ValueError, IndexError):
+                        pass
+            next_num = max_num + 1
+            ref_no = f"{prefix}-{str(next_num).zfill(REF_NO_PAD_WIDTH)}"
+            # Update counter in DB so next call continues forward
+            supabase.table("building_counters").update({"next_ref_no": next_num + 1}).eq("building", building).execute()
+
         logger.info(f"Generated Ref No: {ref_no} for building {building}")
         return ref_no
 

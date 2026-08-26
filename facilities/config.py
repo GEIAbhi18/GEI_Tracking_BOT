@@ -161,13 +161,12 @@ WRITABLE_FIELDS = [
 ]
 
 # ── Valid Statuses ───────────────────────────────────────────────────────────
-# These must match the _Config sheet's valid status list
+# These must match the Google Sheet 'Lists' tab valid status list
 VALID_STATUSES = [
     "Open",
     "WIP",
-    "Closed",
     "On Hold",
-    "Escalated",
+    "Closed",
 ]
 
 # Statuses that are considered "closed/completed" — excluded from overdue results
@@ -175,20 +174,29 @@ CLOSED_STATUSES = ["Closed", "Completed", "Done"]
 
 # Status transitions that are always valid
 STATUS_TRANSITIONS = {
-    "Open": ["WIP", "Closed", "On Hold", "Escalated"],
-    "WIP": ["Closed", "On Hold", "Escalated", "Open"],
-    "On Hold": ["Open", "WIP", "Closed", "Escalated"],
-    "Escalated": ["Open", "WIP", "Closed", "On Hold"],
+    "Open": ["WIP", "Closed", "On Hold"],
+    "WIP": ["Closed", "On Hold", "Open"],
+    "On Hold": ["Open", "WIP", "Closed"],
     "Closed": ["Open"],  # Reopening requires explicit confirm
 }
 
 # ── Valid Task Types ─────────────────────────────────────────────────────────
-# These appear as a List Message (4 options) during task creation
+# Exact types from the Google Sheet 'Lists' tab (matches Summary formulas & dropdowns)
 VALID_TASK_TYPES = [
-    "Electrical",
-    "Plumbing",
-    "Civil",
-    "Housekeeping",
+    "Project",
+    "Client Escalation",
+    "Management Discussion",
+    "Improvement / Initiative",
+    "Major Concern",
+    "Other",
+]
+
+# ── Valid Owner Positions ───────────────────────────────────────────────────
+# Exact owner positions allowed in the Google Sheet 'Owner' column dropdown
+VALID_OWNER_POSITIONS = [
+    "Facility Manager",
+    "Facility Head",
+    "Facilities Director",
 ]
 
 # ── RAG Status Mapping ───────────────────────────────────────────────────────
@@ -196,9 +204,8 @@ VALID_TASK_TYPES = [
 RAG_STATUS_MAP = {
     "Open": {"emoji": "🔴", "label": "Open"},
     "WIP": {"emoji": "🟡", "label": "WIP"},
-    "Closed": {"emoji": "🟢", "label": "Closed"},
     "On Hold": {"emoji": "⚪", "label": "On Hold"},
-    "Escalated": {"emoji": "🔴", "label": "Escalated"},
+    "Closed": {"emoji": "🟢", "label": "Closed"},
 }
 
 # ── Ref No Format ────────────────────────────────────────────────────────────
