@@ -193,10 +193,10 @@ def _call_groq(system_prompt: str, user_message: str, json_output: bool = True) 
 
 
 def _call_llm(system_prompt: str, user_message: str, json_output: bool = True) -> str:
-    """Unified LLM caller trying configured LLM_PROVIDER first, then falling back to alternate."""
+    """Unified LLM caller trying Gemini first, then falling back to Groq."""
     providers = ["gemini", "groq"]
-    if LLM_PROVIDER.lower() == "groq":
-        providers = ["groq", "gemini"]
+    if LLM_PROVIDER.lower() == "groq" and GROQCLOUD_API_KEY:
+        providers = ["gemini", "groq"]
 
     last_error = None
     for provider in providers:

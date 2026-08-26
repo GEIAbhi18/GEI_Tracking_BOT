@@ -37,6 +37,21 @@ def prompt_building_filter(sender: str, user: dict, next_action: str = "team_tas
 
 def handle_building_text(sender: str, text: str, user: dict, session: dict):
     """Handle free-text building name input."""
+    clean = text.strip().lower()
+
+    if clean in ("cancel", "exit", "quit", "menu", "home", "start", "reset", "clear"):
+        clear_session(sender)
+        from facilities.flows.home import show_home
+        show_home(sender, user)
+        return
+
+    # If the user typed a command, route it directly
+    if any(clean.startswith(p) for p in ("create ", "new task", "add task", "raise task", "update ", "show ", "view ")):
+        clear_session(sender)
+        from facilities.flows.router import route_facilities_message
+        route_facilities_message(sender, text=text, user=user)
+        return
+
     building = fuzzy_match_building(text)
 
     if building:

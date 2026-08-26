@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 def show_team_tasks(sender: str, building: str, user: dict):
     """Show all tasks for a building (Screen 03)."""
+    from facilities.flows.router import clear_session
+    clear_session(sender)
+
     # Live poll Google Sheet first
     from facilities.sync_engine import poll_sheet_changes
     try:

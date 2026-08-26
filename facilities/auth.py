@@ -37,9 +37,12 @@ def resolve_facilities_user(whatsapp_number: str) -> dict | None:
             return None
 
         user = res.data[0]
+        role = user.get("role", "")
+        department = user.get("department", "")
         user["is_facilities_user"] = (
-            user.get("department") == "Facilities"
-            and bool(user.get("permitted_buildings"))
+            role in ("Director", "Developer")
+            or (department == "Facilities" and bool(user.get("permitted_buildings")))
+            or bool(user.get("permitted_buildings"))
         )
         return user
 

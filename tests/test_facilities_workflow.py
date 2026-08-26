@@ -227,3 +227,30 @@ class TestEnrichmentAndNotifications:
 
         confirm_msg = format_task_update_confirmation(task, "Work completed", "In Progress")
         assert "Task updated successfully" in confirm_msg
+
+
+class TestCreateTaskFlowAndDirectorAccess:
+    def test_director_and_developer_permissions(self):
+        from facilities.auth import get_permitted_buildings, assert_building_access
+        director = {"name": "Kanav", "role": "Director", "permitted_buildings": []}
+        developer = {"name": "Abhijeet", "role": "Developer", "permitted_buildings": []}
+
+        # Both get all buildings
+        assert "GEBB1" in get_permitted_buildings(director)
+        assert "GEBB2" in get_permitted_buildings(director)
+        assert "GETT" in get_permitted_buildings(director)
+        assert assert_building_access(director, "GEBB1") is True
+        assert assert_building_access(developer, "GETT") is True
+
+    def test_handle_building_selection_in_create_flow(self):
+        from facilities.flows.router import _handle_building_selection
+        user = {"name": "Kanav", "role": "Director", "permitted_buildings": ["GEBB1", "GEBB2", "GETT"]}
+        session = {"current_flow_state": "create_building", "context_json": {"next_action": "create_task"}}
+
+        with patch("facilities.flows.create_task.handle_building_selection") as mock_create_bldg, \
+             patch("facilities.flows.team_tasks.show_team_tasks") as mock_team_tasks:
+            _handle_building_selection("919811867829", "GEBB1", user, session)
+            # Must call handle_building_selection in create flow, NOT show_team_tasks!
+            mock_create_bldg.assert_called_once_with("919811867829", "GEBB1", user)
+            mock_team_tasks.assert_not_called()
+

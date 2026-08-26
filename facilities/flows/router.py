@@ -475,6 +475,22 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
 def _route_in_flow_text(sender: str, text: str, user: dict, session: dict):
     """Route text when user is in a multi-step flow."""
     state = session.get("current_flow_state", "")
+    clean = text.strip().lower()
+
+    # If the user wants to cancel or return to menu
+    if clean in ("cancel", "exit", "quit", "menu", "home", "start", "reset", "clear"):
+        clear_session(sender)
+        from facilities.flows.home import show_home
+        show_home(sender, user)
+        return
+
+    # If user sent a top-level command (e.g. "create task...", "show overdue...", "update..."),
+    # break out of selection/filter states to process the new command directly
+    if state in ("building_filter", "completed_tasks_building", "overdue_tasks_building", "create_building"):
+        if any(clean.startswith(p) for p in ("create ", "new task", "add task", "raise task", "update ", "show ", "view ")) or _is_task_filter_query(clean):
+            clear_session(sender)
+            _route_text(sender, text, user, None)
+            return
 
     # Create task flow states
     if state.startswith("create_"):
@@ -581,20 +597,24 @@ def _is_task_filter_query(clean: str) -> bool:
 
 
 def _handle_building_selection(sender: str, building: str, user: dict, session: dict):
-    """Handle a building selection from the filter."""
+    """Handle a building selection from the filter or flow."""
+    state = session.get("current_flow_state", "") if session else ""
     next_action = None
     if session and session.get("context_json"):
         next_action = session["context_json"].get("next_action")
 
-    if next_action == "team_tasks":
-        from facilities.flows.team_tasks import show_team_tasks
-        show_team_tasks(sender, building, user)
-    elif next_action == "create_task":
+    if state.startswith("create_") or next_action == "create_task":
         from facilities.flows.create_task import handle_building_selection
         handle_building_selection(sender, building, user)
-    elif next_action == "overdue_tasks":
+    elif state == "overdue_tasks_building" or next_action == "overdue_tasks":
         from facilities.flows.overdue_tasks import show_overdue_tasks
         show_overdue_tasks(sender, user, building)
+    elif state == "completed_tasks_building" or next_action == "completed_tasks":
+        from facilities.flows.completed_tasks import show_completed_tasks
+        show_completed_tasks(sender, user, building)
+    elif state == "building_filter" or next_action == "team_tasks":
+        from facilities.flows.team_tasks import show_team_tasks
+        show_team_tasks(sender, building, user)
     else:
         from facilities.flows.team_tasks import show_team_tasks
         show_team_tasks(sender, building, user)

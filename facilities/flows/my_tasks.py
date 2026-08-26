@@ -18,6 +18,9 @@ logger = logging.getLogger(__name__)
 
 def show_my_tasks(sender: str, user: dict):
     """Show tasks assigned to the user (via Owner Position mapping), grouped by Building → Type."""
+    from facilities.flows.router import clear_session
+    clear_session(sender)
+
     # Live poll Google Sheet first
     from facilities.sync_engine import poll_sheet_changes
     from facilities.owner_resolver import get_position_titles_for_user

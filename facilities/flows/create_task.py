@@ -36,7 +36,7 @@ def start_create_flow(sender: str, user: dict, prefill: dict = None):
             if prefill.get(key):
                 draft[key] = prefill[key]
 
-    set_session(sender, "create_building", draft=draft)
+    set_session(sender, "create_building", draft=draft, context={"next_action": "create_task"})
 
     # Check what's already filled
     if draft["building"] and draft["type"] and draft["issue_action"]:
@@ -86,9 +86,20 @@ def handle_building_selection(sender: str, building: str, user: dict):
 
     draft = session.get("draft_task_json", {})
     draft["building"] = building
-    set_session(sender, "create_type", draft=draft)
+    set_session(sender, "create_type", draft=draft, context={"next_action": "create_task"})
 
-    _prompt_type(sender, user)
+    # If type and issue_action were already prefilled (e.g. from conversational command), go straight to preview
+    if draft.get("type") and draft.get("issue_action"):
+        _show_draft_preview(sender, draft, user)
+    elif draft.get("type"):
+        set_session(sender, "create_issue", draft=draft, context={"next_action": "create_task"})
+        send_text(
+            sender,
+            f"📝 *Describe the issue/action:*\n\n"
+            f"Type the task description for *{building}*. Be specific about the location and what needs to be done."
+        )
+    else:
+        _prompt_type(sender, user)
 
 
 def _prompt_type(sender: str, user: dict):
@@ -114,7 +125,7 @@ def handle_type_selection(sender: str, task_type: str, user: dict):
 
     draft = session.get("draft_task_json", {})
     draft["type"] = task_type
-    set_session(sender, "create_issue", draft=draft)
+    set_session(sender, "create_issue", draft=draft, context={"next_action": "create_task"})
 
     send_text(
         sender,
@@ -129,20 +140,42 @@ def handle_create_flow_text(sender: str, text: str, user: dict, session: dict):
     draft = session.get("draft_task_json", {})
 
     if state == "create_building":
-        # User typed a building name instead of tapping
+        # Check if user typed a building name
         building = fuzzy_match_building(text)
         if building:
             try:
                 assert_building_access(user, building)
                 draft["building"] = building
-                set_session(sender, "create_type", draft=draft)
+                set_session(sender, "create_type", draft=draft, context={"next_action": "create_task"})
                 _prompt_type(sender, user)
             except PermissionError as e:
                 send_text(sender, f"🚫 {str(e)}")
-        else:
-            # Show "did you mean" (Screen 13)
-            from facilities.flows.building_filter import show_did_you_mean
-            show_did_you_mean(sender, text, user)
+            return
+
+        # If user sent a full task description (e.g. "Create task ..."), extract entities
+        from facilities.llm import extract_intent
+        result = extract_intent(text)
+        if result and result.get("intents"):
+            extracted = result["intents"][0].get("entities", {})
+            for k in ("building", "type", "issue_action", "owner", "target_date"):
+                if extracted.get(k):
+                    draft[k] = extracted[k]
+
+            if draft.get("building") and draft.get("type") and draft.get("issue_action"):
+                _show_draft_preview(sender, draft, user)
+                return
+            elif draft.get("building"):
+                set_session(sender, "create_type", draft=draft, context={"next_action": "create_task"})
+                _prompt_type(sender, user)
+                return
+            else:
+                # Still missing building, prompt again
+                _prompt_building(sender, user)
+                return
+
+        # Show "did you mean" (Screen 13)
+        from facilities.flows.building_filter import show_did_you_mean
+        show_did_you_mean(sender, text, user)
 
     elif state == "create_type":
         # Try to match to a valid type

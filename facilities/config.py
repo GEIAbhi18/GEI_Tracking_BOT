@@ -209,7 +209,7 @@ REF_NO_PAD_WIDTH = 3  # GEBB1-001, GETT-042
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GROQCLOUD_API_KEY = os.getenv("GROQCLOUD_API_KEY", os.getenv("GROQ_API_KEY", ""))
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini")
-FACILITIES_GROQ_MODEL = os.getenv("FACILITIES_GROQ_MODEL", "groq/compound")
+FACILITIES_GROQ_MODEL = os.getenv("FACILITIES_GROQ_MODEL", "llama-3.3-70b-versatile")
 FACILITIES_GEMINI_MODEL = os.getenv("FACILITIES_GEMINI_MODEL", "gemini-2.5-flash")
 
 # ── Supabase Storage ─────────────────────────────────────────────────────────
