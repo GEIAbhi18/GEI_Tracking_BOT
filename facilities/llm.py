@@ -32,9 +32,7 @@ logger = logging.getLogger(__name__)
 
 # ── System Prompts ───────────────────────────────────────────────────────────
 
-FACILITIES_SYSTEM_PROMPT = """You are a Facilities management assistant for Good Earth Infra (GEI).
-You help the Facilities team manage tasks across buildings: GEBB1, GEBB2, GETT, and Common areas.
-
+FACILITIES_SYSTEM_PROMPT_BODY = """
 Your job is to:
 1. Extract the user's INTENT from their message
 2. Extract relevant ENTITIES (building, type, dates, owner, status, ref_no, employee_name, etc.)
@@ -72,7 +70,7 @@ Known positions and their mapped employees:
 When users refer to employees by name (e.g., "created by Kanav", "by kk", "assigned to Anoop"), extract owner = the matching position title (e.g., "Facilities Director", "Facility Head", "Facility Manager") and clean the task description to not duplicate the author attribution if desired.
 
 ENTITY EXTRACTION:
-- building: One of GEBB1, GEBB2, GETT, Common (fuzzy match from aliases like "bay 1" → GEBB1, "tech tower" → GETT)
+- building: One of GEBB1, GEBB2, GETT, Common (fuzzy match from aliases like "bay 1" → GEBB1, "tech tower" or "getting" → GETT)
 - type: One of: Project, Client Escalation, Management Discussion, Improvement / Initiative, Major Concern, Other
 - issue_action: The task description/action to be taken (e.g. "Test task", "Check AC cooling", "Stack parking civil work")
 - owner: Position name to assign to ("Facilities Director", "Facility Head", "Facility Manager")
@@ -90,8 +88,8 @@ ENTITY EXTRACTION:
 IMPORTANT RULES:
 - Extract as many entities as you can from the message
 - If a field is not mentioned, set it to null
-- For dates, normalize to YYYY-MM-DD format
-- For building names, always resolve to the standard code (GEBB1, GEBB2, GETT, Common)
+- For dates, normalize to YYYY-MM-DD format strictly relative to the CURRENT SYSTEM DATE provided above
+- For building names, always resolve to the standard code (GEBB1, GEBB2, GETT, Common). If user says "getting" or "tech tower", resolve to GETT
 - If the user provides a sentence like "Test task created by Kanav" or "dummy task created by kk", extract issue_action = "Test task" (or the full description) and owner = "Facilities Director" (Kanav's position)
 - ref_no must match the pattern BUILDING-NNN
 - If multiple intents are present (e.g., voice note with multiple tasks), return them all in the intents array
@@ -128,6 +126,28 @@ OUTPUT FORMAT (JSON only):
   ]
 }
 """
+
+
+def _get_facilities_system_prompt() -> str:
+    """Build system prompt injecting the exact current date/year."""
+    from datetime import datetime
+    now_dt = datetime.now()
+    today_str = now_dt.strftime("%A, %d-%b-%Y")
+    today_iso = now_dt.strftime("%Y-%m-%d")
+    current_year = now_dt.year
+    return f"""You are a Facilities management assistant for Good Earth Infra (GEI).
+You help the Facilities team manage tasks across buildings: GEBB1, GEBB2, GETT, and Common areas.
+
+CURRENT SYSTEM DATE & TIME:
+- Today is: {today_str} (ISO: {today_iso})
+- Current Year: {current_year}
+- All relative dates ("today", "tomorrow", "next Monday", "in 3 days", "this Friday") MUST be calculated strictly relative to TODAY ({today_iso}).
+- Never use past years like 2024 or 2025.
+
+{FACILITIES_SYSTEM_PROMPT_BODY}"""
+
+
+FACILITIES_SYSTEM_PROMPT = _get_facilities_system_prompt()
 
 REPLY_SYSTEM_PROMPT = """You are GEI Facilities Bot — a professional, friendly WhatsApp assistant
 for the Good Earth Infra Facilities team.
@@ -223,10 +243,34 @@ def extract_intent(message: str, context: dict = None) -> dict:
         if context:
             user_msg = f"Context: {json.dumps(context)}\n\nUser message: {message}"
 
-        content = _call_llm(FACILITIES_SYSTEM_PROMPT, user_msg, json_output=True)
+        system_prompt = _get_facilities_system_prompt()
+        content = _call_llm(system_prompt, user_msg, json_output=True)
         result = _parse_json_response(content)
 
         if result and "intents" in result:
+            # Post-process and sanitize dates against current date
+            from datetime import datetime
+            from core.utils import parse_human_date
+            today = datetime.now()
+            for item in result.get("intents", []):
+                entities = item.get("entities", {})
+                td = entities.get("target_date")
+                if td:
+                    td_str = str(td).strip()
+                    try:
+                        # If year is in the past or date is invalid, re-parse from user message
+                        if len(td_str) >= 4 and int(td_str[:4]) < today.year:
+                            reparsed = parse_human_date(message)
+                            if reparsed:
+                                entities["target_date"] = reparsed
+                    except Exception:
+                        pass
+                else:
+                    # If LLM missed date but user text has a date keyword
+                    reparsed = parse_human_date(message)
+                    if reparsed:
+                        entities["target_date"] = reparsed
+
             return result
 
         return {"intents": [{"intent": "unknown", "confidence": 0.0, "entities": {}}]}

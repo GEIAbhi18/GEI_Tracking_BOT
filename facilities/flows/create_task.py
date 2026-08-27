@@ -21,11 +21,12 @@ logger = logging.getLogger(__name__)
 
 def start_create_flow(sender: str, user: dict, prefill: dict = None):
     """Start the task creation flow. Pre-fill from LLM extraction if available."""
+    from facilities.sheets_client import _format_sheet_date, normalize_owner_to_sheet_position
     draft = {
         "building": None,
         "type": None,
         "issue_action": None,
-        "owner": user.get("name"),
+        "owner": normalize_owner_to_sheet_position(user.get("role", "") or user.get("name", "")),
         "target_date": None,
         "status": "Open",
     }
@@ -35,6 +36,10 @@ def start_create_flow(sender: str, user: dict, prefill: dict = None):
         for key in draft:
             if prefill.get(key):
                 draft[key] = prefill[key]
+        if draft.get("target_date"):
+            draft["target_date"] = _format_sheet_date(str(draft["target_date"]))
+        if draft.get("owner"):
+            draft["owner"] = normalize_owner_to_sheet_position(str(draft["owner"]), draft.get("building"))
 
     set_session(sender, "create_building", draft=draft, context={"next_action": "create_task"})
 
@@ -341,6 +346,8 @@ def _check_and_show_preview(sender: str, draft: dict, user: dict,
             return
 
     # No duplicate — show preview
+    from facilities.sheets_client import _format_sheet_date
+    target_date_disp = _format_sheet_date(draft.get('target_date', '')) or draft.get('target_date') or '—'
     preview = (
         f"📝 *Task Draft — Review*\n"
         f"{'─' * 25}\n\n"
@@ -348,7 +355,7 @@ def _check_and_show_preview(sender: str, draft: dict, user: dict,
         f"📁 *Type:* {draft.get('type', '—')}\n"
         f"🔧 *Issue/Action:* {draft.get('issue_action', '—')}\n"
         f"👤 *Owner:* {draft.get('owner', '—')}\n"
-        f"📅 *Target Date:* {draft.get('target_date', '—')}\n"
+        f"📅 *Target Date:* {target_date_disp}\n"
         f"🔴 *Status:* Open\n\n"
         f"Please confirm to create this task."
     )
