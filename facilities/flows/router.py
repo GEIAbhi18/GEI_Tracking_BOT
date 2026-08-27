@@ -319,6 +319,54 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         show_home(sender, user)
 
 
+def _try_parse_direct_task_update(text: str) -> dict:
+    """Check if the text is a direct task status or note update command with a Ref No."""
+    import re
+    clean = text.strip()
+
+    # Match Pattern 1: (mark/set/update) REF (as/to) STATUS (: note)
+    m = re.search(
+        r'\b(?:mark|set|update|change)?\s*(GEBB1|GEBB2|GETT|COM|COMMON)[-\s]?(\d{1,4})\s+(?:as\s+|to\s+|status\s+to\s+)?(open|wip|in\s*progress|closed|complete|completed|done|on\s*hold|escalate|escalated)\b(?:\s*[:\-–—,]\s*(.*))?',
+        clean,
+        re.IGNORECASE
+    )
+    if m:
+        bldg_code = m.group(1).upper()
+        if bldg_code == "COMMON":
+            bldg_code = "COM"
+        num = int(m.group(2))
+        ref_no = f"{bldg_code}-{num:03d}" if bldg_code != "COM" else f"COM-{num:03d}"
+        raw_status = m.group(3).lower()
+        note = m.group(4).strip() if m.group(4) else ""
+
+        status_map = {
+            "open": "Open", "wip": "WIP", "in progress": "WIP", "inprogress": "WIP",
+            "closed": "Closed", "complete": "Closed", "completed": "Closed", "done": "Closed",
+            "on hold": "On Hold", "onhold": "On Hold", "escalate": "Open", "escalated": "Open",
+        }
+        status = status_map.get(raw_status, "Open")
+        return {"ref_no": ref_no, "status": status, "latest_update": note}
+
+    # Match Pattern 2: (close/reopen/complete) REF (: note)
+    m_verb = re.search(
+        r'\b(close|reopen|complete)\s+(GEBB1|GEBB2|GETT|COM|COMMON)[-\s]?(\d{1,4})\b(?:\s*[:\-–—,]\s*(.*))?',
+        clean,
+        re.IGNORECASE
+    )
+    if m_verb:
+        verb = m_verb.group(1).lower()
+        bldg_code = m_verb.group(2).upper()
+        if bldg_code == "COMMON":
+            bldg_code = "COM"
+        num = int(m_verb.group(3))
+        ref_no = f"{bldg_code}-{num:03d}" if bldg_code != "COM" else f"COM-{num:03d}"
+        note = m_verb.group(4).strip() if m_verb.group(4) else ""
+        status = "Closed" if verb in ("close", "complete") else "Open"
+        return {"ref_no": ref_no, "status": status, "latest_update": note}
+
+    return None
+
+
 def _route_text(sender: str, text: str, user: dict, session: dict):
     """Route free-text messages."""
     clean = text.strip().lower()
@@ -330,7 +378,14 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
         show_home(sender, user)
         return
 
-    # 2. Check if user is in an active text-entry multi-step flow state
+    # 2. Direct Task Update (e.g. "Mark GETT-013 as closed", "Close GETT-006") - 0-latency instant match
+    direct_update = _try_parse_direct_task_update(text)
+    if direct_update:
+        from facilities.flows.update_task import start_update_flow
+        start_update_flow(sender, direct_update["ref_no"], user, prefill=direct_update)
+        return
+
+    # 3. Check if user is in an active text-entry multi-step flow state
     state = session.get("current_flow_state", "") if session else ""
     ACTIVE_INPUT_STATES = (
         "create_issue", "create_target_date", "create_owner", "create_preview",
@@ -345,7 +400,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
     if state in ("create_building", "create_type", "update_status",
                  "building_filter", "completed_tasks_building", "overdue_tasks_building"):
         # If user typed an explicit top-level command, break out of the selection state
-        if any(clean.startswith(p) for p in ("create ", "new task", "add task", "raise task", "update ", "show ", "view ")) or _is_task_filter_query(clean):
+        if any(clean.startswith(p) for p in ("create ", "new task", "add task", "raise task", "update ", "show ", "view ", "mark ", "close ")) or _is_task_filter_query(clean):
             clear_session(sender)
             # Proceed to top-level intent/filter routing below
         else:
@@ -591,8 +646,13 @@ def _route_voice(sender: str, transcript: str, user: dict, session: dict):
 
 def _is_task_filter_query(clean: str) -> bool:
     """Check if free text is a task filter query."""
+    import re
     # Never treat creation or update phrases as filter queries!
-    if any(clean.startswith(p) for p in ("create ", "new ", "add ", "raise ", "update ", "change ", "edit ", "reassign ", "attach ")):
+    if any(clean.startswith(p) for p in ("create ", "new ", "add ", "raise ", "update ", "change ", "edit ", "reassign ", "attach ", "mark ", "close ", "set ", "reopen ")):
+        return False
+
+    # If message contains a specific task Ref No (e.g. GETT-013, GEBB1-002), it is an update or view, not a filter query!
+    if re.search(r'\b(GEBB1|GEBB2|GETT|COM|COMMON)[-\s]?\d{1,4}\b', clean, re.IGNORECASE):
         return False
 
     has_filter_keyword = any(w in clean for w in ["task", "tasks", "show", "view", "list", "what", "which", "filter", "find", "get", "assigned"])

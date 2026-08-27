@@ -426,48 +426,38 @@ def normalize_owner_to_sheet_position(owner_input: str, building: str = None) ->
 
 
 def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list:
-    """Build the row list with the exact column sequence and Delay Days formula for the building tab."""
+    """
+    Build a list of cell values for a sheet row conforming to the exact 10-column schema:
+      Col A: Ref. No.
+      Col B: Type
+      Col C: Key Issue / Action
+      Col D: Latest Update
+      Col E: Added By (Clean name only, e.g. Abhijeet, Kanav, Facility Head)
+      Col F: Owner (Exact dropdown role, e.g. Facility Manager, Facility Head)
+      Col G: Date Raised (DD-Mon-YYYY)
+      Col H: Target Date (DD-Mon-YYYY)
+      Col I: Delay Days formula =IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))
+      Col J: Status (Open, WIP, Closed, On Hold)
+    """
     created_date = _format_sheet_date(row_data.get("created_date", ""))
     target_date = _format_sheet_date(row_data.get("target_date", ""))
     owner = normalize_owner_to_sheet_position(row_data.get("owner", ""), building)
     task_type = row_data.get("type", "Project")
     status = row_data.get("status", "Open")
-
-    if building == "GETT":
-        # GETT layout (9 columns: A to I — NO Added by column):
-        # A: Ref No, B: Type, C: Issue/Action, D: Latest Update,
-        # E: Owner, F: Date Raised, G: Target Date, H: Delay Days, I: Status
-        delay_formula = f'=IF(G{row_idx}="","",IF(I{row_idx}="Closed",0,MAX(0,TODAY()-G{row_idx})))' if row_idx else ""
-        return [
-            row_data.get("ref_no", ""),
-            task_type,
-            row_data.get("issue_action", ""),
-            row_data.get("latest_update", ""),
-            owner,
-            created_date,
-            target_date,
-            delay_formula,  # H: Delay Days formula
-            status,  # I: Status
-        ]
-    else:
-        # GEBB1, GEBB2, Common layout (10 columns: A to J):
-        # A: Ref No, B: Type, C: Issue/Action, D: Latest Update,
-        # E: Added by, F: Owner, G: Date Raised, H: Target Date,
-        # I: Delay Days, J: Status
-        delay_formula = f'=IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))' if row_idx else ""
-        added_by = row_data.get("added_by") or (row_data.get("last_modified_by_at", "").split(" / ")[0] if row_data.get("last_modified_by_at") else "GEI_BOT")
-        return [
-            row_data.get("ref_no", ""),
-            task_type,
-            row_data.get("issue_action", ""),
-            row_data.get("latest_update", ""),
-            added_by,  # E: Added by (clean name only, e.g. Abhijeet, Facility Head)
-            owner,
-            created_date,
-            target_date,
-            delay_formula,  # I: Delay Days formula
-            status,  # J: Status
-        ]
+    delay_formula = f'=IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))' if row_idx else ""
+    added_by = row_data.get("added_by") or (row_data.get("last_modified_by_at", "").split(" / ")[0] if row_data.get("last_modified_by_at") else "GEI_BOT")
+    return [
+        row_data.get("ref_no", ""),
+        task_type,
+        row_data.get("issue_action", ""),
+        row_data.get("latest_update", ""),
+        added_by,  # E: Added by (clean name only, e.g. Abhijeet, Facility Head)
+        owner,     # F: Owner
+        created_date,  # G: Date Raised
+        target_date,   # H: Target Date
+        delay_formula, # I: Delay Days formula
+        status,        # J: Status
+    ]
 
 
 def create_row(building: str, task_draft: dict, actor: str = None) -> dict:

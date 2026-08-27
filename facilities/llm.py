@@ -179,7 +179,7 @@ def _call_gemini(system_prompt: str, user_message: str, json_output: bool = True
     if json_output:
         payload["generationConfig"] = {"response_mime_type": "application/json"}
 
-    r = requests.post(url, json=payload, timeout=12)
+    r = requests.post(url, json=payload, timeout=10)
     r.raise_for_status()
     data = r.json()
     return data['candidates'][0]['content']['parts'][0]['text']
@@ -206,16 +206,17 @@ def _call_groq(system_prompt: str, user_message: str, json_output: bool = True) 
     if json_output:
         payload["response_format"] = {"type": "json_object"}
 
-    r = requests.post(url, headers=headers, json=payload, timeout=12)
+    r = requests.post(url, headers=headers, json=payload, timeout=8)
     r.raise_for_status()
     data = r.json()
     return data['choices'][0]['message']['content']
 
 
 def _call_llm(system_prompt: str, user_message: str, json_output: bool = True) -> str:
-    """Unified LLM caller trying Gemini first, then falling back to Groq."""
-    providers = ["gemini", "groq"]
-    if LLM_PROVIDER.lower() == "groq" and GROQCLOUD_API_KEY:
+    """Unified LLM caller prioritizing Groq for ultra-fast response, falling back to Gemini."""
+    if GROQCLOUD_API_KEY:
+        providers = ["groq", "gemini"]
+    else:
         providers = ["gemini", "groq"]
 
     last_error = None

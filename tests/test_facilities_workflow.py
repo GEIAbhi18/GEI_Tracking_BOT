@@ -300,18 +300,8 @@ class TestCreateTaskFlowAndDirectorAccess:
             "status": "Open",
         }
 
-        # GETT has 9 columns (no Added by)
-        gett_row = _build_sheet_row("GETT", task_data, row_idx=12)
-        assert len(gett_row) == 9
-        assert gett_row[1] in VALID_TASK_TYPES
-        assert gett_row[4] in VALID_OWNER_POSITIONS
-        assert gett_row[5] == "26-Aug-2026"
-        assert gett_row[6] == "15-Sep-2026"
-        assert '=IF(G12="","",IF(I12="Closed",0,MAX(0,TODAY()-G12)))' in gett_row[7]
-        assert gett_row[8] in VALID_STATUSES
-
-        # GEBB1, GEBB2, Common have 10 columns
-        for bldg in ["GEBB1", "GEBB2", "Common"]:
+        # All building tabs (GETT, GEBB1, GEBB2, Common) now have 10 columns
+        for bldg in ["GETT", "GEBB1", "GEBB2", "Common"]:
             row = _build_sheet_row(bldg, task_data, row_idx=12)
             assert len(row) == 10
             assert row[1] in VALID_TASK_TYPES
@@ -321,5 +311,38 @@ class TestCreateTaskFlowAndDirectorAccess:
             assert row[7] == "15-Sep-2026"
             assert '=IF(H12="","",IF(J12="Closed",0,MAX(0,TODAY()-H12)))' in row[8]
             assert row[9] in VALID_STATUSES
+
+    def test_direct_task_update_mark_as_closed(self):
+        from facilities.flows.router import route_facilities_message
+        user = {
+            "name": "Abhijeet",
+            "role": "Developer",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True
+        }
+        sender = "917717754421"
+        mock_task = {
+            "ref_no": "GETT-013",
+            "building": "GETT",
+            "type": "Project",
+            "issue_action": "dummy test task",
+            "owner": "Facility Manager",
+            "status": "Open",
+            "latest_update": ""
+        }
+
+        with patch("facilities.flows.router.resolve_facilities_user", return_value=user), \
+             patch("facilities.flows.update_task.read_row", return_value=mock_task), \
+             patch("facilities.flows.update_task.send_interactive_buttons") as mock_btn, \
+             patch("facilities.flows.router.get_session", return_value=None), \
+             patch("facilities.flows.router.set_session"), \
+             patch("facilities.flows.update_task.set_session"):
+            route_facilities_message(sender, text="Mark gett-013 as closed", user=user)
+            assert mock_btn.called
+            msg_text = mock_btn.call_args[0][1]
+            assert "GETT-013" in msg_text
+            assert "Open → 🟢 Closed" in msg_text
+            buttons = mock_btn.call_args[0][2]
+            assert buttons[0]["id"] == "fac_confirm_update"
 
 

@@ -70,28 +70,17 @@ BUILDING_ALIASES = {
 }
 
 # ── Column Mapping ───────────────────────────────────────────────────────────
-# Maps the Sheet column letters to internal field names.
-#
-# GEBB1, GEBB2, Common layout (10 columns A-J):
+# All building tabs (GEBB1, GEBB2, GETT, Common) share the exact same 10 columns (A to J):
 #   A: Ref. No.   B: Type   C: Key Issue / Action   D: Latest Update
-#   E: Added by   F: Owner  G: Date Raised          H: Target Date
+#   E: Added By   F: Owner  G: Date Raised          H: Target Date
 #   I: Delay Days J: Status
-#
-# GETT layout (9 columns A-I — no "Added by" column):
-#   A: Ref. No.   B: Type   C: Key Issue / Action   D: Latest Update
-#   E: Owner      F: Date Raised   G: Target Date   H: Delay Days
-#   I: Status
-#
-# NOTE: "building" is derived from the tab name, not a column.
-# "created_date" stores Date Raised and "last_modified_by_at" stores Added by.
 
-# Default column map (GEBB1, GEBB2, Common)
 COLUMN_MAP = {
     "A": "ref_no",
     "B": "type",
     "C": "issue_action",
     "D": "latest_update",
-    "E": "last_modified_by_at",   # "Added by" on the sheet
+    "E": "last_modified_by_at",   # "Added By" on the sheet
     "F": "owner",
     "G": "created_date",          # "Date Raised" on the sheet
     "H": "target_date",
@@ -99,35 +88,20 @@ COLUMN_MAP = {
     "J": "status",
 }
 
-# GETT has a different layout (no "Added by" column)
-COLUMN_MAP_GETT = {
-    "A": "ref_no",
-    "B": "type",
-    "C": "issue_action",
-    "D": "latest_update",
-    "E": "owner",                 # GETT has Owner in col E (no Added by)
-    "F": "created_date",          # "Date Raised"
-    "G": "target_date",
-    "H": "delay_days",
-    "I": "status",
-}
-
-def get_column_map(building: str) -> dict:
-    """Get the column map for a specific building tab."""
-    if building == "GETT":
-        return COLUMN_MAP_GETT
+def get_column_map(building: str = None) -> dict:
+    """Get the column map for a building tab (uniform across all tabs)."""
     return COLUMN_MAP
 
-# Reverse mapping: field name → column letter (default layout)
+# Reverse mapping: field name → column letter
 FIELD_TO_COLUMN = {v: k for k, v in COLUMN_MAP.items()}
 
-# Column indices (1-based, for gspread) — default layout (GEBB1/GEBB2/Common)
+# Column indices (1-based, for gspread)
 COLUMN_INDEX = {
     "ref_no": 1,
     "type": 2,
     "issue_action": 3,
     "latest_update": 4,
-    "last_modified_by_at": 5,   # "Added by"
+    "last_modified_by_at": 5,   # "Added By"
     "owner": 6,
     "created_date": 7,          # "Date Raised"
     "target_date": 8,
@@ -135,23 +109,8 @@ COLUMN_INDEX = {
     "status": 10,
 }
 
-# GETT column indices
-COLUMN_INDEX_GETT = {
-    "ref_no": 1,
-    "type": 2,
-    "issue_action": 3,
-    "latest_update": 4,
-    "owner": 5,
-    "created_date": 6,          # "Date Raised"
-    "target_date": 7,
-    "delay_days": 8,
-    "status": 9,
-}
-
-def get_column_index(building: str) -> dict:
-    """Get the column index mapping for a specific building tab."""
-    if building == "GETT":
-        return COLUMN_INDEX_GETT
+def get_column_index(building: str = None) -> dict:
+    """Get the column index mapping for a building tab (uniform across all tabs)."""
     return COLUMN_INDEX
 
 # Fields that are writable from GEI_BOT (read-only fields excluded)
