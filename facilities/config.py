@@ -49,21 +49,39 @@ CONFLICT_WINDOW_SECONDS = int(os.getenv("FACILITIES_CONFLICT_WINDOW", "60"))
 # Exact tab names on the Google Sheet (must match the sheet exactly)
 BUILDING_TABS = ["GEBB1", "GEBB2", "GETT", "Common"]
 
-# For fuzzy matching when users type building names in free text
+# For fuzzy matching when users type building names in free text.
+# Also used by alias_normalizer for voice-transcript normalization.
 BUILDING_ALIASES = {
+    # ── GEBB1 ────────────────────────────────────────────────────────────
     "gebb1": "GEBB1",
     "gebb 1": "GEBB1",
     "bay 1": "GEBB1",
     "bay1": "GEBB1",
+    "bay one": "GEBB1",
+    "business bay 1": "GEBB1",
+    "business bay one": "GEBB1",
     "good earth business bay 1": "GEBB1",
+    "good earth business bay one": "GEBB1",
+    # ── GEBB2 ────────────────────────────────────────────────────────────
     "gebb2": "GEBB2",
     "gebb 2": "GEBB2",
     "bay 2": "GEBB2",
     "bay2": "GEBB2",
+    "bay two": "GEBB2",
+    "business bay 2": "GEBB2",
+    "business bay two": "GEBB2",
     "good earth business bay 2": "GEBB2",
+    "good earth business bay two": "GEBB2",
+    # ── GETT ─────────────────────────────────────────────────────────────
     "gett": "GETT",
     "tech tower": "GETT",
+    "trade tower": "GETT",
+    "trade tower building": "GETT",
     "good earth tech tower": "GETT",
+    "good earth trade tower": "GETT",
+    "getting": "GETT",              # common STT misheard variant
+    "get tower": "GETT",            # common STT misheard variant
+    # ── Common ───────────────────────────────────────────────────────────
     "common": "Common",
     "common area": "Common",
     "common areas": "Common",

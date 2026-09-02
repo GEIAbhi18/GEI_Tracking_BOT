@@ -34,7 +34,9 @@ def show_my_tasks(sender: str, user: dict):
     user_name = user.get("name", "")
 
     # Get user's owner position titles
+    from facilities.owner_resolver import normalize_position_title
     user_positions = [p.lower() for p in get_position_titles_for_user(user_name)]
+    norm_positions = [normalize_position_title(p) for p in user_positions]
 
     # Get all tasks across permitted buildings
     raw_tasks = []
@@ -45,14 +47,29 @@ def show_my_tasks(sender: str, user: dict):
     tasks = []
     for task in raw_tasks:
         enrich_task_with_responsible(task)
-        owner = (task.get("owner") or "").strip().lower()
+        owner = (task.get("owner") or "").strip()
+        owner_norm = normalize_position_title(owner)
+        resp_user = (task.get("responsible_user") or "").strip()
+
+        is_match = False
         if user_positions:
-            if owner in user_positions or task.get("responsible_user", "").lower() == user_name.lower():
-                tasks.append(task)
+            if (
+                owner.lower() in user_positions
+                or owner_norm in norm_positions
+                or (resp_user and resp_user.lower() == user_name.lower())
+                or (user_name and owner.lower() == user_name.lower())
+            ):
+                is_match = True
         elif user_name:
-            if owner == user_name.lower() or task.get("responsible_user", "").lower() == user_name.lower():
-                tasks.append(task)
+            if (
+                owner.lower() == user_name.lower()
+                or (resp_user and resp_user.lower() == user_name.lower())
+            ):
+                is_match = True
         else:
+            is_match = True
+
+        if is_match:
             tasks.append(task)
 
     # If no specific tasks found and user is Director/Developer, fallback to showing all permitted

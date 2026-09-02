@@ -320,6 +320,10 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
     sheet_val = value
     if field == "owner":
         sheet_val = normalize_owner_to_sheet_position(value, building)
+    elif field in ("last_modified_by_at", "added_by"):
+        sheet_val = normalize_added_by(value)
+        if " / " in sheet_val:
+            sheet_val = sheet_val.split(" / ")[0].strip()
     elif field in ("target_date", "created_date"):
         sheet_val = _format_sheet_date(value)
 
@@ -425,6 +429,41 @@ def normalize_owner_to_sheet_position(owner_input: str, building: str = None) ->
     return "Facility Manager"
 
 
+def normalize_added_by(actor_input: str = None) -> str:
+    """Ensure the Added By value strictly matches Google Sheet requirements:
+       Whenever Kanav creates a task, it must always show 'Facilities Director'."""
+    if not actor_input:
+        return "GEI_BOT"
+
+    clean = actor_input.strip()
+    if not clean:
+        return "GEI_BOT"
+
+    # If it's a compound string with timestamp (e.g. "Kanav / 2026-08-31 09:40 UTC")
+    if " / " in clean:
+        actor_part = clean.split(" / ")[0].strip()
+        time_part = clean.split(" / ", 1)[1].strip()
+        norm_actor = normalize_added_by(actor_part)
+        return f"{norm_actor} / {time_part}"
+
+    lower = clean.lower()
+    if lower in ("kanav", "kk", "director", "facility director", "facilities director") or "kanav" in lower:
+        return "Facilities Director"
+
+    # Try resolving via owner_resolver
+    try:
+        from facilities.owner_resolver import resolve_user_to_positions
+        positions = resolve_user_to_positions(clean)
+        if positions:
+            pos_title = positions[0].get("position_title", "")
+            if "Director" in pos_title:
+                return "Facilities Director"
+    except Exception:
+        pass
+
+    return clean
+
+
 def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list:
     """
     Build a list of cell values for a sheet row conforming to the exact 10-column schema:
@@ -432,8 +471,8 @@ def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list
       Col B: Type
       Col C: Key Issue / Action
       Col D: Latest Update
-      Col E: Added By (Clean name only, e.g. Abhijeet, Kanav, Facility Head)
-      Col F: Owner (Exact dropdown role, e.g. Facility Manager, Facility Head)
+      Col E: Added By (Clean name/position only, e.g. Facilities Director, Facility Head)
+      Col F: Owner (Exact dropdown role, e.g. Facility Manager, Facility Head, Facilities Director)
       Col G: Date Raised (DD-Mon-YYYY)
       Col H: Target Date (DD-Mon-YYYY)
       Col I: Delay Days formula =IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))
@@ -445,13 +484,16 @@ def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list
     task_type = row_data.get("type", "Project")
     status = row_data.get("status", "Open")
     delay_formula = f'=IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))' if row_idx else ""
-    added_by = row_data.get("added_by") or (row_data.get("last_modified_by_at", "").split(" / ")[0] if row_data.get("last_modified_by_at") else "GEI_BOT")
+    raw_added_by = row_data.get("added_by") or (row_data.get("last_modified_by_at", "").split(" / ")[0] if row_data.get("last_modified_by_at") else "GEI_BOT")
+    added_by = normalize_added_by(raw_added_by)
+    if " / " in added_by:
+        added_by = added_by.split(" / ")[0].strip()
     return [
         row_data.get("ref_no", ""),
         task_type,
         row_data.get("issue_action", ""),
         row_data.get("latest_update", ""),
-        added_by,  # E: Added by (clean name only, e.g. Abhijeet, Facility Head)
+        added_by,  # E: Added by (clean name only, e.g. Facilities Director, Facility Head)
         owner,     # F: Owner
         created_date,  # G: Date Raised
         target_date,   # H: Target Date
@@ -484,7 +526,9 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
     # 2. Build the row
     now_dt = datetime.now(timezone.utc)
     now_str = now_dt.strftime("%d-%b-%Y")
-    actor_clean = actor or "GEI_BOT"
+    actor_clean = normalize_added_by(actor or "GEI_BOT")
+    if " / " in actor_clean:
+        actor_clean = actor_clean.split(" / ")[0].strip()
     modified_str = f"{actor_clean} / {now_dt.strftime('%Y-%m-%d %H:%M UTC')}"
 
     row_data = {

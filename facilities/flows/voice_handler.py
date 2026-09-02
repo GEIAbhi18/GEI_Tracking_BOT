@@ -10,17 +10,37 @@ import logging
 
 from whatsapp.ux import send_text, send_interactive_buttons
 from facilities.llm import extract_voice_operations
+from facilities.alias_normalizer import normalize_building_aliases
 from facilities.flows.router import get_session, set_session, clear_session
 
 logger = logging.getLogger(__name__)
+
+# Words/phrases treated as trivial (not worth offering an action menu)
+_TRIVIAL_WORDS = frozenset({
+    "hi", "hello", "hey", "ok", "okay", "yes", "no", "test",
+    "testing", "thanks", "thank", "bye", "good", "fine",
+    "hmm", "hm", "um", "uh", "ah",
+})
 
 # Confidence threshold below which we ask for clarification
 LOW_CONFIDENCE_THRESHOLD = 0.65
 
 
+def _is_trivial_transcript(text: str) -> bool:
+    """Return True if transcript is too short or just a greeting/noise."""
+    words = text.strip().split()
+    if len(words) < 3:
+        return True
+    # If every word is in the trivial set, it's noise
+    return all(w.lower().strip(".,!?'\"") in _TRIVIAL_WORDS for w in words)
+
+
 def handle_voice_note(sender: str, transcript: str, user: dict):
     """Process a voice note transcription."""
     send_text(sender, "🎙️ *Processing voice note...*")
+
+    # Normalize building aliases before extraction
+    transcript = normalize_building_aliases(transcript)
 
     # Extract operations from transcript
     result = extract_voice_operations(transcript)
@@ -30,13 +50,17 @@ def handle_voice_note(sender: str, transcript: str, user: dict):
     raw = result.get("raw_transcript", transcript)
 
     if not operations:
-        send_text(
-            sender,
-            f"🎙️ *Voice Note Received*\n\n"
-            f"📝 _\"{raw}\"_\n\n"
-            f"I couldn't identify any task operations from this voice note.\n"
-            f"Please try again or type your request."
-        )
+        # Decide: trivial → discard message; substantial → action menu
+        if _is_trivial_transcript(raw):
+            send_text(
+                sender,
+                f"🎙️ *Voice Note Received*\n\n"
+                f"📝 _\"{raw}\"_\n\n"
+                f"I couldn't identify any task operations from this voice note.\n"
+                f"Please try again or type your request."
+            )
+        else:
+            _show_voice_fallback_menu(sender, raw, user)
         return
 
     # Store operations in session
@@ -119,7 +143,11 @@ def _show_low_confidence_clarification(sender: str, operations: list,
 
 
 def confirm_all_voice_ops(sender: str, user: dict):
-    """Confirm and execute all voice operations."""
+    """Confirm and execute all voice operations.
+
+    If any create_task operations are missing a building, pause execution
+    and prompt the user to select a building first.
+    """
     session = get_session(sender)
     if not session:
         send_text(sender, "Session expired. Please try again.")
@@ -133,6 +161,78 @@ def confirm_all_voice_ops(sender: str, user: dict):
         clear_session(sender)
         return
 
+    # Check if any create_task operations are missing a building
+    needs_building = any(
+        op.get("intent") == "create_task" and not op.get("entities", {}).get("building")
+        for op in operations
+    )
+
+    if needs_building:
+        # Save operations and transition to building-selection state
+        set_session(sender, "voice_awaiting_building", context=context)
+        _prompt_building_for_voice_ops(sender, user)
+        return
+
+    # All create_task ops have buildings (or there are none) — execute immediately
+    _execute_all_voice_ops(sender, operations, user)
+
+
+def _prompt_building_for_voice_ops(sender: str, user: dict):
+    """Prompt the user to select a building for voice operations that need one."""
+    from facilities.auth import get_permitted_buildings
+
+    buildings = get_permitted_buildings(user)
+
+    if len(buildings) <= 3:
+        buttons = [{"id": f"fac_bldg_{b}", "title": b} for b in buildings]
+        send_interactive_buttons(
+            sender,
+            "🏗️ *Building Required*\n\n"
+            "Which building should these tasks be created in?\n"
+            "Please select a building:",
+            buttons,
+        )
+    else:
+        from whatsapp.ux import send_list_message
+        rows = [{"id": f"fac_bldg_{b}", "title": b} for b in buildings]
+        sections = [{"title": "Select Building", "rows": rows}]
+        send_list_message(
+            sender,
+            "🏗️ *Building Required*\n\n"
+            "Which building should these tasks be created in?",
+            "Select Building",
+            sections,
+        )
+
+
+def handle_voice_building_selection(sender: str, building: str, user: dict):
+    """Handle building selection for voice operations that were missing a building.
+
+    Fills in the missing building on all create_task operations, then executes all ops.
+    """
+    session = get_session(sender)
+    if not session:
+        send_text(sender, "Session expired. Please try again.")
+        return
+
+    context = session.get("context_json", {})
+    operations = context.get("operations", [])
+
+    if not operations:
+        send_text(sender, "No operations to execute.")
+        clear_session(sender)
+        return
+
+    # Fill in the building for create_task operations that are missing it
+    for op in operations:
+        if op.get("intent") == "create_task" and not op.get("entities", {}).get("building"):
+            op.setdefault("entities", {})["building"] = building
+
+    _execute_all_voice_ops(sender, operations, user)
+
+
+def _execute_all_voice_ops(sender: str, operations: list, user: dict):
+    """Execute all voice operations and report per-item results."""
     results = []
 
     for i, op in enumerate(operations, 1):
@@ -169,7 +269,24 @@ def cancel_voice_ops(sender: str, user: dict):
 
 
 def handle_voice_confirm_text(sender: str, text: str, user: dict, session: dict):
-    """Handle text input during voice confirmation."""
+    """Handle text input during voice confirmation or building selection."""
+    state = session.get("current_flow_state", "")
+
+    if state == "voice_awaiting_building":
+        # User typed a building name — fuzzy match it
+        from facilities.auth import fuzzy_match_building
+        building = fuzzy_match_building(text)
+        if building:
+            handle_voice_building_selection(sender, building, user)
+        else:
+            send_text(
+                sender,
+                f"🤔 I couldn't find a building matching *\"{text}\"*.\n\n"
+                f"Please select from the list or type a valid building name."
+            )
+            _prompt_building_for_voice_ops(sender, user)
+        return
+
     if text.strip().lower() in ("confirm", "yes", "ok", "proceed"):
         confirm_all_voice_ops(sender, user)
     elif text.strip().lower() in ("cancel", "no", "stop"):
@@ -239,3 +356,69 @@ def _format_intent(intent: str) -> str:
         "attach_file": "📎 Attach",
     }
     return mapping.get(intent, intent)
+
+
+# ── Post-Voice Fallback (unclear intent) ─────────────────────────────────────
+
+def _show_voice_fallback_menu(sender: str, transcript: str, user: dict):
+    """Show action options when a voice note has content but no clear intent."""
+    # Store transcript in session so the chosen action can reuse it
+    set_session(sender, "voice_fallback", context={
+        "raw_transcript": transcript,
+    })
+
+    msg = (
+        f"🎙️ *Voice Note Received*\n\n"
+        f"📝 _\"{transcript[:300]}\"_\n\n"
+        f"I captured your note but couldn't detect a specific action.\n"
+        f"What would you like to do with this?"
+    )
+
+    buttons = [
+        {"id": "fac_voice_create_task", "title": "➕ Create a Task"},
+        {"id": "fac_voice_update_task", "title": "🔄 Update a Task"},
+        {"id": "fac_voice_discard", "title": "❌ Discard"},
+    ]
+    send_interactive_buttons(sender, msg, buttons)
+
+
+def handle_voice_fallback_create(sender: str, user: dict):
+    """User chose 'Create a Task' from the voice fallback menu."""
+    session = get_session(sender)
+    transcript = ""
+    if session:
+        transcript = session.get("context_json", {}).get("raw_transcript", "")
+    clear_session(sender)
+
+    from facilities.flows.create_task import start_create_flow
+    prefill = {}
+    if transcript:
+        prefill["issue_action"] = transcript
+    start_create_flow(sender, user, prefill=prefill)
+
+
+def handle_voice_fallback_update(sender: str, user: dict):
+    """User chose 'Update an Existing Task' from the voice fallback menu."""
+    session = get_session(sender)
+    transcript = ""
+    if session:
+        transcript = session.get("context_json", {}).get("raw_transcript", "")
+
+    # Store transcript as pending note, then prompt for Ref No
+    set_session(sender, "update_ref_no_input", context={
+        "pending_note": transcript,
+    })
+
+    send_text(
+        sender,
+        "📋 *Update an Existing Task*\n\n"
+        "Please enter the task Ref No you'd like to update "
+        "(e.g., GEBB1-001, GETT-042)."
+    )
+
+
+def handle_voice_fallback_discard(sender: str, user: dict):
+    """User chose 'Discard' from the voice fallback menu."""
+    clear_session(sender)
+    send_text(sender, "🗑️ Voice note discarded.\n\n_Type *menu* to go back._")
+

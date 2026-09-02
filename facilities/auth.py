@@ -51,6 +51,19 @@ def resolve_facilities_user(whatsapp_number: str) -> dict | None:
         return None
 
 
+def is_all_buildings_user(user: dict) -> bool:
+    """Check if the user has cross-building access (Director, Developer, Facility Head, Anoop)."""
+    if not user:
+        return False
+    role = (user.get("role") or "").strip().lower()
+    name = (user.get("name") or "").strip().lower()
+    if role in ("director", "developer", "facility head", "facilities head"):
+        return True
+    if name in ("anoop", "facility head", "facilities head", "kanav", "abhijeet"):
+        return True
+    return False
+
+
 def assert_building_access(user: dict, building: str) -> bool:
     """
     Check if the user has access to the given building.
@@ -65,11 +78,10 @@ def assert_building_access(user: dict, building: str) -> bool:
     Raises:
         PermissionError with Screen 14's exact denial message
     """
-    permitted = user.get("permitted_buildings", [])
-
-    # Directors and Developers can access all buildings
-    if user.get("role") in ("Director", "Developer"):
+    if is_all_buildings_user(user):
         return True
+
+    permitted = user.get("permitted_buildings", [])
 
     if building not in permitted:
         raise PermissionError(
@@ -85,9 +97,9 @@ def get_permitted_buildings(user: dict) -> list:
     """
     Get the list of buildings the user is permitted to access.
 
-    Directors/Developers get all buildings.
+    Directors/Developers/Facility Heads get all buildings.
     """
-    if user.get("role") in ("Director", "Developer"):
+    if is_all_buildings_user(user):
         return BUILDING_TABS.copy()
 
     return user.get("permitted_buildings", [])

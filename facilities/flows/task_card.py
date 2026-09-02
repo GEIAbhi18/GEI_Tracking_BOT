@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from whatsapp.ux import send_text, send_list_message, send_interactive_buttons
 from db import supabase
-from facilities.sheets_client import read_row, write_field
+from facilities.sheets_client import read_row, write_field, normalize_added_by
 from facilities.config import RAG_STATUS_MAP
 from facilities.auth import assert_building_access, get_facilities_team_members
 
@@ -69,7 +69,7 @@ def show_task_card(sender: str, ref_no: str, user: dict):
         f"{rag['emoji']} *Status:* {rag['label']}\n"
         f"📝 *Latest Update:* {row.get('latest_update', '—')}\n"
         f"📅 *Date Raised:* {row.get('created_date', '—')}\n"
-        f"👤 *Added by:* {row.get('last_modified_by_at', '—')}\n"
+        f"👤 *Added by:* {normalize_added_by(row.get('added_by') or row.get('last_modified_by_at', '—'))}\n"
     )
 
     if attach_line:

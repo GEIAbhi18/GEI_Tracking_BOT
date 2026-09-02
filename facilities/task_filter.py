@@ -153,10 +153,17 @@ def filter_tasks(criteria: TaskFilterCriteria, user: dict) -> list[dict]:
 
     # Filter by owner position
     if effective_positions:
+        from facilities.owner_resolver import normalize_position_title
         pos_set = {p.lower() for p in effective_positions}
+        norm_pos_set = {normalize_position_title(p) for p in effective_positions}
+        emp_name_lower = (criteria.employee_name or "").strip().lower()
+
         filtered = [
             t for t in filtered
             if (t.get("owner") or "").strip().lower() in pos_set
+            or normalize_position_title(t.get("owner") or "") in norm_pos_set
+            or (emp_name_lower and (t.get("responsible_user") or "").strip().lower() == emp_name_lower)
+            or (emp_name_lower and (t.get("owner") or "").strip().lower() == emp_name_lower)
         ]
 
     # Filter by status
@@ -382,6 +389,20 @@ def _extract_employee_name(text: str) -> Optional[str]:
     # Also check aliases
     alias_patterns = {
         "vikram": "Vikramjeet",
+        "vikramjeet": "Vikramjeet",
+        "anoop": "Anoop",
+        "anup": "Anoop",
+        "facility head": "Anoop",
+        "facilities head": "Anoop",
+        "head": "Anoop",
+        "kanav": "Kanav",
+        "kk": "Kanav",
+        "director": "Kanav",
+        "facility director": "Kanav",
+        "facilities director": "Kanav",
+        "vikash": "Vikash",
+        "vikkas": "Vikash",
+        "abhijeet": "Abhijeet",
     }
     for alias, canonical in alias_patterns.items():
         if re.search(r'\b' + re.escape(alias) + r"(?:'s)?\b", text):

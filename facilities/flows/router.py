@@ -164,6 +164,12 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         from facilities.flows.sync_status import show_sync_status
         show_sync_status(sender, user)
 
+    elif button_id in ("fac_eod_report", "fac_report", "fac_pdf_report"):
+        from facilities.eod_report import send_facilities_eod_report
+        from whatsapp.ux import send_text
+        send_text(sender, "📄 *Generating Facilities EOD Report...*\nPlease wait a moment while your report is generated.")
+        send_facilities_eod_report(sender, send_summary_text=True)
+
     # ── Building Filter Selection ────────────────────────────────────────
     elif button_id.startswith("fac_bldg_"):
         building = button_id.replace("fac_bldg_", "")
@@ -276,6 +282,19 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
     elif button_id == "fac_voice_cancel":
         from facilities.flows.voice_handler import cancel_voice_ops
         cancel_voice_ops(sender, user)
+
+    # ── Voice Fallback Actions ───────────────────────────────────────────
+    elif button_id == "fac_voice_create_task":
+        from facilities.flows.voice_handler import handle_voice_fallback_create
+        handle_voice_fallback_create(sender, user)
+
+    elif button_id == "fac_voice_update_task":
+        from facilities.flows.voice_handler import handle_voice_fallback_update
+        handle_voice_fallback_update(sender, user)
+
+    elif button_id == "fac_voice_discard":
+        from facilities.flows.voice_handler import handle_voice_fallback_discard
+        handle_voice_fallback_discard(sender, user)
 
     # ── Back to Home ─────────────────────────────────────────────────────
     elif button_id == "fac_home":
@@ -390,7 +409,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
     ACTIVE_INPUT_STATES = (
         "create_issue", "create_target_date", "create_owner", "create_preview",
         "update_note", "update_ref_no_input", "update_confirm", "update_reopen_confirm",
-        "reassign_user_input", "voice_confirm"
+        "reassign_user_input", "voice_confirm", "voice_fallback",
     )
     if state in ACTIVE_INPUT_STATES:
         _route_in_flow_text(sender, text, user, session)
@@ -408,6 +427,12 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
             _route_in_flow_text(sender, text, user, session)
             return
 
+    # 2.5 Check for "my tasks" triggers
+    if clean in ("my tasks", "my task", "show my tasks", "view my tasks", "show my task", "view my task", "tasks assigned to me", "my assigned tasks"):
+        from facilities.flows.my_tasks import show_my_tasks
+        show_my_tasks(sender, user)
+        return
+
     # 3. Check for completed tasks triggers
     if any(k in clean for k in ("completed task", "completed tasks", "closed task", "closed tasks", "show completed", "show closed")):
         from facilities.auth import fuzzy_match_building
@@ -421,6 +446,20 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
         else:
             from facilities.flows.completed_tasks import prompt_completed_tasks_building
             prompt_completed_tasks_building(sender, user)
+        return
+
+    # 3.5 Check for Facilities EOD Report triggers (e.g. "Facilities Report", "Facilitite Report", "EOD Report")
+    FACILITIES_REPORT_TRIGGERS = (
+        "facilities report", "facilitite report", "facility report", "facilite report",
+        "facilities eod", "facility eod", "facilities eod report", "facility eod report",
+        "eod report", "pdf report", "download report", "send report", "get report",
+        "facilities pdf", "facility pdf", "daily eod report", "facilities eod pdf",
+    )
+    if any(t in clean for t in FACILITIES_REPORT_TRIGGERS) or (clean in ("report", "eod", "pdf")):
+        from facilities.eod_report import send_facilities_eod_report
+        from whatsapp.ux import send_text
+        send_text(sender, "📄 *Generating Facilities EOD Report...*\nPlease wait a moment while your report is generated.")
+        send_facilities_eod_report(sender, send_summary_text=True)
         return
 
     # 4. Check for overdue tasks triggers (rule-based, before LLM)
@@ -613,8 +652,8 @@ def _route_in_flow_text(sender: str, text: str, user: dict, session: dict):
         from facilities.flows.task_card import handle_reassign_text
         handle_reassign_text(sender, text, user, session)
 
-    # Voice confirmation
-    elif state == "voice_confirm":
+    # Voice confirmation / building selection / fallback
+    elif state in ("voice_confirm", "voice_awaiting_building", "voice_fallback"):
         from facilities.flows.voice_handler import handle_voice_confirm_text
         handle_voice_confirm_text(sender, text, user, session)
 
@@ -640,6 +679,8 @@ def _route_image(sender: str, image_data: dict, user: dict, session: dict):
 
 def _route_voice(sender: str, transcript: str, user: dict, session: dict):
     """Route voice note transcriptions."""
+    from facilities.alias_normalizer import normalize_building_aliases
+    transcript = normalize_building_aliases(transcript)
     from facilities.flows.voice_handler import handle_voice_note
     handle_voice_note(sender, transcript, user)
 
@@ -647,8 +688,8 @@ def _route_voice(sender: str, transcript: str, user: dict, session: dict):
 def _is_task_filter_query(clean: str) -> bool:
     """Check if free text is a task filter query."""
     import re
-    # Never treat creation or update phrases as filter queries!
-    if any(clean.startswith(p) for p in ("create ", "new ", "add ", "raise ", "update ", "change ", "edit ", "reassign ", "attach ", "mark ", "close ", "set ", "reopen ")):
+    # Never treat creation, update, or report phrases as filter queries!
+    if any(clean.startswith(p) for p in ("create ", "new ", "add ", "raise ", "update ", "change ", "edit ", "reassign ", "attach ", "mark ", "close ", "set ", "reopen ")) or any(w in clean for w in ("report", "eod", "pdf")):
         return False
 
     # If message contains a specific task Ref No (e.g. GETT-013, GEBB1-002), it is an update or view, not a filter query!
@@ -693,7 +734,10 @@ def _handle_building_selection(sender: str, building: str, user: dict, session: 
     if session and session.get("context_json"):
         next_action = session["context_json"].get("next_action")
 
-    if state.startswith("create_") or next_action == "create_task":
+    if state == "voice_awaiting_building":
+        from facilities.flows.voice_handler import handle_voice_building_selection
+        handle_voice_building_selection(sender, building, user)
+    elif state.startswith("create_") or next_action == "create_task":
         from facilities.flows.create_task import handle_building_selection
         handle_building_selection(sender, building, user)
     elif state == "overdue_tasks_building" or next_action == "overdue_tasks":

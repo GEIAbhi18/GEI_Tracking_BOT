@@ -93,19 +93,24 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         elif button_id == "menu_reports":
             role = user.get("role", "Guest")
             original_role = user.get("original_role")
-            if role in ["Developer", "Director"] or original_role == "Developer":
+            department = user.get("department", "")
+            if role in ["Developer", "Director"] or original_role == "Developer" or department == "Facilities":
                 send_text(sender_phone, "📄 *Generating Daily PDF Report...*\nPlease wait a moment while your report is generated.")
                 try:
-                    from core.intent_handlers import generate_pdf_report
-                    from whatsapp.task_assignment import _send_document_wa
-                    pdf_path = generate_pdf_report()
-                    _send_document_wa(sender_phone, pdf_path)
-                    send_text(sender_phone, "✅ Daily Project Report sent above!")
+                    if department == "Facilities":
+                        from facilities.eod_report import send_facilities_eod_report
+                        send_facilities_eod_report(sender_phone, send_summary_text=True)
+                    else:
+                        from core.intent_handlers import generate_pdf_report
+                        from whatsapp.task_assignment import _send_document_wa
+                        pdf_path = generate_pdf_report()
+                        _send_document_wa(sender_phone, pdf_path)
+                        send_text(sender_phone, "✅ Daily Project Report sent above!")
                 except Exception as pdf_err:
                     logger.error(f"Error generating/sending PDF report: {pdf_err}")
                     send_text(sender_phone, "Failed to generate PDF report. Please contact an admin.")
             else:
-                send_text(sender_phone, "📊 *Daily Reports*\n\nDetailed system PDF reports are reserved for Directors and Developers. Please contact your administrator if you need access.")
+                send_text(sender_phone, "📊 *Daily Reports*\n\nDetailed system PDF reports are reserved for Directors, Developers, and Facilities team members. Please contact your administrator if you need access.")
             
         else:
             send_text(sender_phone, f"You selected: {button_id} (Coming soon)")

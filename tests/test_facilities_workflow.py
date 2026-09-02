@@ -345,4 +345,495 @@ class TestCreateTaskFlowAndDirectorAccess:
             buttons = mock_btn.call_args[0][2]
             assert buttons[0]["id"] == "fac_confirm_update"
 
+    def test_normalize_added_by_kanav(self):
+        from facilities.sheets_client import normalize_added_by, _build_sheet_row
+
+        # Kanav variants normalize to "Facilities Director"
+        assert normalize_added_by("Kanav") == "Facilities Director"
+        assert normalize_added_by("kanav") == "Facilities Director"
+        assert normalize_added_by("kk") == "Facilities Director"
+        assert normalize_added_by("KK") == "Facilities Director"
+        assert normalize_added_by("Director") == "Facilities Director"
+        assert normalize_added_by("Facilities Director") == "Facilities Director"
+        assert normalize_added_by("Facility Director") == "Facilities Director"
+        assert normalize_added_by("Kanav / 2026-08-31 09:40 UTC") == "Facilities Director / 2026-08-31 09:40 UTC"
+
+        # Other names remain as clean name
+        assert normalize_added_by("Abhijeet") == "Abhijeet"
+        assert normalize_added_by("Facility Head") == "Facility Head"
+        assert normalize_added_by("") == "GEI_BOT"
+        assert normalize_added_by(None) == "GEI_BOT"
+
+        # When Kanav adds a task, Column E (index 4) on Google Sheets is strictly "Facilities Director"
+        kanav_task = {
+            "ref_no": "GEBB1-008",
+            "type": "Project",
+            "issue_action": "Kanav created task",
+            "latest_update": "",
+            "added_by": "Kanav",
+            "owner": "Facility Head",
+            "created_date": "2026-08-27",
+            "target_date": "2026-08-31",
+            "status": "Open",
+        }
+        row = _build_sheet_row("GEBB1", kanav_task, row_idx=8)
+        assert row[4] == "Facilities Director"
+
+        # When last_modified_by_at has Kanav with timestamp, Column E is still "Facilities Director"
+        kanav_task_ts = {
+            "ref_no": "GEBB1-009",
+            "type": "Project",
+            "issue_action": "Another task by Kanav",
+            "latest_update": "",
+            "last_modified_by_at": "Kanav / 2026-08-27 10:00 UTC",
+            "owner": "Facility Head",
+            "created_date": "2026-08-27",
+            "target_date": "2026-08-31",
+            "status": "Open",
+        }
+        row_ts = _build_sheet_row("GEBB1", kanav_task_ts, row_idx=9)
+        assert row_ts[4] == "Facilities Director"
+
+
+class TestVoiceOpsMissingBuilding:
+    """Tests for voice-note task creation when building is missing."""
+
+    def _make_ops(self, buildings=None):
+        """Helper to create 2 create_task operations, optionally with buildings."""
+        ops = []
+        for i, (action, bldg) in enumerate([
+            ("centric leakage", buildings[0] if buildings else None),
+            ("Manipal leakage", buildings[1] if buildings else None),
+        ]):
+            entities = {"issue_action": action, "type": "Project"}
+            if bldg:
+                entities["building"] = bldg
+            ops.append({
+                "intent": "create_task",
+                "confidence": 0.9,
+                "entities": entities,
+            })
+        return ops
+
+    def test_confirm_all_missing_building_prompts_selection(self):
+        """When create_task ops have no building, confirm_all should prompt instead of skip."""
+        from facilities.flows.voice_handler import confirm_all_voice_ops
+
+        sender = "917717754421"
+        user = {
+            "name": "Kanav",
+            "role": "Director",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        ops = self._make_ops()
+        session_store = {
+            "current_flow_state": "voice_confirm",
+            "context_json": {"operations": ops, "confidence": 0.85},
+        }
+
+        def mock_get_session(phone):
+            return session_store
+
+        set_session_calls = []
+        def mock_set_session(phone, state, draft=None, context=None):
+            set_session_calls.append({"state": state, "context": context})
+
+        with patch("facilities.flows.voice_handler.get_session", side_effect=mock_get_session), \
+             patch("facilities.flows.voice_handler.set_session", side_effect=mock_set_session), \
+             patch("facilities.flows.voice_handler.send_interactive_buttons") as mock_btns, \
+             patch("whatsapp.ux.send_list_message") as mock_list, \
+             patch("facilities.flows.voice_handler.send_text"):
+            confirm_all_voice_ops(sender, user)
+
+            # Should have set session to voice_awaiting_building
+            assert len(set_session_calls) == 1
+            assert set_session_calls[0]["state"] == "voice_awaiting_building"
+            assert set_session_calls[0]["context"]["operations"] == ops
+
+            # Should have prompted for building selection (list message for 4 buildings)
+            assert mock_btns.called or mock_list.called
+            if mock_btns.called:
+                msg = mock_btns.call_args[0][1]
+            else:
+                msg = mock_list.call_args[0][1]
+            assert "Building Required" in msg
+
+    def test_confirm_all_with_building_executes_immediately(self):
+        """When all create_task ops have buildings, confirm_all executes without prompting."""
+        from facilities.flows.voice_handler import confirm_all_voice_ops
+
+        sender = "917717754421"
+        user = {
+            "name": "Kanav",
+            "role": "Director",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        ops = self._make_ops(buildings=["GEBB1", "GEBB2"])
+        session_store = {
+            "current_flow_state": "voice_confirm",
+            "context_json": {"operations": ops, "confidence": 0.85},
+        }
+
+        def mock_get_session(phone):
+            return session_store
+
+        mock_create = MagicMock(return_value={"ref_no": "GEBB1-099", "sheet_status": "synced"})
+
+        with patch("facilities.flows.voice_handler.get_session", side_effect=mock_get_session), \
+             patch("facilities.flows.voice_handler.clear_session"), \
+             patch("facilities.flows.voice_handler.send_text") as mock_text, \
+             patch("facilities.sheets_client.create_row", mock_create):
+            confirm_all_voice_ops(sender, user)
+
+            # Should have executed (not prompted for building)
+            assert mock_create.call_count == 2
+            # Should have sent results message
+            result_msg = mock_text.call_args[0][1]
+            assert "Voice Operations — Results" in result_msg
+
+    def test_building_selection_fills_and_executes(self):
+        """After building selection, missing buildings are filled and tasks are created."""
+        from facilities.flows.voice_handler import handle_voice_building_selection
+
+        sender = "917717754421"
+        user = {
+            "name": "Kanav",
+            "role": "Director",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        ops = self._make_ops()  # no buildings
+        session_store = {
+            "current_flow_state": "voice_awaiting_building",
+            "context_json": {"operations": ops, "confidence": 0.85},
+        }
+
+        def mock_get_session(phone):
+            return session_store
+
+        create_calls = []
+        def mock_create(building, draft, actor=None):
+            create_calls.append({"building": building, "draft": draft})
+            return {"ref_no": f"{building}-099", "sheet_status": "synced"}
+
+        with patch("facilities.flows.voice_handler.get_session", side_effect=mock_get_session), \
+             patch("facilities.flows.voice_handler.clear_session"), \
+             patch("facilities.flows.voice_handler.send_text") as mock_text, \
+             patch("facilities.sheets_client.create_row", side_effect=mock_create):
+            handle_voice_building_selection(sender, "GETT", user)
+
+            # Both tasks should have been created with building=GETT
+            assert len(create_calls) == 2
+            assert create_calls[0]["building"] == "GETT"
+            assert create_calls[1]["building"] == "GETT"
+            assert create_calls[0]["draft"]["issue_action"] == "centric leakage"
+            assert create_calls[1]["draft"]["issue_action"] == "Manipal leakage"
+
+            # Should have reported results
+            result_msg = mock_text.call_args[0][1]
+            assert "Voice Operations — Results" in result_msg
+            assert "2/2" in result_msg
+
+    def test_voice_text_building_fuzzy_match(self):
+        """User can type a building name during voice_awaiting_building state."""
+        from facilities.flows.voice_handler import handle_voice_confirm_text
+
+        sender = "917717754421"
+        user = {
+            "name": "Kanav",
+            "role": "Director",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        ops = self._make_ops()
+        session = {
+            "current_flow_state": "voice_awaiting_building",
+            "context_json": {"operations": ops, "confidence": 0.85},
+        }
+
+        with patch("facilities.flows.voice_handler.handle_voice_building_selection") as mock_bldg_sel, \
+             patch("facilities.flows.voice_handler.send_text"):
+            handle_voice_confirm_text(sender, "bay 1", user, session)
+            assert mock_bldg_sel.called
+            assert mock_bldg_sel.call_args[0][1] == "GEBB1"
+
+    def test_voice_text_building_invalid_reprompts(self):
+        """Invalid building name re-prompts building selection."""
+        from facilities.flows.voice_handler import handle_voice_confirm_text
+
+        sender = "917717754421"
+        user = {
+            "name": "Kanav",
+            "role": "Director",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        session = {
+            "current_flow_state": "voice_awaiting_building",
+            "context_json": {"operations": self._make_ops(), "confidence": 0.85},
+        }
+
+        with patch("facilities.flows.voice_handler.handle_voice_building_selection") as mock_bldg_sel, \
+             patch("facilities.flows.voice_handler.send_text") as mock_text, \
+             patch("facilities.flows.voice_handler.send_interactive_buttons"):
+            handle_voice_confirm_text(sender, "xyznonexistent", user, session)
+            # Should NOT have called building selection
+            assert not mock_bldg_sel.called
+            # Should have sent error message
+            assert mock_text.called
+            assert "couldn't find a building" in mock_text.call_args[0][1]
+
+    def test_router_building_button_routes_to_voice(self):
+        """fac_bldg_ button in voice_awaiting_building state routes to voice handler."""
+        from facilities.flows.router import _handle_building_selection
+
+        sender = "917717754421"
+        user = {
+            "name": "Kanav",
+            "role": "Director",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        session = {
+            "current_flow_state": "voice_awaiting_building",
+            "context_json": {"operations": self._make_ops(), "confidence": 0.85},
+        }
+
+        with patch("facilities.flows.voice_handler.handle_voice_building_selection") as mock_handler:
+            _handle_building_selection(sender, "GEBB1", user, session)
+            assert mock_handler.called
+            assert mock_handler.call_args[0] == (sender, "GEBB1", user)
+class TestFacilityHeadMyTasks:
+    """Tests for Anoop / Facility Head My Tasks across all buildings (GEBB1, GEBB2, GETT, Common)."""
+
+    def test_anoop_my_tasks_resolution_and_display(self):
+        from facilities.flows.my_tasks import show_my_tasks
+        from facilities.auth import get_permitted_buildings
+        from facilities.owner_resolver import get_position_titles_for_user
+
+        user = {
+            "name": "Anoop",
+            "role": "Employee",
+            "department": "Facilities",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "whatsapp_number": "919211501013",
+            "is_facilities_user": True,
+        }
+
+        # Anoop should have all buildings permitted
+        bldgs = get_permitted_buildings(user)
+        assert "GEBB1" in bldgs
+        assert "GEBB2" in bldgs
+        assert "GETT" in bldgs
+        assert "Common" in bldgs
+
+        # Positions for Anoop
+        positions = get_position_titles_for_user("Anoop")
+        assert any("facility head" in p.lower() for p in positions)
+
+        # Mock sample rows across all buildings
+        sample_rows = {
+            "GEBB1": [
+                {"ref_no": "GEBB1-001", "building": "GEBB1", "type": "Project", "issue_action": "DG maintenance", "owner": "Facility Head", "status": "Open"},
+                {"ref_no": "GEBB1-002", "building": "GEBB1", "type": "Project", "issue_action": "Paint work", "owner": "Facility Manager", "status": "WIP"},
+            ],
+            "GEBB2": [
+                {"ref_no": "GEBB2-001", "building": "GEBB2", "type": "Project", "issue_action": "Stack parking", "owner": "Facility Head", "status": "WIP"},
+            ],
+            "GETT": [
+                {"ref_no": "GETT-001", "building": "GETT", "type": "Major Concern", "issue_action": "Chiller alarm", "owner": "Facilities Head", "status": "Closed"},
+            ],
+            "Common": [
+                {"ref_no": "COM-001", "building": "Common", "type": "Improvement / Initiative", "issue_action": "Compliance tracker", "owner": "Facility Head", "status": "Open"},
+            ],
+        }
+
+        def mock_list_rows(building):
+            return sample_rows.get(building, [])
+
+        sent_messages = []
+        sent_lists = []
+
+        with patch("facilities.flows.my_tasks.list_rows_by_building", side_effect=mock_list_rows), \
+             patch("facilities.flows.my_tasks.send_list_message", side_effect=lambda to, body, btn, sec: sent_lists.append((to, body, btn, sec))), \
+             patch("facilities.flows.my_tasks.send_text", side_effect=lambda to, txt: sent_messages.append((to, txt))), \
+             patch("facilities.sync_engine.poll_sheet_changes"):
+            show_my_tasks("919211501013", user)
+
+        assert len(sent_lists) == 1
+        body = sent_lists[0][1]
+        assert "GEBB1-001" in body
+        assert "GEBB2-001" in body
+        assert "GETT-001" in body
+        assert "COM-001" in body
+        assert "GEBB1-002" not in body  # assigned to Facility Manager, not Anoop
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ALIAS NORMALIZER TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestAliasNormalizer:
+    """Tests for facilities.alias_normalizer.normalize_building_aliases."""
+
+    def test_trade_tower_to_gett(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GETT" in normalize_building_aliases("Check the water tank in Trade Tower")
+
+    def test_trade_tower_building_to_gett(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        result = normalize_building_aliases("Trade Tower Building has an AC issue")
+        assert "GETT" in result
+
+    def test_gett_passthrough(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GETT" in normalize_building_aliases("Issue in GETT")
+
+    def test_bay_one_to_gebb1(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GEBB1" in normalize_building_aliases("Bay One water leakage")
+
+    def test_bay_1_to_gebb1(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GEBB1" in normalize_building_aliases("Bay 1 parking issue")
+
+    def test_bay_two_to_gebb2(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GEBB2" in normalize_building_aliases("Bay Two elevator stuck")
+
+    def test_bay_2_to_gebb2(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GEBB2" in normalize_building_aliases("Bay 2 fire alarm")
+
+    def test_gebb_1_space_to_gebb1(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GEBB1" in normalize_building_aliases("Issue at GEBB 1 lobby")
+
+    def test_gebb_2_space_to_gebb2(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GEBB2" in normalize_building_aliases("Issue at GEBB 2 lobby")
+
+    def test_case_insensitivity(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        for variant in ["trade tower", "Trade Tower", "TRADE TOWER", "tRaDe ToWeR"]:
+            assert "GETT" in normalize_building_aliases(f"Issue at {variant}"), \
+                f"Failed for variant: {variant}"
+
+    def test_getting_stt_misheard(self):
+        """STT commonly mishears 'GETT' as 'getting'."""
+        from facilities.alias_normalizer import normalize_building_aliases
+        result = normalize_building_aliases("There is a leak in getting building")
+        assert "GETT" in result
+
+    def test_tech_tower_to_gett(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert "GETT" in normalize_building_aliases("tech tower roof needs repair")
+
+    def test_common_area(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        result = normalize_building_aliases("common area lights not working")
+        assert "Common" in result
+
+    def test_no_alias_passthrough(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        original = "The meeting is at 3 PM"
+        assert normalize_building_aliases(original) == original
+
+    def test_empty_string(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert normalize_building_aliases("") == ""
+
+    def test_none_passthrough(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        assert normalize_building_aliases(None) is None
+
+    def test_multiple_aliases_in_one_sentence(self):
+        from facilities.alias_normalizer import normalize_building_aliases
+        result = normalize_building_aliases("Compare Bay One and Bay Two parking")
+        assert "GEBB1" in result
+        assert "GEBB2" in result
+
+    def test_word_boundary_safety(self):
+        """'Bay 1' inside 'Bay 100' should NOT match."""
+        from facilities.alias_normalizer import normalize_building_aliases
+        result = normalize_building_aliases("Room Bay 100 has an issue")
+        # Should NOT replace "Bay 1" inside "Bay 100"
+        assert "GEBB1" not in result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# POST-VOICE FALLBACK TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestVoiceFallback:
+    """Tests for voice fallback (no clear intent) behavior."""
+
+    def test_trivial_transcript_detected(self):
+        from facilities.flows.voice_handler import _is_trivial_transcript
+        assert _is_trivial_transcript("hi")
+        assert _is_trivial_transcript("hello there")
+        assert _is_trivial_transcript("ok bye")
+        assert _is_trivial_transcript("test")
+
+    def test_substantial_transcript_not_trivial(self):
+        from facilities.flows.voice_handler import _is_trivial_transcript
+        assert not _is_trivial_transcript("Check the water tank in Bay 1")
+        assert not _is_trivial_transcript("The elevator is stuck on floor 3 in GETT")
+        assert not _is_trivial_transcript("Need to fix AC cooling issue")
+
+    def test_short_but_meaningful_is_trivial(self):
+        """Under 3 words is trivial regardless of content."""
+        from facilities.flows.voice_handler import _is_trivial_transcript
+        assert _is_trivial_transcript("fix AC")
+
+    @patch("facilities.flows.voice_handler.send_text")
+    @patch("facilities.flows.voice_handler.send_interactive_buttons")
+    @patch("facilities.flows.voice_handler.extract_voice_operations")
+    @patch("facilities.flows.voice_handler.set_session")
+    def test_fallback_menu_shown_for_substantial(self, mock_set, mock_extract,
+                                                  mock_buttons, mock_text):
+        """When transcript is substantial but has no ops, the fallback menu appears."""
+        mock_extract.return_value = {
+            "operations": [],
+            "transcription_confidence": 0.8,
+            "raw_transcript": "Check water tank situation in GEBB1",
+        }
+
+        from facilities.flows.voice_handler import handle_voice_note
+        handle_voice_note("919999999999", "Check water tank situation in GEBB1", {})
+
+        # Should show interactive buttons (fallback menu), not just plain text
+        assert mock_buttons.called
+        call_args = mock_buttons.call_args
+        buttons = call_args[0][2] if len(call_args[0]) > 2 else call_args[1].get("buttons", [])
+        button_ids = [b["id"] for b in buttons]
+        assert "fac_voice_create_task" in button_ids
+        assert "fac_voice_update_task" in button_ids
+        assert "fac_voice_discard" in button_ids
+
+    @patch("facilities.flows.voice_handler.send_text")
+    @patch("facilities.flows.voice_handler.send_interactive_buttons")
+    @patch("facilities.flows.voice_handler.extract_voice_operations")
+    def test_trivial_transcript_no_menu(self, mock_extract, mock_buttons, mock_text):
+        """When transcript is trivial, show plain text, NOT the fallback menu."""
+        mock_extract.return_value = {
+            "operations": [],
+            "transcription_confidence": 0.8,
+            "raw_transcript": "ok bye",
+        }
+
+        from facilities.flows.voice_handler import handle_voice_note
+        handle_voice_note("919999999999", "ok bye", {})
+
+        # Should NOT show interactive buttons
+        assert not mock_buttons.called
+
 

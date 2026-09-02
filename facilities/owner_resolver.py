@@ -53,6 +53,21 @@ def refresh_cache():
 
 # ── Core Resolution Functions ────────────────────────────────────────────────
 
+def normalize_position_title(pos: str) -> str:
+    """Normalize a position title for consistent comparison and lookup."""
+    if not pos:
+        return ""
+    clean = " ".join(pos.strip().lower().split())
+    # Handle singular/plural variations: 'facilities' vs 'facility'
+    clean = clean.replace("facilities ", "facility ")
+    # Handle aliases
+    if clean in ("head", "facility head", "facilities head"):
+        return "facility head"
+    if clean in ("director", "facility director", "facilities director"):
+        return "facility director"
+    return clean
+
+
 def resolve_position_to_user(position_title: str, building: str = None) -> dict | None:
     """
     Resolve a Google Sheet Owner position title to a user.
@@ -70,12 +85,14 @@ def resolve_position_to_user(position_title: str, building: str = None) -> dict 
         return None
 
     clean = position_title.strip()
+    norm_input = normalize_position_title(clean)
     mappings = _load_cache()
 
     # 1. If building is provided, try matching both title and building
     if building:
         for m in mappings:
-            if (m.get("position_title", "").strip().lower() == clean.lower() and
+            norm_m = normalize_position_title(m.get("position_title", ""))
+            if (norm_m == norm_input and
                 (m.get("building") or "").upper() == building.upper()):
                 return {
                     "position_title": m["position_title"],
@@ -83,14 +100,31 @@ def resolve_position_to_user(position_title: str, building: str = None) -> dict 
                     "building": m.get("building"),
                 }
 
-    # 2. Try exact title match
+    # 2. Try matching cross-building positions (building is None)
     for m in mappings:
-        if m.get("position_title", "").strip().lower() == clean.lower():
+        norm_m = normalize_position_title(m.get("position_title", ""))
+        if norm_m == norm_input and m.get("building") is None:
             return {
                 "position_title": m["position_title"],
                 "user_name": m["user_name"],
                 "building": m.get("building"),
             }
+
+    # 3. Try any normalized title match
+    for m in mappings:
+        norm_m = normalize_position_title(m.get("position_title", ""))
+        if norm_m == norm_input:
+            return {
+                "position_title": m["position_title"],
+                "user_name": m["user_name"],
+                "building": m.get("building"),
+            }
+
+    # 4. Standard position fallbacks
+    if norm_input in ("facility head", "facilities head"):
+        return {"position_title": "Facility Head", "user_name": "Anoop", "building": None}
+    if norm_input in ("facility director", "facilities director"):
+        return {"position_title": "Facilities Director", "user_name": "Kanav", "building": None}
 
     logger.warning(
         f"No user mapping found for Owner Position: '{position_title}'"
@@ -107,7 +141,7 @@ def resolve_user_to_positions(user_name: str, building: str = None) -> list[dict
     Handles aliases: "Vikram" and "Vikramjeet" are treated as the same person.
 
     Args:
-        user_name: Employee name (e.g., "Vikramjeet", "Vikash")
+        user_name: Employee name (e.g., "Vikramjeet", "Vikash", "Anoop")
         building: Optional building to filter positions for
 
     Returns:
@@ -146,12 +180,19 @@ def resolve_user_to_positions(user_name: str, building: str = None) -> list[dict
                         "building": m.get("building"),
                     })
 
+    # Fallback for standard known roles if not in DB cache
+    if not results:
+        if canonical == "anoop":
+            results.append({"position_title": "Facility Head", "user_name": "Anoop", "building": None})
+        elif canonical == "kanav":
+            results.append({"position_title": "Facilities Director", "user_name": "Kanav", "building": None})
+
     return results
 
 
 def get_position_titles_for_user(user_name: str, building: str = None) -> list[str]:
     """
-    Get a list of Owner Position titles for a user.
+    Get a list of Owner Position titles for a user, including standard variations.
 
     Args:
         user_name: Employee name
@@ -161,7 +202,20 @@ def get_position_titles_for_user(user_name: str, building: str = None) -> list[s
         List of position title strings
     """
     positions = resolve_user_to_positions(user_name, building)
-    return [p["position_title"] for p in positions]
+    titles = [p["position_title"] for p in positions]
+    canonical = _normalize_user_name(user_name)
+
+    # Include synonyms for robustness
+    if canonical == "anoop" or any(normalize_position_title(t) == "facility head" for t in titles):
+        for syn in ["Facility Head", "Facilities Head"]:
+            if syn not in titles:
+                titles.append(syn)
+    elif canonical == "kanav" or any(normalize_position_title(t) == "facility director" for t in titles):
+        for syn in ["Facilities Director", "Facility Director"]:
+            if syn not in titles:
+                titles.append(syn)
+
+    return titles
 
 
 def get_responsible_user_whatsapp(position_title: str, building: str = None) -> dict | None:
@@ -283,10 +337,23 @@ def is_employee_name(text: str) -> bool:
 _NAME_ALIASES = {
     "vikram": "vikramjeet",
     "vikramjeet": "vikramjeet",
+    "anoop": "anoop",
+    "anup": "anoop",
+    "facility head": "anoop",
+    "facilities head": "anoop",
+    "head": "anoop",
+    "kanav": "kanav",
+    "kk": "kanav",
+    "director": "kanav",
+    "facility director": "kanav",
+    "facilities director": "kanav",
+    "vikash": "vikash",
+    "vikkas": "vikash",
+    "abhijeet": "abhijeet",
 }
 
 
 def _normalize_user_name(name: str) -> str:
     """Normalize a user name to its canonical lowercase form, resolving aliases."""
-    clean = name.strip().lower()
+    clean = " ".join(name.strip().lower().split())
     return _NAME_ALIASES.get(clean, clean)
