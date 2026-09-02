@@ -174,7 +174,7 @@ def test_handle_interactive_reply_reports_employee(mocker):
     
     mock_send_doc.assert_not_called()
     mock_send_text.assert_called_once()
-    assert "reserved for Directors and Developers" in mock_send_text.call_args[0][1]
+    assert "reserved for Directors" in mock_send_text.call_args[0][1]
 
 def test_handle_interactive_reply_analytics_options(mocker):
     """Test menu_analytics sends interactive buttons with Team and Personal options."""

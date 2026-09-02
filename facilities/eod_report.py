@@ -322,22 +322,22 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
 
     pdf.set_font("Helvetica", "B", 22)
     pdf.set_text_color(*COLORS["TEXT_DARK"])
-    pdf.cell(105, 12, "Facilities EOD Report", ln=0)
+    pdf.cell(105, 12, "Facilities EOD Report", new_x="RIGHT", new_y="TOP")
 
     # Date / Time Box on Right
     pdf.set_font("Helvetica", "B", 10)
     pdf.set_text_color(*COLORS["TEXT_DARK"])
     pdf.set_x(-75)
-    pdf.cell(65, 5, date_str, ln=1, align="R")
+    pdf.cell(65, 5, date_str, new_x="LMARGIN", new_y="NEXT", align="R")
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*COLORS["TEXT_GREY"])
     pdf.set_x(-75)
-    pdf.cell(65, 5, f"Generated at {time_str}", ln=1, align="R")
+    pdf.cell(65, 5, f"Generated at {time_str}", new_x="LMARGIN", new_y="NEXT", align="R")
 
     pdf.ln(1)
     pdf.set_font("Helvetica", "", 9)
     pdf.set_text_color(*COLORS["TEXT_GREY"])
-    pdf.cell(0, 4, clean_pdf_text("GEI Facilities | Auto-generated | Confidential"), ln=1)
+    pdf.cell(0, 4, clean_pdf_text("GEI Facilities | Auto-generated | Confidential"), new_x="LMARGIN", new_y="NEXT")
 
     # Header Accent Divider
     pdf.set_draw_color(*COLORS["HEADER_BG"])
@@ -352,7 +352,7 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
     # Summary Section Title
     pdf.set_font("Helvetica", "B", 11)
     pdf.set_text_color(*COLORS["HEADER_BG"])
-    pdf.cell(0, 5, "Facilities Summary", ln=1)
+    pdf.cell(0, 5, "Facilities Summary", new_x="LMARGIN", new_y="NEXT")
     pdf.ln(1)
 
     # 6 KPI Cards (Total, Red, Amber, Green, Completed, Pending)
@@ -445,7 +445,7 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
         pdf.set_xy(12, pdf.get_y())
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*COLORS["HEADER_BG"])
-        pdf.cell(75, 8, clean_pdf_text(bldg_name), ln=0)
+        pdf.cell(75, 8, clean_pdf_text(bldg_name), new_x="RIGHT", new_y="TOP")
 
         # RAG stats on header right
         pdf.set_font("Helvetica", "B", 8)
@@ -466,7 +466,7 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
 
         pdf.set_font("Helvetica", "", 8)
         pdf.set_text_color(*COLORS["TEXT_GREY"])
-        pdf.cell(0, 8, f"({len(b_tasks)} tasks)", ln=1, align="R")
+        pdf.cell(0, 8, f"({len(b_tasks)} tasks)", new_x="LMARGIN", new_y="NEXT", align="R")
 
         pdf.ln(1)
 
@@ -480,7 +480,7 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
             pdf.set_font("Helvetica", "I", 8)
             pdf.set_text_color(*COLORS["TEXT_GREY"])
             pdf.set_xy(14, pdf.get_y())
-            pdf.cell(180, 7, "No tasks recorded for this building", ln=1)
+            pdf.cell(180, 7, "No tasks recorded for this building", new_x="LMARGIN", new_y="NEXT")
             pdf.ln(3)
             continue
 
