@@ -1,6 +1,7 @@
 import logging
 import asyncio
 from datetime import datetime, timedelta
+# pyrefly: ignore [missing-import]
 from telegram.ext import ContextTypes
 from db import get_active_users_with_tasks, get_tasks_for_user, supabase
 from core.context_manager import update_context as set_context
@@ -93,8 +94,38 @@ async def check_inactivity_and_notify(context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Error checking inactivity for {user['name']}: {e}")
 
 async def send_scheduled_reminders(context: ContextTypes.DEFAULT_TYPE):
-    """Sends reminders to all active users at fixed times."""
-    logger.info("Running scheduled reminders (11AM/4PM)...")
+    """Sends reminders to active users who have NOT updated any tasks today."""
+    logger.info("Running scheduled 5PM reminders (checking for no-update-today users)...")
     users = get_active_users_with_tasks()
+    if not users:
+        logger.info("No active users with tasks found — skipping scheduled reminders.")
+        return
+
+    today = datetime.now().date().isoformat()
+    sent_count = 0
+    skipped_count = 0
+
     for user in users:
+        name = user.get("name", "Team Member")
+
+        # Check if this user already submitted any updates today
+        try:
+            upds_res = (
+                supabase.table("updates")
+                .select("id")
+                .eq("employee_id", user["id"])
+                .gte("timestamp", today)
+                .execute()
+            )
+            if upds_res.data:
+                logger.info(f"ℹ️ {name} already updated tasks today — skipping scheduled reminder.")
+                skipped_count += 1
+                continue
+        except Exception as check_err:
+            logger.warning(f"Could not check today's updates for {name}: {check_err}")
+
         await send_reminder_to_user(context, user, reason="scheduled")
+        sent_count += 1
+
+    logger.info(f"Scheduled reminders complete — sent: {sent_count}, skipped (already updated): {skipped_count}")
+

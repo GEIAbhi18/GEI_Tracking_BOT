@@ -3,6 +3,7 @@ import datetime
 import os
 import pytz
 from telegram import Update
+# pyrefly: ignore [missing-import]
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 from config import TELEGRAM_BOT_TOKEN
 from db import get_user_by_telegram_id, supabase
@@ -64,38 +65,54 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass  # Last resort — can't even send the error message
 
 async def send_daily_report_job(context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Running 6PM daily PDF report job for Kanav...")
     try:
         res = supabase.table("users").select("telegram_id").eq("name", "Kanav").execute()
-        if res.data:
-            target = res.data[0]["telegram_id"]
-            
-            teams = ["Tech", "Facilities", "Project"]
-            for team in teams:
+        if not res.data or not res.data[0].get("telegram_id"):
+            logging.error("❌ 6PM PDF report: Kanav not found in DB or has no telegram_id configured.")
+            return
+        
+        target = res.data[0]["telegram_id"]
+        teams = ["Tech", "Facilities", "Project"]
+        for team in teams:
+            try:
                 path = generate_pdf_report(team_name=team)
                 with open(path, 'rb') as f:
                     await context.bot.send_document(chat_id=target, document=f, caption=f"📊 Daily {team} Team Report (6:00 PM)")
-    except Exception as e: logging.error(f"Report error: {e}")
+                logging.info(f"✅ 6PM Daily PDF report ({team}) sent successfully to Kanav (telegram_id: {target})")
+            except Exception as team_err:
+                logging.error(f"❌ Failed to send {team} PDF report to Kanav (telegram_id: {target}): {team_err}")
+    except Exception as e:
+        logging.error(f"❌ 6PM PDF report job error: {e}", exc_info=True)
 
 async def send_multiline_updates_report_job(context: ContextTypes.DEFAULT_TYPE):
+    logging.info("Running 6PM daily updates summary job for Kanav...")
     try:
         res = supabase.table("users").select("telegram_id").eq("name", "Kanav").execute()
-        if res.data:
-            target = res.data[0]["telegram_id"]
-            today = datetime.datetime.now().date().isoformat()
-            upds = supabase.table("daily_updates").select("*, projects(name), tasks(title), users(name)").gte("timestamp", today).execute()
-            if upds.data:
-                from collections import defaultdict
-                grouped = defaultdict(list)
-                for u in upds.data: grouped[u.get("projects", {}).get("name", "Unknown")].append(u)
-                report = "📝 *Daily Updates Summary*\n\n"
-                for p, lu in grouped.items():
-                    report += f"*{p}*\n"
-                    for u in lu:
-                        report += f"- {u.get('tasks', {}).get('name', 'Task')} ({u['progress']}%) by {u.get('users', {}).get('name', 'User')}\n"
-                        if u.get('blocker') and u['blocker'].lower() not in ["no blocker", "none"]: report += f"  🛑 Blocker: {u['blocker']}\n"
-                    report += "\n"
-                await context.bot.send_message(chat_id=target, text=report, parse_mode='Markdown')
-    except Exception as e: logging.error(f"Multiline report error: {e}")
+        if not res.data or not res.data[0].get("telegram_id"):
+            logging.error("❌ 6PM updates summary: Kanav not found in DB or has no telegram_id configured.")
+            return
+        
+        target = res.data[0]["telegram_id"]
+        today = datetime.datetime.now().date().isoformat()
+        upds = supabase.table("daily_updates").select("*, projects(name), tasks(title), users(name)").gte("timestamp", today).execute()
+        if upds.data:
+            from collections import defaultdict
+            grouped = defaultdict(list)
+            for u in upds.data: grouped[u.get("projects", {}).get("name", "Unknown")].append(u)
+            report = "📝 *Daily Updates Summary*\n\n"
+            for p, lu in grouped.items():
+                report += f"*{p}*\n"
+                for u in lu:
+                    report += f"- {u.get('tasks', {}).get('name', 'Task')} ({u['progress']}%) by {u.get('users', {}).get('name', 'User')}\n"
+                    if u.get('blocker') and u['blocker'].lower() not in ["no blocker", "none"]: report += f"  🛑 Blocker: {u['blocker']}\n"
+                report += "\n"
+            await context.bot.send_message(chat_id=target, text=report, parse_mode='Markdown')
+            logging.info(f"✅ 6PM daily updates summary sent successfully to Kanav (telegram_id: {target})")
+        else:
+            logging.info(f"ℹ️ No daily updates found for today — skipping updates summary to Kanav.")
+    except Exception as e:
+        logging.error(f"❌ 6PM updates summary job error: {e}", exc_info=True)
 
 import telegram
 
@@ -120,14 +137,14 @@ application.job_queue.run_daily(send_daily_report_job, time=time_6pm, days=weekd
 application.job_queue.run_daily(send_multiline_updates_report_job, time=time_6pm, days=weekdays)
 
 def start_bot():
-    from scheduler import send_deadline_alerts, send_reminder, send_daily_report
+    from scheduler import send_deadline_alerts, send_daily_report
     from core.reminder_scheduler import send_scheduled_reminders, check_inactivity_and_notify
     
     logging.info(f"BOOTING PROCESS: {os.getpid()}")
     
     # Consolidate all external APScheduler jobs to PTB's native JobQueue
     application.job_queue.run_daily(send_deadline_alerts, time=time_9am, days=weekdays)
-    application.job_queue.run_daily(send_reminder, time=time_5pm, days=weekdays)
+    # 5PM: Single reminder job for ALL team members (checks "no updates today")
     application.job_queue.run_daily(send_scheduled_reminders, time=time_5pm, days=weekdays)
     application.job_queue.run_daily(send_daily_report, time=time_6pm, days=weekdays)
     
