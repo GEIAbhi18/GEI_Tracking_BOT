@@ -33,15 +33,27 @@ def start_update_flow(sender: str, ref_no: str, user: dict, prefill: dict = None
         "ref_no": ref_no,
         "current_status": row.get("status", "Open"),
         "current_update": row.get("latest_update", ""),
+        "current_estimated_completion_date": row.get("estimated_completion_date", ""),
     }
 
     if prefill and prefill.get("status"):
-        # Status pre-filled from LLM — go straight to confirmation
+        # Status pre-filled from LLM
         context["new_status"] = prefill["status"]
         context["new_update"] = prefill.get("latest_update", "")
-        set_session(sender, "update_confirm", context=context)
-        _show_update_preview(sender, row, context, user)
-        return
+        if prefill["status"] == "Closed" or prefill.get("estimated_completion_date"):
+            context["new_estimated_completion_date"] = prefill.get("estimated_completion_date")
+            set_session(sender, "update_confirm", context=context)
+            _show_update_preview(sender, row, context, user)
+            return
+        else:
+            set_session(sender, "update_expected_date", context=context)
+            send_text(
+                sender,
+                f"📅 *Expected Completion Date* for *{ref_no}*:\n\n"
+                f"When is this task expected to be completed?\n"
+                f"(e.g., *10th September*, *by Friday*, *next Monday*, *15 Sep 2026*, or type *skip* to keep current)"
+            )
+            return
 
     set_session(sender, "update_status", context=context)
 
@@ -146,8 +158,40 @@ def handle_update_flow_text(sender: str, text: str, user: dict, session: dict):
         else:
             context["new_update"] = text.strip()
 
-        set_session(sender, "update_confirm", context=context)
+        if context.get("new_status") == "Closed":
+            set_session(sender, "update_confirm", context=context)
+            row = read_row(context.get("ref_no"))
+            _show_update_preview(sender, row, context, user)
+            return
 
+        set_session(sender, "update_expected_date", context=context)
+        ref_no = context.get("ref_no", "this task")
+        send_text(
+            sender,
+            f"📅 *Expected Completion Date* for *{ref_no}*:\n\n"
+            f"When is this task expected to be completed?\n"
+            f"(e.g., *10th September*, *by Friday*, *next Monday*, *15 Sep 2026*, or type *skip* to keep current)"
+        )
+
+    elif state == "update_expected_date":
+        from facilities.config import parse_facilities_date
+        clean = text.strip().lower()
+        if clean in ("skip", "no", "none", "na", "-", "—", "cancel", "keep", "current"):
+            context["new_estimated_completion_date"] = None
+        else:
+            parsed_date = parse_facilities_date(text)
+            if parsed_date:
+                context["new_estimated_completion_date"] = parsed_date
+            else:
+                send_text(
+                    sender,
+                    "I couldn't understand that date. Please enter a valid date "
+                    "(e.g., *10th September*, *by Friday*, *next Monday*, *15 Sep 2026*) "
+                    "or type *skip* to keep current."
+                )
+                return
+
+        set_session(sender, "update_confirm", context=context)
         row = read_row(context.get("ref_no"))
         _show_update_preview(sender, row, context, user)
 
@@ -161,6 +205,7 @@ def _show_update_preview(sender: str, row: dict, context: dict, user: dict):
     old_status = context.get("current_status", "—")
     new_status = context.get("new_status", "—")
     update_text = context.get("new_update", "")
+    new_est = context.get("new_estimated_completion_date")
 
     old_rag = RAG_STATUS_MAP.get(old_status, {"emoji": "⚪"})
     new_rag = RAG_STATUS_MAP.get(new_status, {"emoji": "⚪"})
@@ -173,6 +218,11 @@ def _show_update_preview(sender: str, row: dict, context: dict, user: dict):
 
     if update_text:
         msg += f"*Note:* {update_text}\n"
+
+    if new_est:
+        msg += f"*Estimated Completion Date:* {new_est}\n"
+    elif row and row.get("estimated_completion_date"):
+        msg += f"*Estimated Completion Date:* {row.get('estimated_completion_date')}\n"
 
     msg += f"\n*Updated by:* {user.get('name', '—')}\n\nConfirm this update?"
 
@@ -197,6 +247,7 @@ def confirm_update(sender: str, user: dict):
     ref_no = context.get("ref_no")
     new_status = context.get("new_status")
     update_text = context.get("new_update")
+    new_est = context.get("new_estimated_completion_date")
 
     if not ref_no or not new_status:
         send_text(sender, "Missing data. Please start over.")
@@ -214,6 +265,11 @@ def confirm_update(sender: str, user: dict):
     if update_text:
         note_result = write_field(ref_no, "latest_update", update_text, source="gei_bot", actor=actor)
         results.append(("Note", note_result))
+
+    # Write Estimated Completion Date if provided (never touch Actual Completion Date)
+    if new_est:
+        est_result = write_field(ref_no, "estimated_completion_date", new_est, source="gei_bot", actor=actor)
+        results.append(("Estimated Completion Date", est_result))
 
     # Build response
     bot_line = "✅ *GEI_BOT:* Updated"
@@ -240,6 +296,8 @@ def confirm_update(sender: str, user: dict):
     )
     if update_text:
         msg += f"*Note:* {update_text}\n"
+    if new_est:
+        msg += f"*Estimated Completion Date:* {new_est}\n"
 
     msg += f"\n{bot_line}\n{sheet_line}"
 

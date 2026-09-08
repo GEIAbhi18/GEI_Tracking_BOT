@@ -408,7 +408,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
     state = session.get("current_flow_state", "") if session else ""
     ACTIVE_INPUT_STATES = (
         "create_issue", "create_target_date", "create_owner", "create_preview",
-        "update_note", "update_ref_no_input", "update_confirm", "update_reopen_confirm",
+        "update_note", "update_expected_date", "update_ref_no_input", "update_confirm", "update_reopen_confirm",
         "reassign_user_input", "voice_confirm", "voice_fallback",
     )
     if state in ACTIVE_INPUT_STATES:

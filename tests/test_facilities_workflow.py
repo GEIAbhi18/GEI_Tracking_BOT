@@ -7,6 +7,7 @@ Comprehensive unit tests for the Facilities workflow overhaul:
 - Position-based notifications
 """
 
+# pyrefly: ignore [missing-import]
 import pytest
 from unittest.mock import MagicMock, patch
 from facilities.owner_resolver import (
@@ -300,10 +301,10 @@ class TestCreateTaskFlowAndDirectorAccess:
             "status": "Open",
         }
 
-        # All building tabs (GETT, GEBB1, GEBB2, Common) now have 10 columns
+        # All building tabs (GETT, GEBB1, GEBB2, Common) now have 11 columns (Cols A to K)
         for bldg in ["GETT", "GEBB1", "GEBB2", "Common"]:
             row = _build_sheet_row(bldg, task_data, row_idx=12)
-            assert len(row) == 10
+            assert len(row) == 11
             assert row[1] in VALID_TASK_TYPES
             assert row[4] == "Abhijeet"
             assert row[5] in VALID_OWNER_POSITIONS
@@ -311,6 +312,7 @@ class TestCreateTaskFlowAndDirectorAccess:
             assert row[7] == "15-Sep-2026"
             assert '=IF(H12="","",IF(J12="Closed",0,MAX(0,TODAY()-H12)))' in row[8]
             assert row[9] in VALID_STATUSES
+            assert row[10] == ""
 
     def test_direct_task_update_mark_as_closed(self):
         from facilities.flows.router import route_facilities_message

@@ -21,7 +21,9 @@ import threading
 import time
 from datetime import datetime, timezone
 
+# pyrefly: ignore [missing-import]
 import gspread
+# pyrefly: ignore [missing-import]
 from google.oauth2.service_account import Credentials
 
 from db import supabase
@@ -165,6 +167,11 @@ def _row_to_dict(row_values: list, building: str) -> dict:
     columns = list(col_map.values())
     for i, field in enumerate(columns):
         result[field] = row_values[i] if i < len(row_values) else ""
+    # Ensure backward compatibility between planned_date and target_date
+    if "planned_date" in result and "target_date" not in result:
+        result["target_date"] = result["planned_date"]
+    elif "target_date" in result and "planned_date" not in result:
+        result["planned_date"] = result["target_date"]
     return result
 
 
@@ -193,7 +200,16 @@ def read_row(ref_no: str) -> dict | None:
     try:
         cache_res = supabase.table("row_cache").select("*").eq("ref_no", ref_no).execute()
         if cache_res.data:
-            return cache_res.data[0]
+            row = cache_res.data[0]
+            if "planned_date" not in row or not row.get("planned_date"):
+                row["planned_date"] = row.get("target_date", "")
+            if "target_date" not in row or not row.get("target_date"):
+                row["target_date"] = row.get("planned_date", "")
+            if "estimated_completion_date" not in row:
+                row["estimated_completion_date"] = ""
+            if "actual_completion_date" not in row:
+                row["actual_completion_date"] = ""
+            return row
     except Exception as e:
         logger.warning(f"row_cache lookup failed for {ref_no}: {e}")
 
@@ -228,7 +244,17 @@ def list_rows_by_building(building: str) -> list:
     """
     try:
         result = supabase.table("row_cache").select("*").eq("building", building).execute()
-        return result.data or []
+        rows = result.data or []
+        for r in rows:
+            if "planned_date" not in r or not r.get("planned_date"):
+                r["planned_date"] = r.get("target_date", "")
+            if "target_date" not in r or not r.get("target_date"):
+                r["target_date"] = r.get("planned_date", "")
+            if "estimated_completion_date" not in r:
+                r["estimated_completion_date"] = ""
+            if "actual_completion_date" not in r:
+                r["actual_completion_date"] = ""
+        return rows
     except Exception as e:
         logger.error(f"list_rows_by_building failed for {building}: {e}")
         return []
@@ -243,7 +269,17 @@ def list_rows_by_owner(owner: str) -> list:
     """
     try:
         result = supabase.table("row_cache").select("*").eq("owner", owner).execute()
-        return result.data or []
+        rows = result.data or []
+        for r in rows:
+            if "planned_date" not in r or not r.get("planned_date"):
+                r["planned_date"] = r.get("target_date", "")
+            if "target_date" not in r or not r.get("target_date"):
+                r["target_date"] = r.get("planned_date", "")
+            if "estimated_completion_date" not in r:
+                r["estimated_completion_date"] = ""
+            if "actual_completion_date" not in r:
+                r["actual_completion_date"] = ""
+        return rows
     except Exception as e:
         logger.error(f"list_rows_by_owner failed for {owner}: {e}")
         return []
@@ -274,6 +310,9 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
     Returns:
         dict with 'status' ('synced'|'pending'|'conflict'), 'sync_queue_id', etc.
     """
+    if field == "target_date":
+        field = "planned_date"
+
     if field not in WRITABLE_FIELDS:
         raise ValueError(f"Field '{field}' is not writable. Writable fields: {WRITABLE_FIELDS}")
 
@@ -316,7 +355,7 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
             return {"status": "duplicate", "ref_no": ref_no, "field": field}
         raise
 
-    # Normalize owner or format target_date if applicable
+    # Normalize owner or format target_date/planned_date/estimated_completion_date if applicable
     sheet_val = value
     if field == "owner":
         sheet_val = normalize_owner_to_sheet_position(value, building)
@@ -324,7 +363,7 @@ def write_field(ref_no: str, field: str, value: str, source: str = "gei_bot",
         sheet_val = normalize_added_by(value)
         if " / " in sheet_val:
             sheet_val = sheet_val.split(" / ")[0].strip()
-    elif field in ("target_date", "created_date"):
+    elif field in ("planned_date", "target_date", "created_date", "estimated_completion_date"):
         sheet_val = _format_sheet_date(value)
 
     # 4. Execute Sheets API write
@@ -466,7 +505,7 @@ def normalize_added_by(actor_input: str = None) -> str:
 
 def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list:
     """
-    Build a list of cell values for a sheet row conforming to the exact 10-column schema:
+    Build a list of cell values for a sheet row conforming to the 11-column writable schema (Col A to K):
       Col A: Ref. No.
       Col B: Type
       Col C: Key Issue / Action
@@ -474,12 +513,15 @@ def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list
       Col E: Added By (Clean name/position only, e.g. Facilities Director, Facility Head)
       Col F: Owner (Exact dropdown role, e.g. Facility Manager, Facility Head, Facilities Director)
       Col G: Date Raised (DD-Mon-YYYY)
-      Col H: Target Date (DD-Mon-YYYY)
+      Col H: Planned Date (DD-Mon-YYYY)
       Col I: Delay Days formula =IF(H{row_idx}="","",IF(J{row_idx}="Closed",0,MAX(0,TODAY()-H{row_idx})))
       Col J: Status (Open, WIP, Closed, On Hold)
+      Col K: Estimated Completion Date (DD-Mon-YYYY)
+      (Col L: Actual Completion Date is calculated automatically in Google Sheets itself - not written by bot)
     """
     created_date = _format_sheet_date(row_data.get("created_date", ""))
-    target_date = _format_sheet_date(row_data.get("target_date", ""))
+    planned_date = _format_sheet_date(row_data.get("planned_date") or row_data.get("target_date", ""))
+    est_completion_date = _format_sheet_date(row_data.get("estimated_completion_date", ""))
     owner = normalize_owner_to_sheet_position(row_data.get("owner", ""), building)
     task_type = row_data.get("type", "Project")
     status = row_data.get("status", "Open")
@@ -493,12 +535,13 @@ def _build_sheet_row(building: str, row_data: dict, row_idx: int = None) -> list
         task_type,
         row_data.get("issue_action", ""),
         row_data.get("latest_update", ""),
-        added_by,  # E: Added by (clean name only, e.g. Facilities Director, Facility Head)
-        owner,     # F: Owner
-        created_date,  # G: Date Raised
-        target_date,   # H: Target Date
-        delay_formula, # I: Delay Days formula
-        status,        # J: Status
+        added_by,             # E: Added by
+        owner,                # F: Owner
+        created_date,         # G: Date Raised
+        planned_date,         # H: Planned Date
+        delay_formula,        # I: Delay Days formula
+        status,               # J: Status
+        est_completion_date,  # K: Estimated Completion Date
     ]
 
 
@@ -514,7 +557,7 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
 
     Args:
         building: Building code (e.g., 'GEBB1', 'GETT', 'Common')
-        task_draft: dict with keys: type, issue_action, owner, target_date, status
+        task_draft: dict with keys: type, issue_action, owner, planned_date/target_date, status
         actor: Who created it
 
     Returns:
@@ -531,6 +574,9 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
         actor_clean = actor_clean.split(" / ")[0].strip()
     modified_str = f"{actor_clean} / {now_dt.strftime('%Y-%m-%d %H:%M UTC')}"
 
+    planned_date = _format_sheet_date(task_draft.get("planned_date") or task_draft.get("target_date", ""))
+    est_completion_date = _format_sheet_date(task_draft.get("estimated_completion_date", ""))
+
     row_data = {
         "ref_no": ref_no,
         "building": building,
@@ -538,11 +584,13 @@ def create_row(building: str, task_draft: dict, actor: str = None) -> dict:
         "issue_action": task_draft.get("issue_action", ""),
         "added_by": actor_clean,
         "owner": normalize_owner_to_sheet_position(task_draft.get("owner", ""), building),
-        "target_date": _format_sheet_date(task_draft.get("target_date", "")),
+        "planned_date": planned_date,
+        "target_date": planned_date,
         "status": task_draft.get("status", "Open"),
         "latest_update": task_draft.get("latest_update", ""),
         "created_date": now_str,
         "last_modified_by_at": modified_str,
+        "estimated_completion_date": est_completion_date,
     }
 
     # 3. Enqueue and write to Sheet
@@ -691,35 +739,66 @@ def _get_cached_row(ref_no: str) -> dict | None:
 
 
 def _upsert_row_cache(row_dict: dict):
-    """Insert or update a row in the cache."""
+    """Insert or update a row in the cache with backward-compatible column handling."""
+    planned = row_dict.get("planned_date") or row_dict.get("target_date") or ""
+    cache_entry = {
+        "ref_no": row_dict.get("ref_no"),
+        "building": row_dict.get("building"),
+        "type": row_dict.get("type"),
+        "issue_action": row_dict.get("issue_action"),
+        "owner": row_dict.get("owner"),
+        "target_date": planned,
+        "status": row_dict.get("status"),
+        "latest_update": row_dict.get("latest_update"),
+        "created_date": row_dict.get("created_date"),
+        "last_modified_by_at": row_dict.get("last_modified_by_at"),
+        "last_synced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if "planned_date" in row_dict:
+        cache_entry["planned_date"] = planned
+    if "estimated_completion_date" in row_dict:
+        cache_entry["estimated_completion_date"] = row_dict.get("estimated_completion_date", "")
+    if "actual_completion_date" in row_dict:
+        cache_entry["actual_completion_date"] = row_dict.get("actual_completion_date", "")
+
     try:
-        supabase.table("row_cache").upsert({
-            "ref_no": row_dict.get("ref_no"),
-            "building": row_dict.get("building"),
-            "type": row_dict.get("type"),
-            "issue_action": row_dict.get("issue_action"),
-            "owner": row_dict.get("owner"),
-            "target_date": row_dict.get("target_date"),
-            "status": row_dict.get("status"),
-            "latest_update": row_dict.get("latest_update"),
-            "created_date": row_dict.get("created_date"),
-            "last_modified_by_at": row_dict.get("last_modified_by_at"),
-            "last_synced_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
+        supabase.table("row_cache").upsert(cache_entry).execute()
     except Exception as e:
-        logger.error(f"row_cache upsert failed for {row_dict.get('ref_no')}: {e}")
+        # If columns do not exist in row_cache yet, fallback to base schema
+        if "column" in str(e).lower() and ("planned_date" in str(e).lower() or "completion_date" in str(e).lower()):
+            for k in ("planned_date", "estimated_completion_date", "actual_completion_date"):
+                cache_entry.pop(k, None)
+            try:
+                supabase.table("row_cache").upsert(cache_entry).execute()
+            except Exception as e2:
+                logger.error(f"row_cache fallback upsert failed for {row_dict.get('ref_no')}: {e2}")
+        else:
+            logger.error(f"row_cache upsert failed for {row_dict.get('ref_no')}: {e}")
 
 
 def _update_cache_field(ref_no: str, field: str, value: str, modified_str: str = None):
-    """Update a single field in the cache."""
+    """Update a single field in the cache with fallback for new columns."""
+    update_data = {
+        field: value,
+        "last_synced_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if field == "planned_date":
+        update_data["target_date"] = value
+    elif field == "target_date":
+        update_data["planned_date"] = value
+
     try:
-        update_data = {
-            field: value,
-            "last_synced_at": datetime.now(timezone.utc).isoformat(),
-        }
         supabase.table("row_cache").update(update_data).eq("ref_no", ref_no).execute()
     except Exception as e:
-        logger.error(f"row_cache field update failed for {ref_no}.{field}: {e}")
+        if "column" in str(e).lower() and ("planned_date" in str(e).lower() or "completion_date" in str(e).lower()):
+            fallback_data = {k: v for k, v in update_data.items() if k not in ("planned_date", "estimated_completion_date", "actual_completion_date")}
+            if fallback_data:
+                try:
+                    supabase.table("row_cache").update(fallback_data).eq("ref_no", ref_no).execute()
+                except Exception as e2:
+                    logger.error(f"row_cache fallback field update failed for {ref_no}.{field}: {e2}")
+        else:
+            logger.error(f"row_cache field update failed for {ref_no}.{field}: {e}")
 
 
 def _check_for_conflict(ref_no: str, field: str, new_value: str,

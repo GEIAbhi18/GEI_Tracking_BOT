@@ -223,8 +223,9 @@ def is_task_overdue(task: dict) -> bool:
         except (ValueError, TypeError):
             pass
 
-    # Fall back to target_date computation
-    target_date = _parse_date(task.get("target_date"))
+    # Fall back to planned_date / target_date computation
+    date_val = task.get("planned_date") or task.get("target_date")
+    target_date = _parse_date(date_val)
     if not target_date:
         return False
 
@@ -234,13 +235,14 @@ def is_task_overdue(task: dict) -> bool:
 
 def is_task_future(task: dict) -> bool:
     """
-    Determine if a task is a future task (target_date > today).
+    Determine if a task is a future task (planned_date > today).
     """
     status = (task.get("status") or "").strip().lower()
     if status in CLOSED_STATUSES:
         return False
 
-    target_date = _parse_date(task.get("target_date"))
+    date_val = task.get("planned_date") or task.get("target_date")
+    target_date = _parse_date(date_val)
     if not target_date:
         return False
 
@@ -249,10 +251,10 @@ def is_task_future(task: dict) -> bool:
 
 def calculate_delay_days(task: dict) -> int:
     """
-    Calculate delay days from target_date vs today.
+    Calculate delay days from planned_date / target_date vs today.
 
     If the Sheet provides delay_days (via formula), use that.
-    Otherwise, compute from target_date.
+    Otherwise, compute from planned_date / target_date.
 
     Returns:
         Positive int for overdue days, 0 if not overdue or cannot determine
@@ -265,8 +267,9 @@ def calculate_delay_days(task: dict) -> int:
         except (ValueError, TypeError):
             pass
 
-    # Compute from target_date
-    target_date = _parse_date(task.get("target_date"))
+    # Compute from planned_date / target_date
+    date_val = task.get("planned_date") or task.get("target_date")
+    target_date = _parse_date(date_val)
     if not target_date:
         return 0
 
@@ -599,7 +602,8 @@ def format_overdue_tasks(tasks: list[dict], building: str) -> str:
         issue = task.get("issue_action", "No description")
         owner = task.get("owner", "Unassigned")
         responsible = task.get("responsible_user") or "Unknown"
-        target = task.get("target_date", "—")
+        planned = task.get("planned_date") or task.get("target_date", "—") or "—"
+        est_comp = task.get("estimated_completion_date") or "—"
         delay = calculate_delay_days(task)
         task_type = task.get("type", "General")
 
@@ -608,7 +612,8 @@ def format_overdue_tasks(tasks: list[dict], building: str) -> str:
         lines.append(f"   *Type:* {task_type}")
         lines.append(f"   *Owner:* {owner}")
         lines.append(f"   *Responsible:* {responsible}")
-        lines.append(f"   *Target Date:* {target}")
+        lines.append(f"   *Planned Date:* {planned}")
+        lines.append(f"   *Estimated Completion Date:* {est_comp}")
         lines.append(f"   *Delay:* {delay} day{'s' if delay != 1 else ''}")
         lines.append("")
 
@@ -639,13 +644,17 @@ def format_filtered_tasks(tasks: list[dict], label: str) -> str:
         building = task.get("building", "")
         owner = task.get("owner", "Unassigned")
         responsible = task.get("responsible_user")
-        target = task.get("target_date", "—")
+        planned = task.get("planned_date") or task.get("target_date", "—") or "—"
+        est_comp = task.get("estimated_completion_date")
+        date_display = f"📅 {planned}"
+        if est_comp:
+            date_display += f" (Est: {est_comp})"
 
         lines.append(f"{rag['emoji']} *{ref}* [{building}] — {issue}")
         owner_display = f"{owner}"
         if responsible and responsible.lower() != owner.lower():
             owner_display += f" ({responsible})"
-        lines.append(f"   👤 {owner_display} | 📅 {target}")
+        lines.append(f"   👤 {owner_display} | {date_display}")
         lines.append("")
 
     if len(tasks) > 15:
@@ -693,7 +702,10 @@ def _filter_by_date_range(tasks: list[dict], start_str: str | None,
 
     result = []
     for task in tasks:
-        task_date = _parse_date(task.get(date_field))
+        val = task.get(date_field)
+        if not val and date_field in ("planned_date", "target_date"):
+            val = task.get("planned_date") or task.get("target_date")
+        task_date = _parse_date(val)
         if not task_date:
             continue
 

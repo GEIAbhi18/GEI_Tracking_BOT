@@ -6,6 +6,7 @@ values for the Facilities department's Google Sheets integration.
 """
 
 import os
+# pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -87,11 +88,15 @@ BUILDING_ALIASES = {
     "common areas": "Common",
 }
 
+import re
+from datetime import datetime, date, timedelta
+from typing import Optional
+
 # ── Column Mapping ───────────────────────────────────────────────────────────
-# All building tabs (GEBB1, GEBB2, GETT, Common) share the exact same 10 columns (A to J):
+# All building tabs (GEBB1, GEBB2, GETT, Common) share the exact same 12 columns (A to L):
 #   A: Ref. No.   B: Type   C: Key Issue / Action   D: Latest Update
-#   E: Added By   F: Owner  G: Date Raised          H: Target Date
-#   I: Delay Days J: Status
+#   E: Added By   F: Owner  G: Date Raised          H: Planned Date
+#   I: Delay Days J: Status K: Estimated Completion Date  L: Actual Completion Date
 
 COLUMN_MAP = {
     "A": "ref_no",
@@ -101,9 +106,11 @@ COLUMN_MAP = {
     "E": "last_modified_by_at",   # "Added By" on the sheet
     "F": "owner",
     "G": "created_date",          # "Date Raised" on the sheet
-    "H": "target_date",
+    "H": "planned_date",          # "Planned Date" on the sheet (formerly Target Date)
     "I": "delay_days",            # computed field — not stored in row_cache
     "J": "status",
+    "K": "estimated_completion_date",
+    "L": "actual_completion_date",
 }
 
 def get_column_map(building: str = None) -> dict:
@@ -112,6 +119,7 @@ def get_column_map(building: str = None) -> dict:
 
 # Reverse mapping: field name → column letter
 FIELD_TO_COLUMN = {v: k for k, v in COLUMN_MAP.items()}
+FIELD_TO_COLUMN["target_date"] = "H"  # Backward compatibility alias
 
 # Column indices (1-based, for gspread)
 COLUMN_INDEX = {
@@ -122,20 +130,80 @@ COLUMN_INDEX = {
     "last_modified_by_at": 5,   # "Added By"
     "owner": 6,
     "created_date": 7,          # "Date Raised"
-    "target_date": 8,
+    "planned_date": 8,
+    "target_date": 8,           # Backward compatibility alias
     "delay_days": 9,
     "status": 10,
+    "estimated_completion_date": 11,
+    "actual_completion_date": 12,
 }
 
 def get_column_index(building: str = None) -> dict:
     """Get the column index mapping for a building tab (uniform across all tabs)."""
     return COLUMN_INDEX
 
-# Fields that are writable from GEI_BOT (read-only fields excluded)
+# Fields that are writable from GEI_BOT (read-only fields excluded; actual_completion_date is never writable)
 WRITABLE_FIELDS = [
     "type", "issue_action", "latest_update", "owner",
-    "target_date", "status",
+    "planned_date", "status",
+    "estimated_completion_date",
 ]
+
+
+def parse_facilities_date(text: str) -> Optional[str]:
+    """
+    Parse human/NLP language dates into standard Sheet format: DD-Mon-YYYY (e.g. 10-Sep-2026).
+    Supports:
+        - "10th September", "10 September", "10 Sep"
+        - "by Friday", "next Monday", "this Friday"
+        - "15 Sep 2026", "10-Sep-2026", "20/09/2026", "2026-09-15"
+        - "completion expected on 20th September"
+        - "tomorrow", "day after tomorrow", "next week"
+        - returns None for skip/empty/unparseable
+    """
+    if not text:
+        return None
+    clean = text.strip()
+    if clean.lower() in ("skip", "no", "none", "na", "-", "—", "cancel", "keep"):
+        return None
+
+    from core.utils import parse_human_date
+    from dateutil import parser as du_parser
+
+    # Clean ordinals like 1st, 2nd, 3rd, 10th
+    t_clean = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', clean, flags=re.IGNORECASE)
+
+    # 1. Try core parse_human_date
+    p = parse_human_date(t_clean)
+    if p:
+        try:
+            dt = datetime.strptime(p, "%Y-%m-%d")
+            return dt.strftime("%d-%b-%Y")
+        except Exception:
+            pass
+
+    # 2. Check for DD-Mon-YYYY / DD-Month-YYYY
+    m = re.search(r'\b(\d{1,2})[-/ ]([A-Za-z]{3,})[-/ ](\d{2,4})\b', clean)
+    if m:
+        try:
+            d_str = f"{m.group(1)} {m.group(2)} {m.group(3)}"
+            dt = du_parser.parse(d_str, dayfirst=True)
+            return dt.strftime("%d-%b-%Y")
+        except Exception:
+            pass
+
+    # 3. Handle 'next week'
+    if "next week" in clean.lower():
+        return (date.today() + timedelta(days=7)).strftime("%d-%b-%Y")
+
+    # 4. Fallback to fuzzy dateutil parser
+    try:
+        dt = du_parser.parse(clean, fuzzy=True, dayfirst=True)
+        return dt.strftime("%d-%b-%Y")
+    except Exception:
+        pass
+
+    return None
 
 # ── Valid Statuses ───────────────────────────────────────────────────────────
 # These must match the Google Sheet 'Lists' tab valid status list

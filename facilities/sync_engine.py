@@ -108,8 +108,8 @@ def _poll_building_tab(building: str) -> int:
         # Compare each field
         col_map = get_column_map(building)
         for field in col_map.values():
-            if field in ("ref_no", "delay_days"):
-                continue  # ref_no is immutable; delay_days is not stored in row_cache
+            if field in ("ref_no", "delay_days", "actual_completion_date"):
+                continue  # ref_no is immutable; delay_days and actual_completion_date are computed by Sheets
 
             sheet_val = (sheet_row.get(field) or "").strip()
             cached_val = (cached.get(field) or "").strip()
@@ -177,23 +177,9 @@ def _handle_new_external_row(ref_no: str, row_data: dict, building: str):
     """Handle a row that exists on the Sheet but not in our cache."""
     logger.info(f"New external row detected: {ref_no}")
 
-    # Insert into row_cache
-    try:
-        supabase.table("row_cache").upsert({
-            "ref_no": ref_no,
-            "building": building,
-            "type": row_data.get("type", ""),
-            "issue_action": row_data.get("issue_action", ""),
-            "owner": row_data.get("owner", ""),
-            "target_date": row_data.get("target_date", ""),
-            "status": row_data.get("status", ""),
-            "latest_update": row_data.get("latest_update", ""),
-            "created_date": row_data.get("created_date", ""),
-            "last_modified_by_at": row_data.get("last_modified_by_at", ""),
-            "last_synced_at": datetime.now(timezone.utc).isoformat(),
-        }).execute()
-    except Exception as e:
-        logger.error(f"Failed to cache new external row {ref_no}: {e}")
+    # Insert into row_cache via helper
+    from facilities.sheets_client import _upsert_row_cache
+    _upsert_row_cache(row_data)
 
     # If created recently by GEI_BOT, suppress external edit notification
     if _was_recently_synced_by_bot(ref_no, "_create_row"):
@@ -217,14 +203,8 @@ def _handle_field_change(ref_no: str, building: str, field: str,
     logger.info(f"External change: {ref_no}.{field}: '{old_value}' → '{new_value}'")
 
     # Update row_cache
-    try:
-        update_data = {
-            field: new_value,
-            "last_synced_at": datetime.now(timezone.utc).isoformat(),
-        }
-        supabase.table("row_cache").update(update_data).eq("ref_no", ref_no).execute()
-    except Exception as e:
-        logger.error(f"Cache update failed for {ref_no}.{field}: {e}")
+    from facilities.sheets_client import _update_cache_field
+    _update_cache_field(ref_no, field, new_value)
 
     # If updated recently by GEI_BOT, suppress external edit notification
     if _was_recently_synced_by_bot(ref_no, field):

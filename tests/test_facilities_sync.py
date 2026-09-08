@@ -150,3 +150,107 @@ def test_poll_building_tab_deletion_detection(mocker):
     mock_handle_deleted.assert_called_once_with("GEBB1-009", "GEBB1")
     assert changes >= 1
 
+
+def test_facilities_new_columns_config():
+    """Verify 12-column layout, Planned Date, and completion date protection."""
+    from facilities.config import COLUMN_MAP, COLUMN_INDEX, WRITABLE_FIELDS
+
+    assert len(COLUMN_MAP) == 12
+    assert COLUMN_MAP["H"] == "planned_date"
+    assert COLUMN_MAP["K"] == "estimated_completion_date"
+    assert COLUMN_MAP["L"] == "actual_completion_date"
+
+    assert COLUMN_INDEX["planned_date"] == 8
+    assert COLUMN_INDEX["estimated_completion_date"] == 11
+    assert COLUMN_INDEX["actual_completion_date"] == 12
+
+    # Bot must write estimated_completion_date but NEVER actual_completion_date
+    assert "estimated_completion_date" in WRITABLE_FIELDS
+    assert "actual_completion_date" not in WRITABLE_FIELDS
+
+
+def test_parse_facilities_date_nlp():
+    """Test NLP / human language date parsing for Estimated Completion Date."""
+    from facilities.config import parse_facilities_date
+
+    # Specific date with ordinals
+    res1 = parse_facilities_date("10th September")
+    assert res1 is not None and "10-Sep-" in res1
+
+    # Standard formats
+    res2 = parse_facilities_date("15 Sep 2026")
+    assert res2 == "15-Sep-2026"
+
+    # Conversational phrasing
+    res3 = parse_facilities_date("completion expected on 20th September")
+    assert res3 is not None and "20-Sep-" in res3
+
+    # Weekdays ("by Friday", "next Monday")
+    res4 = parse_facilities_date("by Friday")
+    assert res4 is not None
+
+    res5 = parse_facilities_date("next Monday")
+    assert res5 is not None
+
+    # Skip keywords
+    assert parse_facilities_date("skip") is None
+    assert parse_facilities_date("none") is None
+    assert parse_facilities_date("") is None
+
+
+def test_format_overdue_tasks_displays_planned_and_estimated():
+    """Verify format_overdue_tasks displays Planned Date and Estimated Completion Date."""
+    from facilities.task_filter import format_overdue_tasks
+
+    sample_tasks = [
+        {
+            "ref_no": "GEBB1-005",
+            "type": "Client Escalation",
+            "issue_action": "Recurring water leakage complaint",
+            "owner": "Facility Manager",
+            "responsible_user": "Vikramjeet",
+            "planned_date": "31-Aug-2026",
+            "estimated_completion_date": "10-Sep-2026",
+            "delay_days": "8",
+            "status": "Open",
+        },
+        {
+            "ref_no": "GEBB1-010",
+            "type": "HVAC",
+            "issue_action": "AC cooling low in bay 3",
+            "owner": "Facility Head",
+            "responsible_user": "Anoop",
+            "planned_date": "01-Sep-2026",
+            "estimated_completion_date": "",  # Empty
+            "delay_days": "7",
+            "status": "WIP",
+        },
+    ]
+
+    output = format_overdue_tasks(sample_tasks, "GEBB1")
+
+    # Verify header
+    assert "🔴 *Overdue Tasks — GEBB1*" in output
+
+    # Task 1 checks
+    assert "*Ref:* GEBB1-005" in output
+    assert "*Planned Date:* 31-Aug-2026" in output
+    assert "*Estimated Completion Date:* 10-Sep-2026" in output
+    assert "*Delay:* 8 days" in output
+
+    # Task 2 checks (empty estimated date displays '—')
+    assert "*Ref:* GEBB1-010" in output
+    assert "*Planned Date:* 01-Sep-2026" in output
+    assert "*Estimated Completion Date:* —" in output
+
+    assert "_Total overdue: 2_" in output
+    assert "Target Date" not in output
+
+
+def test_actual_completion_date_write_rejected():
+    """Verify that write_field rejects writing to actual_completion_date."""
+    from facilities.sheets_client import write_field
+
+    with pytest.raises(ValueError, match="not writable"):
+        write_field("GEBB1-001", "actual_completion_date", "10-Sep-2026")
+

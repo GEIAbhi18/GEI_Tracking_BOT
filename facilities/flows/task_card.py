@@ -65,8 +65,10 @@ def show_task_card(sender: str, ref_no: str, user: dict):
         f"📁 *Type:* {row.get('type', '—')}\n"
         f"🔧 *Issue/Action:* {row.get('issue_action', '—')}\n"
         f"👤 *Owner:* {owner_display}\n"
-        f"📅 *Target Date:* {row.get('target_date', '—')}\n"
-        f"{rag['emoji']} *Status:* {rag['label']}\n"
+        f"📅 *Planned Date:* {row.get('planned_date') or row.get('target_date', '—') or '—'}\n"
+        f"⏳ *Estimated Completion Date:* {row.get('estimated_completion_date', '—') or '—'}\n"
+        + (f"✅ *Actual Completion Date:* {row.get('actual_completion_date')}\n" if row.get('actual_completion_date') else "")
+        + f"{rag['emoji']} *Status:* {rag['label']}\n"
         f"📝 *Latest Update:* {row.get('latest_update', '—')}\n"
         f"📅 *Date Raised:* {row.get('created_date', '—')}\n"
         f"👤 *Added by:* {normalize_added_by(row.get('added_by') or row.get('last_modified_by_at', '—'))}\n"

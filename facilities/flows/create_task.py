@@ -141,14 +141,14 @@ def handle_type_selection(sender: str, task_type: str, user: dict):
 
     # If issue_action was already prefilled from conversational input, advance to next missing field
     if draft.get("issue_action"):
-        if draft.get("target_date") and draft.get("owner"):
+        if (draft.get("planned_date") or draft.get("target_date")) and draft.get("owner"):
             _show_draft_preview(sender, draft, user)
             return
-        elif not draft.get("target_date"):
+        elif not (draft.get("planned_date") or draft.get("target_date")):
             set_session(sender, "create_target_date", draft=draft, context={"next_action": "create_task"})
             send_text(
                 sender,
-                "📅 *Target Date:*\n\n"
+                "📅 *Planned Date:*\n\n"
                 "When should this be completed?\n"
                 "(e.g., *tomorrow*, *next Friday*, *2026-09-15*, or *skip* for no date)"
             )
@@ -252,18 +252,21 @@ def handle_create_flow_text(sender: str, text: str, user: dict, session: dict):
         set_session(sender, "create_target_date", draft=draft, context={"next_action": "create_task"})
         send_text(
             sender,
-            "📅 *Target Date:*\n\n"
+            "📅 *Planned Date:*\n\n"
             "When should this be completed?\n"
             "(e.g., *tomorrow*, *next Friday*, *2026-09-15*, or *skip* for no date)"
         )
 
     elif state == "create_target_date":
         if text.strip().lower() in ("skip", "no", "none", "na", "-", "—"):
+            draft["planned_date"] = "—"
             draft["target_date"] = "—"
         else:
             from core.utils import parse_human_date
             parsed = parse_human_date(text)
-            draft["target_date"] = parsed if parsed else text.strip()
+            date_val = parsed if parsed else text.strip()
+            draft["planned_date"] = date_val
+            draft["target_date"] = date_val
 
         set_session(sender, "create_owner", draft=draft, context={"next_action": "create_task"})
 
@@ -347,7 +350,8 @@ def _check_and_show_preview(sender: str, draft: dict, user: dict,
 
     # No duplicate — show preview
     from facilities.sheets_client import _format_sheet_date
-    target_date_disp = _format_sheet_date(draft.get('target_date', '')) or draft.get('target_date') or '—'
+    raw_date = draft.get('planned_date') or draft.get('target_date', '')
+    target_date_disp = _format_sheet_date(raw_date) or raw_date or '—'
     preview = (
         f"📝 *Task Draft — Review*\n"
         f"{'─' * 25}\n\n"
@@ -355,7 +359,7 @@ def _check_and_show_preview(sender: str, draft: dict, user: dict,
         f"📁 *Type:* {draft.get('type', '—')}\n"
         f"🔧 *Issue/Action:* {draft.get('issue_action', '—')}\n"
         f"👤 *Owner:* {draft.get('owner', '—')}\n"
-        f"📅 *Target Date:* {target_date_disp}\n"
+        f"📅 *Planned Date:* {target_date_disp}\n"
         f"🔴 *Status:* Open\n\n"
         f"Please confirm to create this task."
     )

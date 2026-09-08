@@ -115,7 +115,7 @@ def calculate_task_rag(task: dict, today_date: date = None) -> tuple:
     if status in CLOSED_STATUSES or status_lower in ("closed", "completed", "done"):
         return ("GREEN", 0)
 
-    target_date_val = _parse_date_safe(task.get("target_date"))
+    target_date_val = _parse_date_safe(task.get("planned_date") or task.get("target_date"))
     created_date_val = _parse_date_safe(task.get("created_date"))
 
     # Delay days from explicit field or calculated
@@ -248,7 +248,10 @@ def fetch_live_facilities_tasks(today_date: date = None) -> list:
             "added_by": t.get("last_modified_by_at") or t.get("added_by") or "—",
             "owner": t.get("owner") or "—",
             "created_date": t.get("created_date") or "—",
-            "target_date": t.get("target_date") or "—",
+            "planned_date": t.get("planned_date") or t.get("target_date") or "—",
+            "target_date": t.get("planned_date") or t.get("target_date") or "—",
+            "estimated_completion_date": t.get("estimated_completion_date") or "—",
+            "actual_completion_date": t.get("actual_completion_date") or "—",
             "delay_days": delay_days,
             "status": t.get("status") or "Open",
             "rag": rag_status,
@@ -409,7 +412,7 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
         is_closed = 1 if t["status"].lower() in ("closed", "completed", "done") else 0
         rag_weight = {"RED": 0, "AMBER": 1, "GREEN": 2}.get(t["rag"], 3)
         delay_weight = -t.get("delay_days", 0)
-        return (is_closed, rag_weight, delay_weight, t.get("target_date") or "9999")
+        return (is_closed, rag_weight, delay_weight, t.get("planned_date") or t.get("target_date") or "9999")
 
     # Table Column Specifications (Total width = 190mm)
     COL_WIDTHS = {
@@ -497,7 +500,7 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
             ("Task / Issue", COL_WIDTHS["issue"], "L"),
             ("Type", COL_WIDTHS["type"], "C"),
             ("Owner", COL_WIDTHS["owner"], "L"),
-            ("Target Date", COL_WIDTHS["deadline"], "C"),
+            ("Planned Date", COL_WIDTHS["deadline"], "C"),
             ("Delay", COL_WIDTHS["delay"], "C"),
             ("Progress", COL_WIDTHS["progress"], "C"),
             ("Priority", COL_WIDTHS["rag"], "C"),
@@ -551,8 +554,8 @@ def generate_facilities_eod_pdf(tasks: list = None, output_path: str = None) -> 
             pdf.set_fill_color(*row_bg)
             pdf.cell(COL_WIDTHS["owner"], row_h, clean_pdf_text(owner), fill=True, border="B", align="L")
 
-            # 4. Target Date
-            target_d = t.get("target_date", "—")
+            # 4. Planned Date
+            target_d = t.get("planned_date") or t.get("target_date", "—") or "—"
             pdf.set_fill_color(*row_bg)
             pdf.cell(COL_WIDTHS["deadline"], row_h, clean_pdf_text(target_d), fill=True, border="B", align="C")
 

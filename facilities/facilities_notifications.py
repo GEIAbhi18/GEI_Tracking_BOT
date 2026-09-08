@@ -129,7 +129,8 @@ def format_task_update_notification(task: dict, update_text: str = None) -> str:
     ref = task.get("ref_no", "—")
     issue = task.get("issue_action", "No description")
     building = task.get("building", "—")
-    target = task.get("target_date", "—")
+    planned = task.get("planned_date") or task.get("target_date", "—") or "—"
+    est_comp = task.get("estimated_completion_date", "—") or "—"
     status = task.get("status", "—")
     task_type = task.get("type", "—")
 
@@ -139,7 +140,8 @@ def format_task_update_notification(task: dict, update_text: str = None) -> str:
         f"*Ref:* {ref}\n"
         f"*Building:* {building}\n"
         f"*Type:* {task_type}\n"
-        f"*Target Date:* {target}\n"
+        f"*Planned Date:* {planned}\n"
+        f"*Estimated Completion Date:* {est_comp}\n"
         f"*Status:* {status}\n"
     )
 
@@ -168,7 +170,8 @@ def format_overdue_notification(task: dict) -> str:
     ref = task.get("ref_no", "—")
     issue = task.get("issue_action", "No description")
     building = task.get("building", "—")
-    target = task.get("target_date", "—")
+    planned = task.get("planned_date") or task.get("target_date", "—") or "—"
+    est_comp = task.get("estimated_completion_date", "—") or "—"
     status = task.get("status", "—")
     delay = calculate_delay_days(task)
 
@@ -177,7 +180,8 @@ def format_overdue_notification(task: dict) -> str:
         f"*Task:* {issue}\n"
         f"*Ref:* {ref}\n"
         f"*Building:* {building}\n"
-        f"*Target Date:* {target}\n"
+        f"*Planned Date:* {planned}\n"
+        f"*Estimated Completion Date:* {est_comp}\n"
         f"*Status:* {status}\n"
         f"*Delay:* {delay} day{'s' if delay != 1 else ''}\n\n"
         f"Please update this task or provide a revised timeline.\n\n"
