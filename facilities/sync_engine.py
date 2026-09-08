@@ -76,6 +76,7 @@ def _poll_building_tab(building: str) -> int:
     # Skip the header row
     data_rows = all_rows[1:]
     changes = 0
+    sheet_ref_nos = set()
 
     for row_values in data_rows:
         if not row_values or not row_values[0]:
@@ -85,6 +86,7 @@ def _poll_building_tab(building: str) -> int:
         if not ref_no:
             continue
 
+        sheet_ref_nos.add(ref_no)
         sheet_row = _row_to_dict(row_values, building)
         sheet_row["building"] = building
 
@@ -115,6 +117,32 @@ def _poll_building_tab(building: str) -> int:
             if sheet_val != cached_val:
                 _handle_field_change(ref_no, building, field, cached_val, sheet_val)
                 changes += 1
+
+    # Check for rows in row_cache that were deleted externally from the Sheet
+    try:
+        cache_res = supabase.table("row_cache").select("ref_no").eq("building", building).execute()
+        cached_refs = {r["ref_no"] for r in (cache_res.data or []) if r.get("ref_no")}
+        deleted_refs = cached_refs - sheet_ref_nos
+
+        for del_ref in deleted_refs:
+            # Skip if recently created by GEI_BOT
+            if _was_recently_synced_by_bot(del_ref, "_create_row", window_seconds=300):
+                logger.info(f"Skipping deletion for {del_ref}: recently created by GEI_BOT")
+                continue
+
+            # Skip if pending creation in sync_queue
+            try:
+                pending_create = supabase.table("sync_queue").select("id").eq("ref_no", del_ref).eq("field", "_create_row").eq("status", "pending").execute()
+                if pending_create.data:
+                    logger.info(f"Skipping deletion for {del_ref}: creation pending in sync_queue")
+                    continue
+            except Exception as e:
+                logger.warning(f"Error checking pending create for {del_ref}: {e}")
+
+            _handle_deleted_external_row(del_ref, building)
+            changes += 1
+    except Exception as e:
+        logger.error(f"Failed to check deleted rows for {building}: {e}")
 
     return changes
 
@@ -216,6 +244,34 @@ def _handle_field_change(ref_no: str, building: str, field: str,
         "old_value": old_value,
         "new_value": new_value,
     })
+
+
+def _handle_deleted_external_row(ref_no: str, building: str):
+    """Handle a row that exists in row_cache but was deleted from the Sheet."""
+    logger.info(f"External deletion detected: {ref_no} ({building}) was deleted from Google Sheet")
+
+    # 1. Delete from row_cache
+    try:
+        supabase.table("row_cache").delete().eq("ref_no", ref_no).execute()
+        logger.info(f"Removed deleted row {ref_no} from row_cache")
+    except Exception as e:
+        logger.error(f"Failed to delete {ref_no} from row_cache: {e}")
+
+    # 2. Cancel any pending or failed sync_queue entries
+    try:
+        supabase.table("sync_queue").update({
+            "status": "cancelled",
+            "error_message": "Row was deleted externally from Google Sheet",
+        }).eq("ref_no", ref_no).in_("status", ["pending", "failed"]).execute()
+        logger.info(f"Cancelled sync_queue entries for deleted row {ref_no}")
+    except Exception as e:
+        logger.error(f"Failed to cancel sync_queue entries for {ref_no}: {e}")
+
+    # 3. Log to audit log
+    _log_audit_entry(
+        ref_no, "google_sheets", None,
+        "Task deleted externally on Google Sheets"
+    )
 
 
 def _notify_external_change(ref_no: str, building: str, change_type: str,

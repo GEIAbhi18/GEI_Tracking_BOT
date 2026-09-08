@@ -41,22 +41,28 @@ def generate_ref_no(building: str) -> str:
 
         ref_no = result.data
 
-        # Self-healing: Check if this ref_no already exists in row_cache
-        existing = supabase.table("row_cache").select("ref_no").eq("ref_no", ref_no).execute()
-        if existing.data:
-            # Counter in DB is behind existing tasks — advance past highest existing number
-            all_rows = supabase.table("row_cache").select("ref_no").eq("building", building).execute()
-            max_num = 0
-            prefix = "COM" if building == "Common" else building
-            for r in (all_rows.data or []):
-                r_ref = r.get("ref_no", "")
-                if "-" in r_ref:
-                    try:
-                        num = int(r_ref.split("-")[1])
-                        if num > max_num:
-                            max_num = num
-                    except (ValueError, IndexError):
-                        pass
+        # Self-healing: Check if counter is behind existing tasks in row_cache
+        gen_num = 0
+        if "-" in ref_no:
+            try:
+                gen_num = int(ref_no.split("-")[1])
+            except (ValueError, IndexError):
+                pass
+
+        all_rows = supabase.table("row_cache").select("ref_no").eq("building", building).execute()
+        max_num = 0
+        prefix = "COM" if building == "Common" else building
+        for r in (all_rows.data or []):
+            r_ref = r.get("ref_no", "")
+            if "-" in r_ref:
+                try:
+                    num = int(r_ref.split("-")[1])
+                    if num > max_num:
+                        max_num = num
+                except (ValueError, IndexError):
+                    pass
+
+        if gen_num <= max_num:
             next_num = max_num + 1
             ref_no = f"{prefix}-{str(next_num).zfill(REF_NO_PAD_WIDTH)}"
             # Update counter in DB so next call continues forward
