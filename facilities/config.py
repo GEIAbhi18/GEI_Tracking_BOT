@@ -168,7 +168,10 @@ def parse_facilities_date(text: str) -> Optional[str]:
         return None
 
     from core.utils import parse_human_date
-    from dateutil import parser as du_parser
+    try:
+        from dateutil import parser as du_parser
+    except ImportError:
+        du_parser = None
 
     # Clean ordinals like 1st, 2nd, 3rd, 10th
     t_clean = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', clean, flags=re.IGNORECASE)
@@ -187,8 +190,15 @@ def parse_facilities_date(text: str) -> Optional[str]:
     if m:
         try:
             d_str = f"{m.group(1)} {m.group(2)} {m.group(3)}"
-            dt = du_parser.parse(d_str, dayfirst=True)
-            return dt.strftime("%d-%b-%Y")
+            if du_parser:
+                dt = du_parser.parse(d_str, dayfirst=True)
+                return dt.strftime("%d-%b-%Y")
+            else:
+                for fmt in ("%d %b %Y", "%d %B %Y", "%d %b %y", "%d %B %y"):
+                    try:
+                        return datetime.strptime(d_str, fmt).strftime("%d-%b-%Y")
+                    except ValueError:
+                        pass
         except Exception:
             pass
 
@@ -197,11 +207,12 @@ def parse_facilities_date(text: str) -> Optional[str]:
         return (date.today() + timedelta(days=7)).strftime("%d-%b-%Y")
 
     # 4. Fallback to fuzzy dateutil parser
-    try:
-        dt = du_parser.parse(clean, fuzzy=True, dayfirst=True)
-        return dt.strftime("%d-%b-%Y")
-    except Exception:
-        pass
+    if du_parser:
+        try:
+            dt = du_parser.parse(clean, fuzzy=True, dayfirst=True)
+            return dt.strftime("%d-%b-%Y")
+        except Exception:
+            pass
 
     return None
 

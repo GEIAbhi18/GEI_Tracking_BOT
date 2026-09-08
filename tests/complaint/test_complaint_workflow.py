@@ -1,9 +1,12 @@
+# pyrefly: ignore [missing-import]
 import pytest
 from feedback.engine import initiate_feedback, handle_flow_response, handle_feedback_reply
 from feedback.session_store import _sessions
 
 @pytest.fixture(autouse=True)
-def clean_sessions():
+def clean_sessions(mocker):
+    mocker.patch("feedback.sheets.save_session_to_sheet", return_value=True)
+    mocker.patch("feedback.sheets.remove_session_from_sheet", return_value=True)
     _sessions.clear()
     yield
     _sessions.clear()

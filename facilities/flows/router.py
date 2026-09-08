@@ -677,10 +677,122 @@ def _route_image(sender: str, image_data: dict, user: dict, session: dict):
     send_text(sender, "To attach an image to a task, first open the task card and tap *Attach*.")
 
 
+def _is_navigational_voice_command(transcript: str) -> bool:
+    """Detect if a voice transcript is a navigational/query command.
+
+    Navigational commands (e.g. "show my tasks", "overdue tasks", "menu")
+    should be routed through ``_route_text`` which already handles them.
+    Data-bearing transcripts (task descriptions, progress updates) should
+    go through the voice operations extraction pipeline instead.
+    """
+    import re
+    clean = transcript.strip().lower()
+
+    # ── Greetings / menu / cancel ────────────────────────────────────────
+    if clean in (
+        "hi", "hello", "hey", "menu", "start", "home", "cancel",
+        "reset", "exit", "help", "back",
+    ):
+        return True
+
+    # ── "my tasks" variants ──────────────────────────────────────────────
+    MY_TASKS_PHRASES = (
+        "my tasks", "my task", "show my tasks", "show my task",
+        "view my tasks", "view my task", "tasks assigned to me",
+        "my assigned tasks",
+    )
+    if clean in MY_TASKS_PHRASES or any(p in clean for p in MY_TASKS_PHRASES):
+        return True
+
+    # ── "show/view/list tasks" (optionally with building) ────────────────
+    if re.search(
+        r'\b(show|view|list|get|display|see)\b.*\btasks?\b', clean
+    ):
+        return True
+
+    # ── "team tasks" ─────────────────────────────────────────────────────
+    if "team task" in clean:
+        return True
+
+    # ── Completed / closed tasks ─────────────────────────────────────────
+    if any(p in clean for p in (
+        "completed task", "closed task", "show completed", "show closed",
+    )):
+        return True
+
+    # ── Overdue tasks ────────────────────────────────────────────────────
+    if any(p in clean for p in ("overdue", "over due", "past due")):
+        return True
+
+    # ── Create / new / add / raise task (command form) ───────────────────
+    if any(clean.startswith(p) for p in (
+        "create task", "create a task", "new task", "add task",
+        "raise task", "raise a task",
+    )):
+        return True
+
+    # ── Direct task update with ref no (mark/close/update GETT-013) ─────
+    if re.search(
+        r'\b(update|mark|set|close|reopen|complete|change)\b.*'
+        r'\b(GEBB1|GEBB2|GETT|COM|COMMON)[-\s]?\d',
+        clean, re.IGNORECASE,
+    ):
+        return True
+
+    # Also match "GETT-013 close" / "GEBB1 042 as WIP" (ref before verb)
+    if _try_parse_direct_task_update(transcript):
+        return True
+
+    # ── Summary ──────────────────────────────────────────────────────────
+    if any(p in clean for p in ("summary", "show summary", "view summary")):
+        return True
+
+    # ── Report / EOD ─────────────────────────────────────────────────────
+    REPORT_PHRASES = (
+        "report", "eod report", "eod", "pdf report",
+        "facilities report", "facility report", "download report",
+        "send report", "get report",
+    )
+    if clean in REPORT_PHRASES or any(p in clean for p in REPORT_PHRASES):
+        return True
+
+    # ── Sync status ──────────────────────────────────────────────────────
+    if any(p in clean for p in ("sync status", "sync health", "sheet sync")):
+        return True
+
+    # ── Daily digest ─────────────────────────────────────────────────────
+    if any(p in clean for p in ("daily digest", "daily update")):
+        return True
+
+    # ── History ──────────────────────────────────────────────────────────
+    if "history" in clean and re.search(
+        r'\b(GEBB1|GEBB2|GETT|COM|COMMON)[-\s]?\d', clean, re.IGNORECASE
+    ):
+        return True
+
+    return False
+
+
 def _route_voice(sender: str, transcript: str, user: dict, session: dict):
-    """Route voice note transcriptions."""
+    """Route voice note transcriptions.
+
+    Two-phase routing:
+      1. If the transcript is a navigational/query command (e.g. "show my
+         tasks", "overdue tasks", "menu"), route through ``_route_text``
+         which already handles all these intents correctly.
+      2. Otherwise, send to the voice operations handler for LLM-based
+         extraction of task mutations (create/update/reassign).
+    """
     from facilities.alias_normalizer import normalize_building_aliases
     transcript = normalize_building_aliases(transcript)
+
+    # Phase 1: Navigational commands → reuse existing text routing
+    if _is_navigational_voice_command(transcript):
+        logger.info(f"Voice transcript is navigational command, routing as text: {transcript[:80]}")
+        _route_text(sender, transcript, user, session)
+        return
+
+    # Phase 2: Data-bearing voice notes → voice operations extraction
     from facilities.flows.voice_handler import handle_voice_note
     handle_voice_note(sender, transcript, user)
 

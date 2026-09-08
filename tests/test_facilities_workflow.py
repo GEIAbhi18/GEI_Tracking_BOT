@@ -839,3 +839,230 @@ class TestVoiceFallback:
         assert not mock_buttons.called
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# VOICE NAVIGATION ROUTING TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class TestVoiceNavigationDetection:
+    """Tests for _is_navigational_voice_command — ensures navigational
+    voice commands are correctly identified so they route through _route_text."""
+
+    def test_show_my_tasks_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("Show my tasks")
+        assert _is_navigational_voice_command("show my tasks")
+        assert _is_navigational_voice_command("Show my tasks. Show my tasks.")
+        assert _is_navigational_voice_command("my tasks")
+        assert _is_navigational_voice_command("view my tasks")
+        assert _is_navigational_voice_command("tasks assigned to me")
+
+    def test_show_tasks_with_building_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("Show tasks of GEBB1 or B1.")
+        assert _is_navigational_voice_command("show tasks of GEBB1")
+        assert _is_navigational_voice_command("show tasks of GETT")
+        assert _is_navigational_voice_command("view tasks in GEBB2")
+        assert _is_navigational_voice_command("list tasks for Common")
+        assert _is_navigational_voice_command("get tasks of GEBB1")
+
+    def test_show_team_tasks_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("show team tasks")
+        assert _is_navigational_voice_command("team tasks")
+        assert _is_navigational_voice_command("view team tasks for GEBB1")
+
+    def test_overdue_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("show overdue tasks")
+        assert _is_navigational_voice_command("overdue tasks in GEBB1")
+        assert _is_navigational_voice_command("what tasks are overdue")
+        assert _is_navigational_voice_command("past due tasks")
+
+    def test_completed_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("show completed tasks")
+        assert _is_navigational_voice_command("completed tasks in GETT")
+        assert _is_navigational_voice_command("show closed tasks")
+
+    def test_create_task_command_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("create task")
+        assert _is_navigational_voice_command("create a task")
+        assert _is_navigational_voice_command("new task")
+        assert _is_navigational_voice_command("add task")
+        assert _is_navigational_voice_command("raise task")
+
+    def test_direct_update_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("Mark GETT-013 as closed")
+        assert _is_navigational_voice_command("close GETT-006")
+        assert _is_navigational_voice_command("update GEBB1-042 status to WIP")
+
+    def test_menu_greetings_are_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("menu")
+        assert _is_navigational_voice_command("hi")
+        assert _is_navigational_voice_command("hello")
+        assert _is_navigational_voice_command("help")
+        assert _is_navigational_voice_command("home")
+        assert _is_navigational_voice_command("cancel")
+
+    def test_summary_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("show summary")
+        assert _is_navigational_voice_command("summary")
+
+    def test_report_is_navigational(self):
+        from facilities.flows.router import _is_navigational_voice_command
+        assert _is_navigational_voice_command("report")
+        assert _is_navigational_voice_command("eod report")
+        assert _is_navigational_voice_command("facilities report")
+        assert _is_navigational_voice_command("pdf report")
+
+    def test_data_bearing_not_navigational(self):
+        """Task data / progress updates should NOT be detected as navigational."""
+        from facilities.flows.router import _is_navigational_voice_command
+        assert not _is_navigational_voice_command("Waterproofing 60% done in top terrace")
+        assert not _is_navigational_voice_command("The plumber came and fixed the water tank issue")
+        assert not _is_navigational_voice_command("AC cooling is not working properly on 5th floor")
+        assert not _is_navigational_voice_command("Bay 1 waterproofing 80% done")
+        assert not _is_navigational_voice_command("Slope correction has a blocker, material not arrived")
+
+    def test_random_notes_not_navigational(self):
+        """Random/general notes should NOT be detected as navigational."""
+        from facilities.flows.router import _is_navigational_voice_command
+        assert not _is_navigational_voice_command("The meeting with the contractor went well today")
+        assert not _is_navigational_voice_command("Please tell the security guard to check the gate")
+        assert not _is_navigational_voice_command("We need more cement and sand for tomorrow")
+
+
+class TestVoiceRouteIntegration:
+    """Integration tests for _route_voice — ensures navigational transcripts
+    are routed through _route_text and data-bearing ones go to voice_handler."""
+
+    def test_show_my_tasks_routes_to_text(self):
+        """'Show my tasks' voice note should trigger show_my_tasks, not fallback menu."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {
+            "name": "Abhijeet",
+            "role": "Developer",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            _route_voice(sender, "Show my tasks. Show my tasks.", user, None)
+
+            # Should route to _route_text, NOT to voice_handler
+            assert mock_route_text.called
+            assert not mock_voice.called
+
+    def test_show_tasks_of_building_routes_to_text(self):
+        """'Show tasks of GEBB1' voice note should route through text handler."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {
+            "name": "Abhijeet",
+            "role": "Developer",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            _route_voice(sender, "Show tasks of GEBB1 or B1.", user, None)
+
+            assert mock_route_text.called
+            assert not mock_voice.called
+
+    def test_data_voice_note_routes_to_voice_handler(self):
+        """Data-bearing voice notes should go to voice operations extraction."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {
+            "name": "Abhijeet",
+            "role": "Developer",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            _route_voice(sender, "Waterproofing 60% done in top terrace", user, None)
+
+            # Should go to voice_handler, NOT _route_text
+            assert not mock_route_text.called
+            assert mock_voice.called
+
+    def test_random_note_routes_to_voice_handler(self):
+        """Random/general notes should go to voice handler (preserving existing behavior)."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {
+            "name": "Abhijeet",
+            "role": "Developer",
+            "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+            "is_facilities_user": True,
+        }
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            _route_voice(sender, "The meeting with the contractor went well today", user, None)
+
+            assert not mock_route_text.called
+            assert mock_voice.called
+
+    def test_overdue_voice_routes_to_text(self):
+        """'Show overdue tasks' voice note should route through text handler."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {"name": "Abhijeet", "role": "Developer",
+                "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+                "is_facilities_user": True}
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            _route_voice(sender, "show overdue tasks", user, None)
+
+            assert mock_route_text.called
+            assert not mock_voice.called
+
+    def test_alias_normalized_before_routing(self):
+        """Building aliases should be normalized before navigational detection."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {"name": "Abhijeet", "role": "Developer",
+                "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+                "is_facilities_user": True}
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # "Trade Tower" → normalized to "GETT", then "show tasks of GETT" is navigational
+            _route_voice(sender, "show tasks of Trade Tower", user, None)
+
+            assert mock_route_text.called
+            assert not mock_voice.called
+
+    def test_mark_ref_no_voice_routes_to_text(self):
+        """'Mark GETT-013 as closed' should route through text handler for direct update."""
+        from facilities.flows.router import _route_voice
+
+        sender = "917717754421"
+        user = {"name": "Abhijeet", "role": "Developer",
+                "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"],
+                "is_facilities_user": True}
+
+        with patch("facilities.flows.router._route_text") as mock_route_text, \
+             patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            _route_voice(sender, "Mark GETT-013 as closed", user, None)
+
+            assert mock_route_text.called
+            assert not mock_voice.called
