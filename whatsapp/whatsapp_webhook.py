@@ -265,6 +265,23 @@ try:
 except Exception as _fac_sched_err:
     logging.warning(f"Facilities background jobs failed to schedule: {_fac_sched_err}")
 
+# ── Compliance Google Sheet Daily Reminder Job ─────────────────────────────
+try:
+    from compliance.scheduler_job import run_compliance_daily_check
+    from compliance.config import COMPLIANCE_CHECK_HOUR, COMPLIANCE_CHECK_MINUTE
+    _bg_scheduler.add_job(
+        run_compliance_daily_check,
+        'cron',
+        hour=COMPLIANCE_CHECK_HOUR,
+        minute=COMPLIANCE_CHECK_MINUTE,
+        id='compliance_daily_reminder',
+        replace_existing=True,
+    )
+    logging.info(f"Compliance daily reminder job registered (at {COMPLIANCE_CHECK_HOUR:02d}:{COMPLIANCE_CHECK_MINUTE:02d} daily)")
+except Exception as _comp_sched_err:
+    logging.warning(f"Compliance daily reminder job failed to schedule: {_comp_sched_err}")
+
+
 
 # ── Deferred Startup ────────────────────────────────────────────────────────
 # Start scheduler + restore sessions AFTER gunicorn binds the port.

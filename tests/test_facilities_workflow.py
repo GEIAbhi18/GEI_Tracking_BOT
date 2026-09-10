@@ -281,7 +281,7 @@ class TestCreateTaskFlowAndDirectorAccess:
              patch("facilities.flows.router.get_session", side_effect=mock_get_session), \
              patch("whatsapp.ux.send_text"):
             route_facilities_message(sender, text="Test task created by Kanav", user=user)
-            assert session_store.get("current_flow_state") == "create_target_date"
+            assert session_store.get("current_flow_state") == "create_owner"
             assert session_store.get("draft_task_json", {}).get("issue_action") == "Test task"
             assert session_store.get("draft_task_json", {}).get("owner") == "Facilities Director"
 

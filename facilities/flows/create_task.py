@@ -19,6 +19,7 @@ from facilities.flows.router import get_session, set_session, clear_session
 logger = logging.getLogger(__name__)
 
 
+# pyrefly: ignore [bad-function-definition]
 def start_create_flow(sender: str, user: dict, prefill: dict = None):
     """Start the task creation flow. Pre-fill from LLM extraction if available."""
     from facilities.sheets_client import _format_sheet_date, normalize_owner_to_sheet_position
@@ -37,8 +38,10 @@ def start_create_flow(sender: str, user: dict, prefill: dict = None):
             if prefill.get(key):
                 draft[key] = prefill[key]
         if draft.get("target_date"):
+            # pyrefly: ignore [bad-assignment]
             draft["target_date"] = _format_sheet_date(str(draft["target_date"]))
         if draft.get("owner"):
+            # pyrefly: ignore [bad-argument-type, unnecessary-type-conversion]
             draft["owner"] = normalize_owner_to_sheet_position(str(draft["owner"]), draft.get("building"))
 
     set_session(sender, "create_building", draft=draft, context={"next_action": "create_task"})
@@ -141,17 +144,8 @@ def handle_type_selection(sender: str, task_type: str, user: dict):
 
     # If issue_action was already prefilled from conversational input, advance to next missing field
     if draft.get("issue_action"):
-        if (draft.get("planned_date") or draft.get("target_date")) and draft.get("owner"):
+        if draft.get("owner"):
             _show_draft_preview(sender, draft, user)
-            return
-        elif not (draft.get("planned_date") or draft.get("target_date")):
-            set_session(sender, "create_target_date", draft=draft, context={"next_action": "create_task"})
-            send_text(
-                sender,
-                "📅 *Planned Date:*\n\n"
-                "When should this be completed?\n"
-                "(e.g., *tomorrow*, *next Friday*, *2026-09-15*, or *skip* for no date)"
-            )
             return
         else:
             set_session(sender, "create_owner", draft=draft, context={"next_action": "create_task"})
@@ -249,12 +243,15 @@ def handle_create_flow_text(sender: str, text: str, user: dict, session: dict):
                 clean_text = re.sub(r'\s*(?:created by|by|done by|assigned to|for)\s+[A-Za-z]+["\']?\s*$', '', clean_text, flags=re.IGNORECASE).strip()
 
         draft["issue_action"] = clean_text or text.strip()
-        set_session(sender, "create_target_date", draft=draft, context={"next_action": "create_task"})
+        set_session(sender, "create_owner", draft=draft, context={"next_action": "create_task"})
+
+        current_owner = draft.get("owner") or "Facility Manager"
         send_text(
             sender,
-            "📅 *Planned Date:*\n\n"
-            "When should this be completed?\n"
-            "(e.g., *tomorrow*, *next Friday*, *2026-09-15*, or *skip* for no date)"
+            f"👤 *Owner:*\n\n"
+            f"Who should this be assigned to?\n"
+            f"(Currently set to: *{current_owner}*)\n\n"
+            f"Type a name (e.g. *Kanav*, *Anoop*, *Vikramjeet*), or type *me* to assign to yourself."
         )
 
     elif state == "create_target_date":
@@ -393,6 +390,7 @@ def confirm_create(sender: str, user: dict, skip_duplicate_check: bool = False):
 
     # Create the row
     from facilities.sheets_client import create_row
+    # pyrefly: ignore [bad-argument-type]
     result = create_row(building, draft, actor=user.get("name"))
 
     ref_no = result.get("ref_no", "—")
