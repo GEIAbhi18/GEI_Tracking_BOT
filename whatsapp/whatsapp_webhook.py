@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 WhatsApp Webhook — Production Entry Point
 ==========================================
@@ -340,7 +341,8 @@ def verify_webhook():
 
     if mode == "subscribe" and token == VERIFY_TOKEN:
         logger.info("Webhook verified successfully")
-        return challenge, 200
+        # pyrefly: ignore [unnecessary-type-conversion]
+        return str(challenge or ""), 200
     return "Verification failed", 403
 
 
@@ -402,6 +404,31 @@ def handle_whatsapp_message():
                         text = message.get("text", {}).get("body", "").strip()
                         if text:
                             def _process_text_bg(sender_num, msg_text):
+                                # Check for clear/reset command first
+                                if msg_text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
+                                    try:
+                                        from feedback.session_store import force_clear_and_process_next
+                                        from core.conversation_state import clear_state
+                                        from core.context_manager import clear_context
+                                        from elara.session import clear_elara_session
+                                        
+                                        force_clear_and_process_next(sender_num)
+                                        clear_state(sender_num)
+                                        clear_context(sender_num)
+                                        clear_elara_session(sender_num)
+                                        send_text(sender_num, "Chat history and active feedback sessions have been cleared! 🧹")
+                                        return
+                                    except Exception as clear_err:
+                                        logger.error(f"Error clearing WhatsApp state for {sender_num}: {clear_err}")
+
+                                # ── Master Team Router (Elara Home / Facilities / Kanav team disambiguation) ──
+                                try:
+                                    from elara.team_router import route_incoming_message
+                                    if route_incoming_message(sender_num, text=msg_text):
+                                        return
+                                except Exception as team_err:
+                                    logger.error(f"Team router error for {sender_num}: {team_err}", exc_info=True)
+
                                 from auth.middleware import authenticate_whatsapp_request
                                 auth_user = authenticate_whatsapp_request(sender_num)
                                 if not auth_user:
@@ -419,21 +446,6 @@ def handle_whatsapp_message():
                                     from whatsapp.menus import send_main_menu
                                     send_main_menu(sender_num, auth_user)
                                     return
-
-                                # Check for clear/reset command first
-                                if msg_text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):
-                                    try:
-                                        from feedback.session_store import force_clear_and_process_next
-                                        from core.conversation_state import clear_state
-                                        from core.context_manager import clear_context
-                                        
-                                        force_clear_and_process_next(sender_num)
-                                        clear_state(sender_num)
-                                        clear_context(sender_num)
-                                        send_text(sender_num, "Chat history and active feedback sessions have been cleared! 🧹")
-                                        return
-                                    except Exception as clear_err:
-                                        logger.error(f"Error clearing WhatsApp state for {sender_num}: {clear_err}")
 
                                 # Feedback-first routing
                                 if _try_feedback_route(sender_num, msg_text):
@@ -485,25 +497,27 @@ def _handle_interactive(sender: str, message: dict):
       - nfm_reply    → WhatsApp Flow feedback response
     """
     try:
-        from auth.middleware import authenticate_whatsapp_request
-        auth_user = authenticate_whatsapp_request(sender)
-        if not auth_user:
-            logger.error(f"Auth failed for {sender}")
-            return
-            
         interactive = message.get("interactive", {})
         i_type = interactive.get("type")
         print(f"[INTERACTIVE] Processing type={i_type} from {sender}", flush=True)
 
-        if i_type == "button_reply":
-            button_id = interactive["button_reply"]["id"]
+        if i_type in ("button_reply", "list_reply"):
+            button_id = interactive[i_type]["id"]
+            try:
+                from elara.team_router import route_incoming_message
+                if route_incoming_message(sender, button_id=button_id):
+                    return
+            except Exception as tr_err:
+                logger.error(f"Team router interactive error: {tr_err}", exc_info=True)
+
+            from auth.middleware import authenticate_whatsapp_request
+            auth_user = authenticate_whatsapp_request(sender)
+            if not auth_user:
+                logger.error(f"Auth failed for {sender}")
+                return
+
             from whatsapp.handlers import handle_interactive_reply
             handle_interactive_reply(sender, button_id, auth_user)
-            
-        elif i_type == "list_reply":
-            list_id = interactive["list_reply"]["id"]
-            from whatsapp.handlers import handle_interactive_reply
-            handle_interactive_reply(sender, list_id, auth_user)
 
         elif i_type == "nfm_reply":
             # ── WhatsApp Flow form submission ─────────────────────────
@@ -527,15 +541,22 @@ def _handle_template_button(sender: str, message: dict):
     Meta sends message.button.payload or message.button.text.
     """
     try:
+        button = message.get("button", {})
+        payload = button.get("payload") or button.get("text", "")
+        print(f"[TEMPLATE_BUTTON] Processing button payload='{payload}' from {sender}", flush=True)
+
+        try:
+            from elara.team_router import route_incoming_message
+            if route_incoming_message(sender, button_id=payload):
+                return
+        except Exception as tr_err:
+            logger.error(f"Team router template error: {tr_err}", exc_info=True)
+
         from auth.middleware import authenticate_whatsapp_request
         auth_user = authenticate_whatsapp_request(sender)
         if not auth_user:
             logger.error(f"Auth failed for {sender}")
             return
-
-        button = message.get("button", {})
-        payload = button.get("payload") or button.get("text", "")
-        print(f"[TEMPLATE_BUTTON] Processing button payload='{payload}' from {sender}", flush=True)
 
         from whatsapp.handlers import handle_interactive_reply
         handle_interactive_reply(sender, payload, auth_user)
@@ -594,11 +615,19 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
     """
     Route text messages:
       1. Check for UNDO command (voice note context)
-      2. Check for Facilities user / Facilities active session
+      2. Check for Master Team Router (Facilities / Elara Home / Kanav)
       3. If sender is in a WA task-assignment state → task_assignment module
       4. For voice notes: check if batch update (multiple tasks) → batch handler
       5. Otherwise → core bot engine with a WhatsApp-native send_reply_func
     """
+    # Master Team Router check (Facilities / Elara Home / Kanav)
+    try:
+        from elara.team_router import route_incoming_message
+        if route_incoming_message(sender, text=text):
+            return
+    except Exception as team_err:
+        logger.error(f"Team router error in _handle_text: {team_err}", exc_info=True)
+
     # Facilities routing check
     try:
         from facilities.flows.router import is_facilities_user, get_session, route_facilities_message
@@ -642,7 +671,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         from auth.middleware import authenticate_whatsapp_request
         from whatsapp.handlers import handle_interactive_reply
         user_info = authenticate_whatsapp_request(sender)
-        handle_interactive_reply(sender, "menu_create_task", user_info)
+        handle_interactive_reply(sender, "menu_create_task", user_info or {})
         return
 
     # Update task matching (including 'update task', 'update taks', 'task update')
@@ -655,21 +684,21 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
         from auth.middleware import authenticate_whatsapp_request
         from whatsapp.handlers import handle_interactive_reply
         user_info = authenticate_whatsapp_request(sender)
-        handle_interactive_reply(sender, "menu_update_task", user_info)
+        handle_interactive_reply(sender, "menu_update_task", user_info or {})
         return
 
     if clean_text in ["analytics", "show analytics", "view analytics", "team analytics"]:
         from auth.middleware import authenticate_whatsapp_request
         from whatsapp.handlers import handle_interactive_reply
         user_info = authenticate_whatsapp_request(sender)
-        handle_interactive_reply(sender, "menu_analytics", user_info)
+        handle_interactive_reply(sender, "menu_analytics", user_info or {})
         return
 
     if clean_text in ["report", "reports", "daily report", "get report", "send report"]:
         from auth.middleware import authenticate_whatsapp_request
         from whatsapp.handlers import handle_interactive_reply
         user_info = authenticate_whatsapp_request(sender)
-        handle_interactive_reply(sender, "menu_reports", user_info)
+        handle_interactive_reply(sender, "menu_reports", user_info or {})
         return
 
     # 1. Check WA State Machine for Multi-Step flows
@@ -807,7 +836,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                         send_text(sender, f"✅ Personal Task *'{task_title}'* created successfully!\n📅 Start Date: {f_start}\n📅 Deadline: {f_dl}")
                     else:
                         from whatsapp.handlers import send_assignee_selection_prompt
-                        send_assignee_selection_prompt(sender, new_task['id'], task_title, user_info)
+                        send_assignee_selection_prompt(sender, new_task['id'], task_title, user_info or {})
                 else:
                     send_text(sender, "Failed to create task in the database. Contact an admin.")
             except Exception as e:
@@ -913,7 +942,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             from whatsapp.handlers import handle_direct_task_update
             
             user_info = authenticate_whatsapp_request(sender)
-            if handle_direct_task_update(sender, text, user_info):
+            if handle_direct_task_update(sender, text, user_info or {}):
                 return
 
         elif action == "WAITING_FOR_COMPLETION_IMAGE_DECISION":
@@ -984,12 +1013,12 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 current_user=user_info if user_info else {"id": user_id},
                 task_id=task_id,
                 new_status="Completed",
-                note=final_comment,
-                proof_url=image_url
+                note=final_comment or "",
+                proof_url=image_url or ""
             )
 
             if final_comment:
-                add_timeline_event(task_id, user_id, "Final comment added on completion", note=final_comment)
+                add_timeline_event(task_id, str(user_id or ""), "Final comment added on completion", note=final_comment)
                 try:
                     supabase.table("tasks").update({"notes": final_comment}).eq("id", task_id).execute()
                 except Exception:
@@ -1039,7 +1068,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
     if voice_note:
         pre_update_snapshot = _capture_pre_update_snapshot(sender, text)
 
-    async def wa_send_reply(text: str = None, document: str = None, target_user_id: int = None):
+    async def wa_send_reply(text: str | None = None, document: str | None = None, target_user_id: int | None = None):
         """
         WhatsApp-aware send function.
         - text messages → sent as plain text
@@ -1132,8 +1161,9 @@ def _handle_voice_batch(sender: str, updates: list):
         )
 
         # Ambiguous? 
-        if not match and resolve_task_from_list.ambiguous_matches:
-            amb_tasks = resolve_task_from_list.ambiguous_matches
+        amb_matches = getattr(resolve_task_from_list, "ambiguous_matches", [])
+        if not match and amb_matches:
+            amb_tasks = amb_matches
             ambiguous.append({
                 "query": task_name,
                 "options": amb_tasks,
@@ -1258,14 +1288,13 @@ def _handle_audio(sender: str, message: dict):
       5. Feed transcript into the SAME _handle_text pipeline as typed messages
     """
     try:
-        from auth.middleware import authenticate_whatsapp_request
-        auth_user = authenticate_whatsapp_request(sender)
-        if not auth_user:
-            logger.error(f"Auth failed for {sender}")
-            return
+        from elara.auth import is_elara_user
+        auth_user = None
+        if not is_elara_user(sender):
+            from auth.middleware import authenticate_whatsapp_request
+            auth_user = authenticate_whatsapp_request(sender)
     except Exception as e:
         logger.error(f"Auth middleware error: {e}")
-        return
 
     media_id = message.get("audio", {}).get("id")
     if not media_id:
@@ -1325,14 +1354,13 @@ def _handle_audio(sender: str, message: dict):
         f"_I heard:_ \"{transcript}\""
     )
 
-    # Step 4: Check for Facilities routing
+    # Step 4: Check for Master Team Router (Facilities / Elara Home / Kanav)
     try:
-        from facilities.flows.router import is_facilities_user, route_facilities_message
-        if is_facilities_user(sender):
-            route_facilities_message(sender, voice_transcript=transcript, user=auth_user)
+        from elara.team_router import route_incoming_message
+        if route_incoming_message(sender, voice_transcript=transcript):
             return
-    except Exception as fac_err:
-        logger.error(f"Facilities voice routing error: {fac_err}", exc_info=True)
+    except Exception as team_err:
+        logger.error(f"Voice team routing error: {team_err}", exc_info=True)
 
     # Step 5: Check for UNDO command
     if transcript.strip().upper() == "UNDO":

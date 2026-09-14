@@ -2,6 +2,10 @@ from whatsapp.ux import send_list_message, send_interactive_buttons
 
 def send_main_menu(to: str, user: dict):
     """Generates and sends the main menu based on the user's role."""
+    if user.get("team") == "Elara Home" or user.get("is_elara_user"):
+        from elara.flows.home import show_elara_home
+        return show_elara_home(to, user)
+
     if user.get("department") == "Facilities" and user.get("permitted_buildings"):
         from facilities.flows.home import show_home
         return show_home(to, user)

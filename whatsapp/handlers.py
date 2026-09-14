@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from tasks.service import orchestrate_status_update
 from whatsapp.ux import send_text, send_interactive_buttons, send_list_message
@@ -5,14 +6,14 @@ from db import supabase
 
 logger = logging.getLogger(__name__)
 
-def set_wa_state(phone: str, state: str, metadata: dict = None):
+def set_wa_state(phone: str, state: str, metadata: dict | None = None):
     """Sets a temporary conversation state for multi-step flows."""
     try:
-        payload = {"whatsapp_number": phone, "action": state}
+        payload: dict[str, object] = {"whatsapp_number": phone, "action": state}
         if metadata:
             payload["metadata"] = metadata
             if metadata.get("task_id"):
-                payload["task_id"] = metadata.get("task_id")
+                payload["task_id"] = str(metadata.get("task_id") or "")
             
         supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
     except Exception as e:
@@ -25,6 +26,14 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         
     logger.info(f"UX Handler processing button ID: {button_id}")
     
+    # ── Master Team Router Check (Facilities / Elara Home / Kanav selection) ──
+    try:
+        from elara.team_router import route_incoming_message
+        if route_incoming_message(sender_phone, button_id=button_id):
+            return
+    except Exception as tr_err:
+        logger.error(f"Team router interactive reply error: {tr_err}", exc_info=True)
+
     # ── Facilities Module Routing ───────────────────────────────────────────
     if button_id.startswith("fac_") or user.get("department") == "Facilities":
         from facilities.flows.router import route_facilities_message
@@ -195,6 +204,8 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         user_info = authenticate_whatsapp_request(sender_phone)
         user_id = user_info["id"] if user_info else None
         
+        tasks: list = []
+        task_type_label: str = "Tasks"
         if button_id == "update_task_personal":
             raw_tasks = supabase.table("tasks").select("*, projects(name)").neq("status", "Completed").execute().data or []
             tasks = [
@@ -268,6 +279,8 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         user_info = authenticate_whatsapp_request(sender_phone)
         user_id = user_info["id"] if user_info else None
         
+        tasks: list = []
+        task_type_label: str = "Tasks"
         if button_id == "update_date_personal":
             raw_tasks = supabase.table("tasks").select("*, projects(name)").neq("status", "Completed").execute().data or []
             tasks = [
@@ -496,7 +509,8 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
             from tasks.service import create_followup_task
             try:
                 new_task = create_followup_task(user, task_id)
-                send_text(sender_phone, f"✅ Follow-up task created: '{new_task['title']}'\n\nYou can update its details later.")
+                task_title = (new_task.get("title") if isinstance(new_task, dict) else "Task") or "Task"
+                send_text(sender_phone, f"✅ Follow-up task created: '{task_title}'\n\nYou can update its details later.")
             except Exception as e:
                 logger.error(f"Error creating follow-up task: {e}")
                 send_text(sender_phone, "Failed to create follow-up task. Please try again.")
@@ -982,7 +996,7 @@ def handle_direct_task_update(sender_phone: str, text: str, user_info: dict) -> 
 
     if initial_note:
         from tasks.timeline import add_timeline_event
-        add_timeline_event(task_id, user_id, "Note added to task update", note=initial_note)
+        add_timeline_event(task_id, str(user_id or ""), "Note added to task update", note=initial_note)
         try:
             supabase.table("tasks").update({"notes": initial_note}).eq("id", task_id).execute()
         except Exception as err:
