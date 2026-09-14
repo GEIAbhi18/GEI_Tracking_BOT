@@ -5,6 +5,9 @@ from elara.auth import is_elara_admin
 
 def show_elara_home(to: str, user: dict):
     """Display the main menu and greeting for Elara Home."""
+    from elara.session import clear_elara_session
+    clear_elara_session(to)
+
     user_name = user.get("name", "Team Member")
     user_role = user.get("role", "Member")
     dept = user.get("department") or "All Departments"

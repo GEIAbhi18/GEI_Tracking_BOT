@@ -17,7 +17,13 @@ def get_projects(department: str | None = None) -> list:
         if department:
             query = query.eq("department", department)
         res = query.execute()
-        return res.data or []
+        projects = res.data or []
+        return [
+            p for p in projects
+            if p.get("status", "Active") == "Active"
+            and not str(p.get("name", "")).strip().lower().startswith("automated test")
+            and not str(p.get("name", "")).strip().lower().startswith("test project")
+        ]
     except Exception as e:
         logger.error(f"get_projects failed: {e}")
         return []
@@ -91,6 +97,13 @@ def get_tasks(project_id: str | None = None, department: str | None = None, assi
                 t for t in tasks
                 if any(norm_target in str(u).lower() for u in (t.get("assigned_users") or []))
             ]
+
+        # Exclude automated test tasks
+        tasks = [
+            t for t in tasks
+            if not str(t.get("title", "")).strip().lower().startswith("automated test")
+            and not str(t.get("title", "")).strip().lower().startswith("comment test")
+        ]
 
         return tasks
     except Exception as e:

@@ -147,6 +147,11 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
         selected_team = "facilities" if button_id == "team_sel_facilities" else "elara"
         set_active_team(clean_num, selected_team)
 
+        from elara.session import clear_elara_session
+        from facilities.flows.router import clear_session as clear_fac_session
+        clear_elara_session(clean_num)
+        clear_fac_session(clean_num)
+
         pending_text = pop_pending_action(clean_num)
         if selected_team == "elara":
             from elara.flows.router import route_elara_message
@@ -193,7 +198,33 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
 
     # Priority 1: DUAL-ACCESS USER (Kanav Director, Developer)
     if is_dual_access_user(clean_num):
-        # 1. Check if user is in an active in-flight multi-step flow
+        # 1. Greeting & Reset check ("hi", "hello", "hey", "start", "menu", "reset", "clear", "cancel"):
+        # Explicit requirement: Clears all cached sessions & active team context
+        # and prompts for team selection so user always gets a clean, fresh start.
+        greeting_words = ("hi", "hello", "hey", "start", "menu", "reset", "clear", "cancel")
+        if clean_msg in greeting_words:
+            from elara.session import clear_elara_session
+            from facilities.flows.router import clear_session as clear_fac_session
+            from db import supabase
+            clear_elara_session(clean_num)
+            clear_fac_session(clean_num)
+            with _team_lock:
+                _active_team_contexts.pop(clean_num, None)
+                _pending_actions.pop(clean_num, None)
+            try:
+                supabase.table("wa_task_states").delete().eq("whatsapp_number", clean_num).execute()
+            except Exception:
+                pass
+
+            user_name = (elara_user or fac_user or {}).get("name", "Kanav")
+            body = (
+                f"👋 Hello *{user_name}*!\n\n"
+                f"Which Team would you like to access today?"
+            )
+            send_team_selection_prompt(sender, custom_body=body)
+            return True
+
+        # 2. Check if user is in an active in-flight multi-step flow
         from elara.session import get_elara_session
         from facilities.flows.router import get_session as get_fac_session
 
@@ -207,19 +238,6 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
         if fac_sess and fac_sess.get("current_flow_state"):
             from facilities.flows.router import route_facilities_message
             route_facilities_message(sender, text=text or "", button_id=button_id or "", user=fac_user or {}, voice_transcript=voice_transcript or "")
-            return True
-
-        # 2. Greeting check ("hi", "hello", "hey", "start", "menu"):
-        # Explicit requirement from review:
-        # "Also when kanav send hi or Hello make sure he sees for both team facilities and Elara Home both"
-        greeting_words = ("hi", "hello", "hey", "start", "menu")
-        if clean_msg in greeting_words:
-            user_name = (elara_user or fac_user or {}).get("name", "Kanav")
-            body = (
-                f"👋 Hello *{user_name}*!\n\n"
-                f"Which Team would you like to access today?"
-            )
-            send_team_selection_prompt(sender, custom_body=body)
             return True
 
         # 3. Explicit switch command check
