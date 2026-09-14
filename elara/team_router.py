@@ -185,21 +185,13 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
         route_facilities_message(sender, button_id=button_id, user=fac_user or {})
         return True
 
+    # If an unknown/core interactive button was received, do not intercept it
+    if button_id:
+        return False
+
     # ── 4. Categorize User Membership ────────────────────────────────────────
 
-    # Category A: ELARA-ONLY USER (e.g. Rachit, Bhagwan Dass, Gaurav)
-    if elara_user and (not fac_user or not fac_user.get("is_facilities_user")):
-        from elara.flows.router import route_elara_message
-        route_elara_message(sender, text=text, button_id=button_id, user=elara_user, voice_transcript=voice_transcript)
-        return True
-
-    # Category B: FACILITIES-ONLY USER (e.g. Anoop, Kuldeep, Vikash)
-    if fac_user and fac_user.get("is_facilities_user") and not elara_user:
-        from facilities.flows.router import route_facilities_message
-        route_facilities_message(sender, text=text or "", button_id=button_id or "", user=fac_user or {}, voice_transcript=voice_transcript or "")
-        return True
-
-    # Category C: DUAL-ACCESS USER (Kanav Director, Developer)
+    # Priority 1: DUAL-ACCESS USER (Kanav Director, Developer)
     if is_dual_access_user(clean_num):
         # 1. Check if user is in an active in-flight multi-step flow
         from elara.session import get_elara_session
@@ -272,6 +264,18 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
         logger.info(f"Ambiguous team intent from dual-access user {sender}: '{msg_text}'. Prompting team selection.")
         set_pending_action(clean_num, msg_text)
         send_team_selection_prompt(sender)
+        return True
+
+    # Priority 2: ELARA-ONLY USER (e.g. Rachit, Bhagwan Dass, Gaurav)
+    if elara_user and (not fac_user or not fac_user.get("is_facilities_user")):
+        from elara.flows.router import route_elara_message
+        route_elara_message(sender, text=text, button_id=button_id, user=elara_user, voice_transcript=voice_transcript)
+        return True
+
+    # Priority 3: FACILITIES-ONLY USER (e.g. Anoop, Kuldeep, Vikash)
+    if fac_user and fac_user.get("is_facilities_user") and not elara_user:
+        from facilities.flows.router import route_facilities_message
+        route_facilities_message(sender, text=text or "", button_id=button_id or "", user=fac_user or {}, voice_transcript=voice_transcript or "")
         return True
 
     # User is not a recognized team member of either team (guest)

@@ -25,7 +25,7 @@ from facilities.flows.router import set_session, clear_session
 logger = logging.getLogger(__name__)
 
 
-def handle_overdue_request(sender: str, user: dict, building: str = None):
+def handle_overdue_request(sender: str, user: dict, building: str | None = None):
     """
     Entry point for "show overdue tasks".
 
@@ -55,7 +55,7 @@ def handle_overdue_request(sender: str, user: dict, building: str = None):
 
 
 def prompt_overdue_building_selection(sender: str, user: dict,
-                                       buildings: list[str] = None):
+                                       buildings: list[str] | None = None):
     """
     Show the building selection for overdue tasks.
 
@@ -108,7 +108,7 @@ def show_overdue_tasks(sender: str, user: dict, building: str):
 
 
 def show_filtered_tasks(sender: str, user: dict, criteria: TaskFilterCriteria,
-                          label: str = None):
+                          label: str | None = None):
     """
     Show filtered tasks for any combination of filters.
 

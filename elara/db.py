@@ -55,7 +55,9 @@ def create_project(name: str, department: str, description: str | None = None, c
     }
 
     res = supabase.table("elara_projects").insert(data).execute()
-    return res.data[0] if res.data else data
+    if isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
+        return res.data[0]
+    return data
 
 
 # ── Tasks ────────────────────────────────────────────────────────────────────
@@ -133,7 +135,9 @@ def create_task(title: str, project_id: str, description: str | None = None, pri
     }
 
     res = supabase.table("elara_tasks").insert(data).execute()
-    return res.data[0] if res.data else data
+    if isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
+        return res.data[0]
+    return data
 
 
 def update_task(task_id: str, updates: dict) -> dict | None:
@@ -155,7 +159,9 @@ def update_task(task_id: str, updates: dict) -> dict | None:
             payload["is_blocked"] = False
 
         res = supabase.table("elara_tasks").update(payload).eq("id", task_id).execute()
-        return res.data[0] if res.data else None
+        if isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
+            return res.data[0]
+        return {"id": task_id, **payload}
     except Exception as e:
         logger.error(f"update_task failed for {task_id}: {e}")
         return None
@@ -184,7 +190,7 @@ def add_comment(task_id: str, user_name: str, user_role: str = "Team Member", co
 
     # 1. Insert into dedicated elara_comments table
     res = supabase.table("elara_comments").insert(comment_row).execute()
-    created_comment = res.data[0] if res.data else comment_row
+    created_comment = res.data[0] if (isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict)) else comment_row
 
     # 2. Append to elara_tasks comments JSONB array for instant Kanban UI sync
     try:

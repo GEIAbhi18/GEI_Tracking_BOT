@@ -74,6 +74,7 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict | None)
         start_create_task_flow(sender, user)
         return
     if button_id == "elara_update_task":
+        send_text(sender, "🔄 *Update Task*\nPlease select a task below to update its status or add comments:")
         show_team_tasks(sender, user)
         return
     if button_id == "elara_projects_menu":
@@ -230,6 +231,13 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
         from elara.flows.create_task import parse_task_intent_from_text, start_create_task_flow
         parsed = parse_task_intent_from_text(text, user)
         start_create_task_flow(sender, user, prefill=parsed)
+        return
+
+    # Direct task update matching
+    if any(clean.startswith(p) for p in ("update task", "task update", "update a task", "update taks")):
+        from elara.flows.task_list import show_team_tasks
+        send_text(sender, "🔄 *Update Task*\nPlease select a task below to update its status or add comments:")
+        show_team_tasks(sender, user)
         return
 
     # 4. Direct project creation matching

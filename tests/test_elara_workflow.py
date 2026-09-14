@@ -15,6 +15,7 @@ Verifies:
 11. Strict zero-cross-team data leakage
 """
 
+from typing import Any
 import pytest
 from unittest.mock import patch, MagicMock
 from elara.config import ELARA_DEPARTMENTS, DEVELOPER_PHONE, KANAV_PHONE
@@ -30,6 +31,122 @@ from elara.team_router import (
     route_incoming_message, set_active_team, get_active_team,
     detect_team_intent_from_text, is_dual_access_user
 )
+
+
+# ── Mock Fixture for Deterministic CI & Local Testing ────────────────────────
+
+@pytest.fixture(autouse=True)
+def mock_elara_supabase():
+    """Deterministic in-memory mock store for Elara Supabase tables."""
+    users_store = [
+        {"id": "u1", "name": "Rachit", "phone": "919867272041", "role": "Site Incharge", "department": "Construction & Design", "team": "Elara Home", "is_elara_user": True},
+        {"id": "u2", "name": "Bhagwan Dass", "phone": "919816641892", "role": "Purchasing Head", "department": "Finance & Procurement", "team": "Elara Home", "is_elara_user": True},
+        {"id": "u3", "name": "Gaurav", "phone": "918894577707", "role": "Site Executive", "department": "Approvals & Compliance", "team": "Elara Home", "is_elara_user": True},
+        {"id": "u4", "name": "Developer", "phone": DEVELOPER_PHONE, "role": "Developer", "department": "Project Administration", "team": "Elara Home", "is_elara_user": True},
+        {"id": "u5", "name": "Kanav", "phone": KANAV_PHONE, "role": "Director", "department": "Project Administration", "team": "Elara Home", "is_elara_user": True},
+    ]
+    projects_store = [
+        {"id": "elara-proj-1", "name": "Initial Elara Project", "department": "Construction & Design", "team_name": "Elara Home", "status": "Active", "created_at": "2026-09-01T00:00:00Z"}
+    ]
+    tasks_store = []
+    comments_store = []
+
+    class MockQuery:
+        def __init__(self, table_name: str):
+            self.table_name = table_name
+            self._filters: list[tuple[str, Any]] = []
+            self._is_insert = False
+            self._is_update = False
+            self._insert_data: Any = None
+            self._update_data: Any = None
+
+        def select(self, *args, **kwargs):
+            return self
+
+        def order(self, *args, **kwargs):
+            return self
+
+        def eq(self, field, value):
+            self._filters.append((field, value))
+            return self
+
+        def insert(self, data):
+            self._is_insert = True
+            self._insert_data = data
+            return self
+
+        def update(self, data):
+            self._is_update = True
+            self._update_data = data
+            return self
+
+        def execute(self):
+            res = MagicMock()
+            if self.table_name == "elara_users":
+                items = users_store
+                for f, v in self._filters:
+                    items = [x for x in items if str(x.get(f)) == str(v)]
+                res.data = [dict(x) for x in items]
+                return res
+
+            elif self.table_name == "elara_projects":
+                if self._is_insert:
+                    new_proj = dict(self._insert_data or {})
+                    projects_store.append(new_proj)
+                    res.data = [new_proj]
+                    return res
+                items = projects_store
+                for f, v in self._filters:
+                    items = [x for x in items if str(x.get(f)) == str(v)]
+                res.data = [dict(x) for x in items]
+                return res
+
+            elif self.table_name == "elara_tasks":
+                if self._is_insert:
+                    new_task = dict(self._insert_data or {})
+                    tasks_store.append(new_task)
+                    res.data = [new_task]
+                    return res
+                if self._is_update:
+                    for t in tasks_store:
+                        match = all(str(t.get(f)) == str(v) for f, v in self._filters)
+                        if match:
+                            t.update(self._update_data or {})
+                    updated = [t for t in tasks_store if all(str(t.get(f)) == str(v) for f, v in self._filters)]
+                    res.data = [dict(x) for x in updated]
+                    return res
+                items = tasks_store
+                for f, v in self._filters:
+                    items = [x for x in items if str(x.get(f)) == str(v)]
+                res.data = [dict(x) for x in items]
+                return res
+
+            elif self.table_name == "elara_comments":
+                if self._is_insert:
+                    new_comm = dict(self._insert_data or {})
+                    comments_store.append(new_comm)
+                    res.data = [new_comm]
+                    return res
+                items = comments_store
+                for f, v in self._filters:
+                    items = [x for x in items if str(x.get(f)) == str(v)]
+                res.data = [dict(x) for x in items]
+                return res
+
+            elif self.table_name == "tasks":
+                res.data = []
+                return res
+
+            res.data = []
+            return res
+
+    mock_client = MagicMock()
+    mock_client.table.side_effect = lambda t: MockQuery(t)
+
+    with patch("elara.db.supabase", mock_client), \
+         patch("elara.auth.supabase", mock_client), \
+         patch("db.supabase", mock_client):
+        yield
 
 
 # ── 1. User Identification & Team Separation Tests ───────────────────────────

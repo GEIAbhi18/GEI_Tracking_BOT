@@ -36,16 +36,19 @@ def resolve_elara_user(whatsapp_number: str) -> dict | None:
         # Special check for Developer number or Kanav number
         if clean_num == DEVELOPER_PHONE:
             res = supabase.table("elara_users").select("*").eq("role", "Developer").execute()
-            if res.data:
-                user = res.data[0]
+            if res.data and isinstance(res.data, list) and isinstance(res.data[0], dict):
+                user = dict(res.data[0])
                 user["is_elara_user"] = True
                 return user
+            return {"id": "elara-dev-01", "name": "Developer", "role": "Developer", "phone": clean_num, "department": "Project Administration", "is_elara_user": True}
+
         elif clean_num == KANAV_PHONE:
             res = supabase.table("elara_users").select("*").eq("name", "Kanav").execute()
-            if res.data:
-                user = res.data[0]
+            if res.data and isinstance(res.data, list) and isinstance(res.data[0], dict):
+                user = dict(res.data[0])
                 user["is_elara_user"] = True
                 return user
+            return {"id": "elara-kanav-01", "name": "Kanav", "role": "Director", "phone": clean_num, "department": "Project Administration", "is_elara_user": True}
 
         return None
     except Exception as e:
@@ -88,7 +91,7 @@ def can_access_department(user: dict | None, department: str) -> bool:
     return False
 
 
-def get_elara_team_members(department: str = None) -> list:
+def get_elara_team_members(department: str | None = None) -> list:
     """Get all Elara team members, optionally filtered by department."""
     try:
         query = supabase.table("elara_users").select("*")

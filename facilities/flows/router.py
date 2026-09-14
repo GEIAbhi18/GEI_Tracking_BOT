@@ -54,7 +54,7 @@ def get_session(whatsapp_number: str) -> dict | None:
 
 
 def set_session(whatsapp_number: str, flow_state: str,
-                draft: dict = None, context: dict = None):
+                draft: dict | None = None, context: dict | None = None):
     """Create or update a Facilities session."""
     try:
         payload = {
@@ -86,10 +86,10 @@ def clear_session(whatsapp_number: str):
 
 # ── Main Router ──────────────────────────────────────────────────────────────
 
-def route_facilities_message(sender: str, text: str = None,
-                               button_id: str = None, user: dict = None,
-                               image_data: dict = None,
-                               voice_transcript: str = None):
+def route_facilities_message(sender: str, text: str | None = None,
+                             button_id: str | None = None, user: dict | None = None,
+                             image_data: dict | None = None,
+                             voice_transcript: str | None = None):
     """
     Main entry point for all Facilities module messages.
 
@@ -112,7 +112,7 @@ def route_facilities_message(sender: str, text: str = None,
     user = fac_user
 
     # Update session timestamp
-    session = get_session(sender)
+    session = get_session(sender) or {}
 
     # 1. Handle interactive button/list replies
     if button_id:
@@ -180,6 +180,12 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         ref_no = button_id.replace("fac_view_", "")
         from facilities.flows.task_card import show_task_card
         show_task_card(sender, ref_no, user)
+
+    elif button_id == "fac_update_task":
+        from facilities.flows.my_tasks import show_my_tasks
+        from whatsapp.ux import send_text
+        send_text(sender, "🔄 *Update Task*\nPlease select a task below to update its status or progress:")
+        show_my_tasks(sender, user)
 
     elif button_id.startswith("fac_update_"):
         ref_no = button_id.replace("fac_update_", "")
@@ -338,7 +344,7 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict):
         show_home(sender, user)
 
 
-def _try_parse_direct_task_update(text: str) -> dict:
+def _try_parse_direct_task_update(text: str) -> dict | None:
     """Check if the text is a direct task status or note update command with a Ref No."""
     import re
     clean = text.strip()
@@ -587,7 +593,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict):
 
 def _route_in_flow_text(sender: str, text: str, user: dict, session: dict):
     """Route text when user is in a multi-step flow."""
-    state = session.get("current_flow_state", "")
+    state = session.get("current_flow_state", "") if session else ""
     clean = text.strip().lower()
 
     # If the user wants to cancel or return to menu
@@ -602,7 +608,7 @@ def _route_in_flow_text(sender: str, text: str, user: dict, session: dict):
     if state in ("building_filter", "completed_tasks_building", "overdue_tasks_building", "create_building"):
         if any(clean.startswith(p) for p in ("create ", "new task", "add task", "raise task", "update ", "show ", "view ")) or _is_task_filter_query(clean):
             clear_session(sender)
-            _route_text(sender, text, user, None)
+            _route_text(sender, text, user, {})
             return
 
     # Create task flow states
