@@ -5,11 +5,20 @@ All env vars, column mappings, building constants, and valid status/type
 values for the Facilities department's Google Sheets integration.
 """
 
+from __future__ import annotations
+
+import logging
 import os
+import re
+from datetime import date, datetime, timedelta
+from typing import Optional
+
 # pyrefly: ignore [missing-import]
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # ── Google Sheets ────────────────────────────────────────────────────────────
 # Spreadsheet ID for Facilities_Master_Tracker_Final
@@ -88,9 +97,48 @@ BUILDING_ALIASES = {
     "common areas": "Common",
 }
 
-import re
-from datetime import datetime, date, timedelta
-from typing import Optional
+# Building display mapping
+BUILDING_NAME_MAPPING = {
+    "GEBB1": "Bay 1",
+    "GEBB2": "Bay 2",
+    "GETT": "Trade Tower",
+    "Common": "Common Area",
+}
+
+# ── Anoop Configuration (Sole Recipient for Facilities Sheet Change Alerts) ──
+DEFAULT_ANOOP_PHONE = "919211501013"
+ANOOP_WHATSAPP_NUMBER = os.getenv("ANOOP_WHATSAPP_NUMBER", DEFAULT_ANOOP_PHONE)
+
+
+def resolve_anoop_phone_number() -> str:
+    """
+    Resolve Anoop Sir's phone number.
+    Priority:
+      1. Configured ANOOP_WHATSAPP_NUMBER if set
+      2. Supabase users table lookup for Anoop
+      3. Fallback constant (DEFAULT_ANOOP_PHONE)
+    """
+    from whatsapp.ux import clean_phone_number
+    if ANOOP_WHATSAPP_NUMBER and ANOOP_WHATSAPP_NUMBER.strip():
+        return clean_phone_number(ANOOP_WHATSAPP_NUMBER)
+
+    try:
+        from db import supabase
+        res = (
+            supabase.table("users")
+            .select("whatsapp_number, name")
+            .ilike("name", "%anoop%")
+            .execute()
+        )
+        if res.data and res.data[0].get("whatsapp_number"):
+            num = clean_phone_number(res.data[0]["whatsapp_number"])
+            return num
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to resolve Anoop's phone number from DB: {e}")
+
+    return clean_phone_number(DEFAULT_ANOOP_PHONE)
+
 
 # ── Column Mapping ───────────────────────────────────────────────────────────
 # All building tabs (GEBB1, GEBB2, GETT, Common) share the exact same 12 columns (A to L):
@@ -113,6 +161,7 @@ COLUMN_MAP = {
     "L": "actual_completion_date",
 }
 
+# pyrefly: ignore [bad-function-definition]
 def get_column_map(building: str = None) -> dict:
     """Get the column map for a building tab (uniform across all tabs)."""
     return COLUMN_MAP
@@ -138,6 +187,7 @@ COLUMN_INDEX = {
     "actual_completion_date": 12,
 }
 
+# pyrefly: ignore [bad-function-definition]
 def get_column_index(building: str = None) -> dict:
     """Get the column index mapping for a building tab (uniform across all tabs)."""
     return COLUMN_INDEX

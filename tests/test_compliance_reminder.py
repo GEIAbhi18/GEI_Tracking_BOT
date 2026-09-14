@@ -74,7 +74,9 @@ def _create_test_xlsx_bytes() -> bytes:
 
     # Management Dashboard (should be ignored)
     ws_dash = wb.active
+    # pyrefly: ignore [missing-attribute]
     ws_dash.title = "Management Dashboard"
+    assert ws_dash is not None
     ws_dash.cell(row=1, column=1, value="Dashboard Summary")
 
     # Building tabs: GEBB1, GEBB2, GETT
@@ -212,6 +214,9 @@ def test_build_compliance_template_payload_fallback_empty_fields():
 
 # ── 4. WhatsApp Dispatcher Tests ─────────────────────────────────────────────
 
+@patch("compliance.notifier.PHONE_NUMBER_ID", "123456789")
+@patch("compliance.notifier.META_ACCESS_TOKEN", "mock_token")
+@patch("compliance.notifier.WA_API_BASE", "https://graph.facebook.com/v19.0/123456789")
 @patch("compliance.notifier.requests.post")
 def test_send_compliance_reminder_to_anoop(mock_post):
     mock_resp = MagicMock()

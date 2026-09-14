@@ -254,3 +254,110 @@ def test_actual_completion_date_write_rejected():
     with pytest.raises(ValueError, match="not writable"):
         write_field("GEBB1-001", "actual_completion_date", "10-Sep-2026")
 
+
+def test_notify_external_change_exclusive_to_anoop_for_update(mocker):
+    """Verify that external sheet field update notifications are dispatched exclusively to Anoop."""
+    from facilities.sync_engine import _notify_external_change
+
+    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Fix basement lighting", "owner": "Facility Manager", "status": "Open", "planned_date": "15-Sep-2026"}]
+    )
+
+    _notify_external_change(
+        ref_no="GEBB1-005",
+        building="GEBB1",
+        change_type="updated",
+        details={"field": "status", "old_value": "Open", "new_value": "WIP"},
+    )
+
+    mock_send.assert_called_once()
+    to_phone, msg = mock_send.call_args[0]
+    assert to_phone == "919211501013"
+    assert "GEBB1-005" in msg
+    assert "Bay 1" in msg
+    assert "Fix basement lighting" in msg
+    assert "Status" in msg
+    assert "Previous:* Open" in msg
+    assert "Updated to:* WIP" in msg
+
+
+def test_notify_external_change_exclusive_to_anoop_common_sheet(mocker):
+    """Verify that external changes in Common sheet are dispatched exclusively to Anoop."""
+    from facilities.sync_engine import _notify_external_change
+
+    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(data=[])
+
+    _notify_external_change(
+        ref_no="Common-012",
+        building="Common",
+        change_type="created",
+        details={
+            "issue_action": "Clubhouse deep cleaning",
+            "owner": "Facility Manager",
+            "status": "Open",
+            "planned_date": "25-Sep-2026",
+        },
+    )
+
+    mock_send.assert_called_once()
+    to_phone, msg = mock_send.call_args[0]
+    assert to_phone == "919211501013"
+    assert "Common-012" in msg
+    assert "Common" in msg
+    assert "Clubhouse deep cleaning" in msg
+    assert "New Task Added" in msg
+
+
+def test_notify_external_change_exclusive_to_anoop_for_deletion(mocker):
+    """Verify that external deletions in building/common sheets notify Anoop exclusively."""
+    from facilities.sync_engine import _notify_external_change
+
+    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Old HVAC repair"}]
+    )
+
+    _notify_external_change(
+        ref_no="GETT-033",
+        building="GETT",
+        change_type="deleted",
+        details={},
+    )
+
+    mock_send.assert_called_once()
+    to_phone, msg = mock_send.call_args[0]
+    assert to_phone == "919211501013"
+    assert "GETT-033" in msg
+    assert "Trade Tower" in msg
+    assert "Task Removed from Google Sheets" in msg
+
+
+def test_resolve_anoop_phone_number(mocker):
+    """Verify resolve_anoop_phone_number resolution priority."""
+    from facilities.config import resolve_anoop_phone_number
+
+    # 1. Configured ANOOP_WHATSAPP_NUMBER
+    mocker.patch("facilities.config.ANOOP_WHATSAPP_NUMBER", "+91 98765 43210")
+    assert resolve_anoop_phone_number() == "919876543210"
+
+    # 2. Supabase DB lookup
+    mocker.patch("facilities.config.ANOOP_WHATSAPP_NUMBER", "")
+    mock_supabase = mocker.patch("db.supabase")
+    mock_supabase.table.return_value.select.return_value.ilike.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"whatsapp_number": "+91 92115 01013", "name": "Anoop"}]
+    )
+    assert resolve_anoop_phone_number() == "919211501013"
+
+    # 3. Fallback
+    mock_supabase.table.return_value.select.return_value.ilike.return_value.execute.return_value = mocker.MagicMock(data=[])
+    assert resolve_anoop_phone_number() == "919211501013"
+
+

@@ -147,6 +147,7 @@ def _poll_building_tab(building: str) -> int:
     return changes
 
 
+# pyrefly: ignore [bad-function-definition]
 def _was_recently_synced_by_bot(ref_no: str, field: str = None, window_seconds: int = 300) -> bool:
     """Check if GEI_BOT recently created or updated this task/field."""
     try:
@@ -188,8 +189,10 @@ def _handle_new_external_row(ref_no: str, row_data: dict, building: str):
 
     # Log to audit
     _log_audit_entry(
+        # pyrefly: ignore [bad-argument-type]
         ref_no, "google_sheets", None,
         "Task created externally on Google Sheets",
+        # pyrefly: ignore [bad-argument-type]
         None, None, str(row_data)
     )
 
@@ -213,6 +216,7 @@ def _handle_field_change(ref_no: str, building: str, field: str,
 
     # Log to audit
     _log_audit_entry(
+        # pyrefly: ignore [bad-argument-type]
         ref_no, "google_sheets", None,
         f"External edit: {field} changed",
         field, old_value, new_value
@@ -249,87 +253,117 @@ def _handle_deleted_external_row(ref_no: str, building: str):
 
     # 3. Log to audit log
     _log_audit_entry(
+        # pyrefly: ignore [bad-argument-type]
         ref_no, "google_sheets", None,
         "Task deleted externally on Google Sheets"
     )
 
+    # 4. Notify Anoop exclusively
+    _notify_external_change(ref_no, building, "deleted", {})
+
 
 def _notify_external_change(ref_no: str, building: str, change_type: str,
-                              details: dict):
+                            details: dict):
     """
-    Send a WhatsApp notification to users who should know about this change.
-
-    Checks:
-      1. Users who have this building in permitted_buildings
-      2. Users who own this task (row_cache.owner matches a user name)
-      3. Users who have an active facilities_session
+    Send a WhatsApp notification EXCLUSIVELY to Anoop whenever there is any change
+    in any building sheet or common sheet in Facilities task tracker Google Sheet.
+    No one other than Anoop receives this notification.
     """
     try:
-        # Find the owner position of this task
-        cache_res = supabase.table("row_cache").select("owner").eq("ref_no", ref_no).execute()
-        owner_pos = cache_res.data[0].get("owner") if cache_res.data else None
+        from facilities.config import resolve_anoop_phone_number
+        anoop_phone = resolve_anoop_phone_number()
+        if not anoop_phone:
+            logger.warning(f"Could not resolve Anoop's phone number for external change on {ref_no}.")
+            return
 
-        if not owner_pos:
-            return  # No owner to notify
-
-        # Resolve position to responsible user and WhatsApp number
-        from facilities.owner_resolver import get_responsible_user_whatsapp
-        recipient = get_responsible_user_whatsapp(owner_pos)
-
-        if recipient and recipient.get("whatsapp_number"):
-            _send_external_edit_notification(recipient["whatsapp_number"], ref_no, change_type, details)
-        else:
-            # Fallback: check if owner field directly matches a user name
-            user_res = supabase.table("users").select(
-                "whatsapp_number, name"
-            ).eq("name", owner_pos).execute()
-
-            if user_res.data:
-                for user in user_res.data:
-                    wa_number = user.get("whatsapp_number")
-                    if wa_number:
-                        _send_external_edit_notification(wa_number, ref_no, change_type, details)
-            else:
-                logger.warning(f"Owner position '{owner_pos}' for task {ref_no} has no mapped user or WhatsApp number.")
+        _send_external_edit_notification(anoop_phone, ref_no, building, change_type, details)
 
     except Exception as e:
-        logger.error(f"Failed to notify about external change for {ref_no}: {e}")
+        logger.error(f"Failed to notify Anoop about external change for {ref_no}: {e}")
 
 
-def _send_external_edit_notification(to: str, ref_no: str, change_type: str,
-                                       details: dict):
-    """Send the Screen 09 external edit notification via WhatsApp."""
+def _send_external_edit_notification(to: str, ref_no: str, building: str,
+                                     change_type: str, details: dict):
+    """Send the Facilities sheet change notification exclusively to Anoop via WhatsApp."""
     try:
         from whatsapp.ux import send_text
+        from facilities.config import BUILDING_NAME_MAPPING
+        from datetime import timezone, timedelta
 
-        now = datetime.now(timezone.utc).strftime("%H:%M UTC, %d %b %Y")
+        # Current timestamp formatted in IST
+        ist_tz = timezone(timedelta(hours=5, minutes=30))
+        now_ist = datetime.now(ist_tz).strftime("%I:%M %p, %d %b %Y")
+
+        bldg_name = BUILDING_NAME_MAPPING.get(building, building) if building else building
+        bldg_display = f"{building} ({bldg_name})" if bldg_name and bldg_name != building else (building or "—")
+
+        # Fetch cached task details if available
+        task_desc = ""
+        cached_owner = ""
+        cached_status = ""
+        try:
+            cache_res = supabase.table("row_cache").select(
+                "issue_action, owner, status, planned_date"
+            ).eq("ref_no", ref_no).execute()
+            if cache_res.data:
+                row = cache_res.data[0]
+                task_desc = row.get("issue_action") or ""
+                cached_owner = row.get("owner") or ""
+                cached_status = row.get("status") or ""
+        except Exception:
+            pass
 
         if change_type == "updated" and isinstance(details, dict):
             field = details.get("field", "unknown field")
-            old_val = details.get("old_value", "—")
-            new_val = details.get("new_value", "—")
+            field_display = field.replace("_", " ").title()
+            old_val = details.get("old_value") or "—"
+            new_val = details.get("new_value") or "—"
+
+            desc_line = f"*Task:* {task_desc}\n" if task_desc else ""
 
             msg = (
-                f"📊 *Detected from Google Sheets*\n\n"
+                f"📊 *Facilities Sheet Update Detected*\n\n"
                 f"*Ref:* {ref_no}\n"
-                f"*Field:* {field}\n"
+                f"*Building/Sheet:* {bldg_display}\n"
+                f"{desc_line}"
+                f"*Field Changed:* {field_display}\n"
                 f"*Previous:* {old_val}\n"
                 f"*Updated to:* {new_val}\n\n"
-                f"🕐 Detected at {now}\n\n"
-                f"_This change was made directly on the Google Sheet._"
+                f"🕐 Detected at {now_ist} IST\n\n"
+                f"_This change was made directly on the Facilities Google Sheet._"
             )
         elif change_type == "created":
+            issue = (details.get("issue_action") or details.get("Key Issue / Action") or task_desc or "—") if isinstance(details, dict) else "—"
+            owner = (details.get("owner") or details.get("Owner") or cached_owner or "—") if isinstance(details, dict) else "—"
+            status = (details.get("status") or details.get("Status") or cached_status or "—") if isinstance(details, dict) else "—"
+            planned = (details.get("planned_date") or details.get("Target Date") or details.get("Planned Date") or "—") if isinstance(details, dict) else "—"
+
             msg = (
-                f"📊 *Detected from Google Sheets*\n\n"
-                f"*New Task:* {ref_no}\n"
-                f"A new task was created directly on the Google Sheet.\n\n"
-                f"🕐 Detected at {now}"
+                f"📊 *New Task Added on Google Sheets*\n\n"
+                f"*Ref:* {ref_no}\n"
+                f"*Building/Sheet:* {bldg_display}\n"
+                f"*Task:* {issue}\n"
+                f"*Owner:* {owner}\n"
+                f"*Planned Date:* {planned}\n"
+                f"*Status:* {status}\n\n"
+                f"🕐 Detected at {now_ist} IST\n\n"
+                f"_This task was created directly on the Facilities Google Sheet._"
+            )
+        elif change_type == "deleted":
+            desc_line = f"*Task:* {task_desc}\n" if task_desc else ""
+            msg = (
+                f"📊 *Task Removed from Google Sheets*\n\n"
+                f"*Ref:* {ref_no}\n"
+                f"*Building/Sheet:* {bldg_display}\n"
+                f"{desc_line}"
+                f"This row was deleted directly from the Facilities Google Sheet.\n\n"
+                f"🕐 Detected at {now_ist} IST"
             )
         else:
             return
 
         send_text(to, msg)
-        logger.info(f"External edit notification sent to {to} for {ref_no}")
+        logger.info(f"Facilities external change notification sent to Anoop ({to}) for {ref_no} ({change_type})")
 
     except Exception as e:
         logger.error(f"Failed to send external edit notification to {to}: {e}")
@@ -464,7 +498,9 @@ def _send_retry_success_notification(ref_no: str, field: str, value: str):
 # ── Audit Helper ─────────────────────────────────────────────────────────────
 
 def _log_audit_entry(ref_no: str, source: str, actor: str, action: str,
+                      # pyrefly: ignore [bad-function-definition]
                       field: str = None, old_value: str = None,
+                      # pyrefly: ignore [bad-function-definition]
                       new_value: str = None):
     """Insert a row into facilities_audit_log."""
     try:
