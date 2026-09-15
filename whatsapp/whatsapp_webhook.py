@@ -282,6 +282,21 @@ try:
 except Exception as _comp_sched_err:
     logging.warning(f"Compliance daily reminder job failed to schedule: {_comp_sched_err}")
 
+# ── Client Master Data Periodic Sync Job ──────────────────────────────────
+try:
+    from clients.sync_engine import run_client_master_sync
+    from clients.config import CLIENT_SYNC_INTERVAL_MINUTES
+    _bg_scheduler.add_job(
+        run_client_master_sync,
+        'interval',
+        minutes=CLIENT_SYNC_INTERVAL_MINUTES,
+        id='client_master_periodic_sync',
+        replace_existing=True,
+    )
+    logging.info(f"Client master periodic sync registered (every {CLIENT_SYNC_INTERVAL_MINUTES}m)")
+except Exception as _client_sched_err:
+    logging.warning(f"Client master periodic sync failed to schedule: {_client_sched_err}")
+
 
 
 # ── Deferred Startup ────────────────────────────────────────────────────────
@@ -305,6 +320,15 @@ def _deferred_startup():
         logging.info("Feedback sessions restored from sheet.")
     except Exception as _fb_err:
         logging.warning(f"Feedback session restore skipped: {_fb_err}")
+
+    # 3. Initial Client Master Sync
+    try:
+        from clients.sync_engine import run_client_master_sync
+        run_client_master_sync()
+        logging.info("Initial Client Master Sync completed.")
+    except Exception as _sync_err:
+        logging.warning(f"Initial Client Master Sync skipped: {_sync_err}")
+
 
 
 threading.Thread(target=_deferred_startup, daemon=True, name="deferred-startup").start()
@@ -435,9 +459,36 @@ def handle_whatsapp_message():
                                     logger.error(f"Auth failed for {sender_num}")
                                     return
                                 
-                                # Check for casual greetings (Main Menu trigger)
+                                # Check for casual greetings (Main Menu / Client Flow trigger)
                                 greeting_words = ["hi", "hello", "menu", "hey", "start"]
                                 if msg_text.strip().lower() in greeting_words:
+                                    # 1. Check if sender is a registered Factech / tenant client
+                                    try:
+                                        from clients.flows import is_registered_client, handle_client_hi
+                                        if is_registered_client(sender_num):
+                                            handle_client_hi(sender_num)
+                                            return
+                                    except Exception as client_hi_err:
+                                        logger.error(f"Client greeting error for {sender_num}: {client_hi_err}", exc_info=True)
+
+                                    # 2. Check if sender is an internal employee / director / facilities / elara
+                                    is_internal = (
+                                        auth_user.get("role") in ("Director", "Employee", "Developer")
+                                        or auth_user.get("department") == "Facilities"
+                                    )
+                                    if not is_internal:
+                                        try:
+                                            from elara.auth import is_elara_user
+                                            if is_elara_user(sender_num):
+                                                is_internal = True
+                                        except Exception:
+                                            pass
+
+                                    if not is_internal:
+                                        from clients.flows import send_unregistered_client_message
+                                        send_unregistered_client_message(sender_num)
+                                        return
+
                                     try:
                                         from whatsapp.task_assignment import check_and_deliver_pending_task_notifications
                                         check_and_deliver_pending_task_notifications(auth_user)
@@ -637,6 +688,29 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             return
     except Exception as fac_err:
         logger.error(f"Facilities routing error in _handle_text: {fac_err}", exc_info=True)
+
+    # ── Factech Client Automation Check ─────────────────────────────────────
+    try:
+        from clients.flows import has_active_client_flow, handle_client_text, is_registered_client, handle_client_button_reply
+        if has_active_client_flow(sender):
+            if handle_client_text(sender, text):
+                return
+
+        # Direct client text commands
+        if is_registered_client(sender):
+            clean_cmd = text.strip().lower()
+            if clean_cmd in ("log new complaint", "log complaint", "new complaint", "create complaint"):
+                handle_client_button_reply(sender, "log_new_complaint")
+                return
+            elif clean_cmd in ("check complaint status", "check status", "complaint status", "status"):
+                handle_client_button_reply(sender, "check_complaint_status")
+                return
+            elif clean_cmd in ("complaint history", "history", "previous complaints"):
+                handle_client_button_reply(sender, "complaint_history")
+                return
+    except Exception as client_err:
+        logger.error(f"Client routing error in _handle_text: {client_err}", exc_info=True)
+
 
     # Check for clear/reset command (works from both text and voice)
     if text.strip().upper() in ("CLEAR", "CLEAR CHAT", "RESET", "CLEAR SESSION", "RESTART"):

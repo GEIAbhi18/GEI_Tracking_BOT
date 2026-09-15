@@ -38,8 +38,19 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
     if button_id.startswith("fac_") or user.get("department") == "Facilities":
         from facilities.flows.router import route_facilities_message
         route_facilities_message(sender_phone, button_id=button_id, user=user)
-        return
-        
+    # ── Factech Client Automation Routing ───────────────────────────────────
+    if (
+        button_id in ("log_new_complaint", "check_complaint_status", "complaint_history")
+        or button_id.startswith("client_sel_")
+        or button_id.startswith("client_")
+    ):
+        try:
+            from clients.flows import handle_client_button_reply
+            handle_client_button_reply(sender_phone, button_id, user)
+            return
+        except Exception as client_btn_err:
+            logger.error(f"Client button handling error for {sender_phone}: {client_btn_err}", exc_info=True)
+
     # ── Main Menu Routing ────────────────────────────────────────────────────
     if button_id.startswith("menu_"):
         if button_id == "menu_team_tasks":
