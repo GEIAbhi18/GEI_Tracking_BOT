@@ -30,6 +30,26 @@ def test_get_kanav_phone_fallback():
         assert phone == KANAV_PHONE
 
 
+def test_get_kanav_phone_with_unconfigured_mock():
+    """Verify get_kanav_phone does not return MagicMock when db.supabase is a raw mock."""
+    with patch("db.supabase") as mock_sb:
+        # Default MagicMock returns MagicMock for res.data
+        phone = get_kanav_phone()
+        assert phone == KANAV_PHONE
+        assert isinstance(phone, str)
+
+
+def test_is_elara_task_created_by_kanav_with_unconfigured_mock():
+    """Verify is_elara_task_created_by_kanav does not return True for other creators when db is mocked."""
+    with patch("db.supabase") as mock_sb:
+        task_other = {
+            "id": "task-mock-999",
+            "created_by": "Rachit",
+            "comments": [{"user_name": "Rachit", "content": "Task created by Rachit"}]
+        }
+        assert is_elara_task_created_by_kanav(task_other) is False
+
+
 def test_format_task_change_message():
     """Verify message formatting contains all required parameters."""
     msg = format_task_change_message(

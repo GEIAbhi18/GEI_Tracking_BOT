@@ -21,8 +21,12 @@ def get_kanav_phone() -> str:
     try:
         from db import supabase
         res = supabase.table("users").select("whatsapp_number").ilike("name", "%Kanav%").execute()
-        if res.data and res.data[0].get("whatsapp_number"):
-            return res.data[0]["whatsapp_number"]
+        if hasattr(res, "data") and isinstance(res.data, list) and len(res.data) > 0:
+            first = res.data[0]
+            if isinstance(first, dict):
+                wa = first.get("whatsapp_number")
+                if isinstance(wa, str) and wa.strip():
+                    return wa.strip()
     except Exception as e:
         logger.warning(f"Could not fetch Kanav WhatsApp from users table: {e}")
     return KANAV_PHONE
@@ -40,30 +44,29 @@ def get_formatted_timestamp(dt: datetime | None = None) -> str:
 
 
 def format_task_change_message(task_id: str, task_title: str, change_made: str,
-                               changed_by: str, timestamp: str | None = None,
+                               changed_by: str, timestamp: datetime | str | None = None,
                                domain: str = "Facilities") -> str:
     """
-    Format task-change notification message for Kanav.
-    Fields included:
-      - Task ID
-      - Task Title
-      - Change Made
-      - Changed By
-      - Timestamp
-      - Domain
+    Format a standardized task-change notification WhatsApp message.
     """
-    ts = timestamp or get_formatted_timestamp()
+    if isinstance(timestamp, str):
+        time_str = timestamp
+    elif isinstance(timestamp, datetime):
+        time_str = get_formatted_timestamp(timestamp)
+    else:
+        time_str = get_formatted_timestamp()
+
     domain_emoji = "🏢" if domain.lower() == "facilities" else "🏠"
-    body = (
+
+    return (
         f"🔔 *Task Update Notification*\n\n"
         f"📋 *Task ID:* {task_id}\n"
         f"📌 *Task Title:* {task_title}\n"
         f"🔄 *Change Made:* {change_made}\n"
         f"👤 *Changed By:* {changed_by}\n"
-        f"🕒 *Timestamp:* {ts}\n"
+        f"🕒 *Timestamp:* {time_str}\n"
         f"{domain_emoji} *Domain:* {domain}"
     )
-    return body
 
 
 def is_facilities_task_created_by_kanav(task_row: dict) -> bool:
@@ -84,9 +87,9 @@ def is_facilities_task_created_by_kanav(task_row: dict) -> bool:
         task_row.get("actor")
     ]
     for c in candidates:
-        if not c:
+        if not c or not isinstance(c, str):
             continue
-        c_str = str(c).lower()
+        c_str = c.lower()
         if any(k in c_str for k in ["facilities director", "facility director", "kanav", "director"]):
             return True
     return False
@@ -98,39 +101,50 @@ def is_elara_task_created_by_kanav(task: dict) -> bool:
     Evaluates:
       - task.get('created_by')
       - comments in task.get('comments')
-      - query elara_comments table for task_id
+      - query elara_comments table for task_id (fallback)
     """
     if not task:
         return False
 
     # 1. Direct created_by field
-    cb = str(task.get("created_by") or "").lower()
-    if any(k in cb for k in ["kanav", "kk"]):
-        return True
+    cb = task.get("created_by")
+    if cb and isinstance(cb, str):
+        cb_lower = cb.lower()
+        if any(k in cb_lower for k in ["kanav", "kk"]):
+            return True
+        return False
 
     # 2. In-memory comments array
-    comments = task.get("comments") or []
+    comments = task.get("comments")
     if isinstance(comments, list):
         for c in comments:
             if isinstance(c, dict):
                 uname = str(c.get("user_name", "")).lower()
                 content = str(c.get("content", "")).lower()
-                if "task created by" in content and ("kanav" in content or "kanav" in uname or "kk" in uname):
-                    return True
+                if "task created by" in content:
+                    if any(k in content for k in ["kanav", "kk"]) or any(k in uname for k in ["kanav", "kk"]):
+                        return True
+                    return False
                 if uname in ("kanav", "kk") and "created" in content:
                     return True
+        if len(comments) > 0:
+            return False
 
-    # 3. Database elara_comments check
+    # 3. Database elara_comments check (only fallback if comments not loaded on task)
     task_id = task.get("id")
     if task_id:
         try:
             from db import supabase
-            res = supabase.table("elara_comments").select("*").eq("task_id", task_id).ilike("content", "%Task created by%Kanav%").execute()
-            if res.data:
-                return True
-            res2 = supabase.table("elara_comments").select("*").eq("task_id", task_id).ilike("content", "%Task created by%KK%").execute()
-            if res2.data:
-                return True
+            res = supabase.table("elara_comments").select("id, content").eq("task_id", task_id).ilike("content", "%Task created by%Kanav%").execute()
+            if hasattr(res, "data") and isinstance(res.data, list) and len(res.data) > 0:
+                first = res.data[0]
+                if isinstance(first, dict) and first.get("id"):
+                    return True
+            res2 = supabase.table("elara_comments").select("id, content").eq("task_id", task_id).ilike("content", "%Task created by%KK%").execute()
+            if hasattr(res2, "data") and isinstance(res2.data, list) and len(res2.data) > 0:
+                first2 = res2.data[0]
+                if isinstance(first2, dict) and first2.get("id"):
+                    return True
         except Exception:
             pass
 
@@ -139,7 +153,7 @@ def is_elara_task_created_by_kanav(task: dict) -> bool:
 
 def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
                              changed_by: str, domain: str = "Facilities",
-                             timestamp: str | None = None) -> bool:
+                             timestamp: datetime | None = None) -> bool:
     """
     Send Kanav a WhatsApp message regarding a task change.
     Never raises exceptions, ensuring calling flows are unaffected.
