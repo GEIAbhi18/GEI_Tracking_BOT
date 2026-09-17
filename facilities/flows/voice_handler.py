@@ -297,7 +297,7 @@ def handle_voice_confirm_text(sender: str, text: str, user: dict, session: dict)
 
 def _execute_single_operation(intent: str, entities: dict, user: dict) -> str:
     """Execute a single voice operation. Returns a result description."""
-    actor = user.get("name")
+    actor = str(user.get("name") or "GEI_BOT")
 
     if intent == "create_task":
         building = entities.get("building")
@@ -331,6 +331,32 @@ def _execute_single_operation(intent: str, entities: dict, user: dict) -> str:
             r = write_field(ref_no, "latest_update", entities["latest_update"], source="gei_bot", actor=actor)
             results.append(f"Note→{r['status']}")
 
+        # Notify Kanav if this task was created by him
+        try:
+            from facilities.sheets_client import read_row
+            from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+            task_row = read_row(ref_no)
+            if task_row and is_facilities_task_created_by_kanav(task_row):
+                changes = []
+                if entities.get("status"):
+                    st = entities["status"]
+                    if st.lower() == "closed":
+                        changes.append("Status changed to Closed (Task closed)")
+                    else:
+                        changes.append(f"Status changed to {st}")
+                if entities.get("latest_update"):
+                    changes.append(f"Note: {entities['latest_update']}")
+                change_made = " | ".join(changes) if changes else "Task updated via voice"
+                notify_kanav_task_change(
+                    task_id=ref_no,
+                    task_title=task_row.get("issue_action", ref_no),
+                    change_made=change_made,
+                    changed_by=actor or "Team Member",
+                    domain="Facilities"
+                )
+        except Exception as e:
+            logger.error(f"Voice update Kanav notification failed: {e}")
+
         return f"Updated {ref_no}: {', '.join(results)}" if results else f"No fields to update for {ref_no}"
 
     elif intent == "reassign_task":
@@ -339,8 +365,26 @@ def _execute_single_operation(intent: str, entities: dict, user: dict) -> str:
         if not ref_no or not new_owner:
             return "Missing Ref No or owner — skipped"
 
-        from facilities.sheets_client import write_field
+        from facilities.sheets_client import write_field, read_row
         r = write_field(ref_no, "owner", new_owner, source="gei_bot", actor=actor)
+
+        # Notify Kanav if this task was created by him
+        try:
+            from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+            task_row = read_row(ref_no)
+            if task_row and is_facilities_task_created_by_kanav(task_row):
+                old_owner = task_row.get("owner", "—")
+                reassign_str = f"Reassigned to {new_owner}" if old_owner == "—" else f"Reassigned from {old_owner} to {new_owner}"
+                notify_kanav_task_change(
+                    task_id=ref_no,
+                    task_title=task_row.get("issue_action", ref_no),
+                    change_made=reassign_str,
+                    changed_by=actor or "Team Member",
+                    domain="Facilities"
+                )
+        except Exception as e:
+            logger.error(f"Voice reassign Kanav notification failed: {e}")
+
         return f"Reassigned {ref_no} to {new_owner} ({r['status']})"
 
     else:

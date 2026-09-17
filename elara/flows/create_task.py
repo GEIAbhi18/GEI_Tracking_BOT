@@ -39,6 +39,7 @@ def parse_task_intent_from_text(text: str, user: dict) -> dict:
     # Department detection from 6 departments
     for dept in ELARA_DEPARTMENTS:
         if dept.lower() in clean.lower():
+            # pyrefly: ignore [bad-assignment]
             entities["department"] = dept
             break
 
@@ -48,7 +49,7 @@ def parse_task_intent_from_text(text: str, user: dict) -> dict:
         raw_date_str = date_match.group(1).strip()
         parsed = parse_human_date(raw_date_str)
         if parsed:
-            entities["due_date"] = parsed.isoformat()
+            entities["due_date"] = parsed
 
     # Assignee extraction from elara_users
     team_members = get_elara_team_members()
@@ -73,7 +74,7 @@ def parse_task_intent_from_text(text: str, user: dict) -> dict:
     return entities
 
 
-def start_create_task_flow(to: str, user: dict, prefill: dict = None):
+def start_create_task_flow(to: str, user: dict, prefill: dict | None = None):
     """
     Start task creation. If title and project are already known, create directly.
     Otherwise guide the user through missing fields.
@@ -214,7 +215,7 @@ def handle_task_due_date_input(to: str, text: str, user: dict, session: dict):
     else:
         parsed = parse_human_date(clean_text)
         if parsed:
-            draft["due_date"] = parsed.isoformat()
+            draft["due_date"] = parsed
         else:
             draft["due_date"] = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
 
@@ -249,6 +250,9 @@ def finalize_task_creation(to: str, user: dict, draft: dict):
 
     assignees = [assignee]
 
+    creator_name = user.get("name") or "Team Member"
+    creator_role = user.get("role") or "Team Member"
+
     # Insert into elara_tasks
     created_task = create_task(
         title=title,
@@ -258,7 +262,20 @@ def finalize_task_creation(to: str, user: dict, draft: dict):
         due_date=due_date,
         assigned_users=assignees,
         status="pending",
+        created_by=creator_name,
     )
+
+    # Record provenance comment in elara_comments and elara_tasks
+    try:
+        from elara.db import add_comment
+        add_comment(
+            task_id=created_task["id"],
+            user_name=creator_name,
+            user_role=creator_role,
+            content=f"Task created by {creator_name}",
+        )
+    except Exception as cmt_err:
+        logger.warning(f"Could not add creation comment for Elara task {created_task.get('id')}: {cmt_err}")
 
     clear_elara_session(to)
     send_text(to, "✅ *Elara Task Created Successfully!*")

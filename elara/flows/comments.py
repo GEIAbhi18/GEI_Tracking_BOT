@@ -44,6 +44,22 @@ def handle_comment_text_input(to: str, text: str, user: dict, session: dict):
         user_role=user_role,
         content=content,
     )
+
+    # ── Notify Kanav if this task was created by him ──
+    try:
+        from notifications.kanav_notifier import is_elara_task_created_by_kanav, notify_kanav_task_change
+        task = get_task_by_id(task_id)
+        if task and is_elara_task_created_by_kanav(task):
+            notify_kanav_task_change(
+                task_id=task_id,
+                task_title=task.get("title", "Task"),
+                change_made=f"Task updated (Comment added: \"{content}\")",
+                changed_by=user_name,
+                domain="Elara Home"
+            )
+    except Exception as notif_err:
+        logger.error(f"Failed to notify Kanav in handle_comment_text_input: {notif_err}")
+
     clear_elara_session(to)
 
     buttons = [

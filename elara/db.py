@@ -122,7 +122,8 @@ def get_task_by_id(task_id: str) -> dict | None:
 
 
 def create_task(title: str, project_id: str, description: str | None = None, priority: str = "medium",
-                due_date: str | None = None, assigned_users: list | None = None, status: str = "pending") -> dict:
+                due_date: str | None = None, assigned_users: list | None = None, status: str = "pending",
+                created_by: str | None = None) -> dict:
     """
     Create a new task in `elara_tasks`.
     DO NOT write to legacy `tasks` table.
@@ -149,7 +150,12 @@ def create_task(title: str, project_id: str, description: str | None = None, pri
 
     res = supabase.table("elara_tasks").insert(data).execute()
     if isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
-        return res.data[0]
+        result = res.data[0]
+        if created_by:
+            result["created_by"] = created_by
+        return result
+    if created_by:
+        data["created_by"] = created_by
     return data
 
 

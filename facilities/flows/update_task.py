@@ -5,6 +5,7 @@ Extract target ref no + new status + latest-update text from free text.
 Show explicit before → after status change before committing.
 """
 
+from __future__ import annotations
 import logging
 
 from whatsapp.ux import send_text, send_list_message, send_interactive_buttons
@@ -15,7 +16,7 @@ from facilities.flows.router import get_session, set_session, clear_session
 logger = logging.getLogger(__name__)
 
 
-def start_update_flow(sender: str, ref_no: str, user: dict, prefill: dict = None):
+def start_update_flow(sender: str, ref_no: str, user: dict, prefill: dict | None = None):
     """Start the update flow for a specific task."""
     row = read_row(ref_no)
     if not row:
@@ -199,7 +200,7 @@ def handle_update_flow_text(sender: str, text: str, user: dict, session: dict):
         send_text(sender, "Please use the buttons to *Confirm* or *Cancel* the update.")
 
 
-def _show_update_preview(sender: str, row: dict, context: dict, user: dict):
+def _show_update_preview(sender: str, row: dict | None, context: dict, user: dict):
     """Show before → after preview before committing."""
     ref_no = context.get("ref_no", "—")
     old_status = context.get("current_status", "—")
@@ -254,7 +255,7 @@ def confirm_update(sender: str, user: dict):
         clear_session(sender)
         return
 
-    actor = user.get("name")
+    actor = str(user.get("name") or "GEI_BOT")
     results = []
 
     # Write status
@@ -302,6 +303,36 @@ def confirm_update(sender: str, user: dict):
     msg += f"\n{bot_line}\n{sheet_line}"
 
     send_text(sender, msg)
+
+    # ── Notify Kanav if this task was created by him ──
+    try:
+        from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+        task_row = read_row(ref_no)
+        if task_row and is_facilities_task_created_by_kanav(task_row):
+            task_title = task_row.get("issue_action", ref_no)
+            current_st = context.get("current_status", "Open")
+            changes = []
+            if new_status == "Closed":
+                changes.append(f"Status changed from {current_st} to Closed (Task closed)")
+            elif new_status != current_st:
+                changes.append(f"Status changed from {current_st} to {new_status}")
+            if update_text:
+                changes.append(f"Note: {update_text}")
+            if new_est:
+                changes.append(f"Est. completion: {new_est}")
+
+            change_made = " | ".join(changes) if changes else "Task updated"
+            actor_name = user.get("name", actor or "Team Member")
+            notify_kanav_task_change(
+                task_id=ref_no,
+                task_title=task_title,
+                change_made=change_made,
+                changed_by=actor_name,
+                domain="Facilities"
+            )
+    except Exception as e:
+        logger.error(f"Failed to trigger Kanav notification in confirm_update: {e}")
+
     clear_session(sender)
 
 

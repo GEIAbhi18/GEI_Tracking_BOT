@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 
 from whatsapp.ux import send_text, send_list_message, send_interactive_buttons
+from postgrest.types import CountMethod
 from db import supabase
 from facilities.sheets_client import read_row, write_field, normalize_added_by
 from facilities.config import RAG_STATUS_MAP
@@ -98,7 +99,7 @@ def _get_sync_indicator(ref_no: str) -> str:
     """Get the sync status indicator for a task."""
     try:
         # Check for pending syncs
-        pending = supabase.table("sync_queue").select("id", count="exact").eq(
+        pending = supabase.table("sync_queue").select("id", count=CountMethod.exact).eq(
             "ref_no", ref_no
         ).eq("status", "pending").execute()
 
@@ -106,7 +107,7 @@ def _get_sync_indicator(ref_no: str) -> str:
             return "🔄 *Sheet Sync:* ⏳ Pending"
 
         # Check for failed syncs
-        failed = supabase.table("sync_queue").select("id", count="exact").eq(
+        failed = supabase.table("sync_queue").select("id", count=CountMethod.exact).eq(
             "ref_no", ref_no
         ).eq("status", "failed").execute()
 
@@ -123,7 +124,7 @@ def _get_attachment_count(ref_no: str) -> int:
     """Count attachments for a task."""
     try:
         res = supabase.table("facilities_attachments").select(
-            "id", count="exact"
+            "id", count=CountMethod.exact
         ).eq("ref_no", ref_no).execute()
         return res.count or 0
     except Exception:
@@ -195,13 +196,15 @@ def handle_reassign_selection(sender: str, new_owner: str, user: dict):
         clear_session(sender)
         return
 
+    actor = str(user.get("name") or "GEI_BOT")
+
     # Write the new owner via the sync pipeline
-    result = write_field(ref_no, "owner", new_owner, source="gei_bot", actor=user.get("name"))
+    result = write_field(ref_no, "owner", new_owner, source="gei_bot", actor=actor)
 
     if result["status"] == "synced":
         # Log as explicit "Reassigned" action
         from facilities.sheets_client import _log_audit
-        _log_audit(ref_no, "gei_bot", user.get("name"),
+        _log_audit(ref_no, "gei_bot", actor,
                    f"Reassigned to {new_owner}", "owner",
                    session.get("context_json", {}).get("old_owner"), new_owner)
 
@@ -213,7 +216,7 @@ def handle_reassign_selection(sender: str, new_owner: str, user: dict):
         )
 
         # Notify the new owner
-        _notify_new_owner(ref_no, new_owner, user.get("name"))
+        _notify_new_owner(ref_no, new_owner, actor)
 
     elif result["status"] == "failed":
         msg = (
@@ -229,6 +232,24 @@ def handle_reassign_selection(sender: str, new_owner: str, user: dict):
         msg = f"Something went wrong. Please try again."
 
     send_text(sender, msg)
+
+    # ── Notify Kanav if this task was created by him ──
+    try:
+        from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+        task_row = read_row(ref_no)
+        if task_row and is_facilities_task_created_by_kanav(task_row):
+            old_owner = session.get("context_json", {}).get("old_owner") or task_row.get("owner", "—")
+            reassign_str = f"Reassigned to {new_owner}" if (not old_owner or old_owner == "—") else f"Reassigned from {old_owner} to {new_owner}"
+            notify_kanav_task_change(
+                task_id=ref_no,
+                task_title=task_row.get("issue_action", ref_no),
+                change_made=reassign_str,
+                changed_by=user.get("name", "Team Member"),
+                domain="Facilities"
+            )
+    except Exception as e:
+        logger.error(f"Failed to trigger Kanav notification in handle_reassign_selection: {e}")
+
     clear_session(sender)
 
 
@@ -317,18 +338,20 @@ def handle_attachment_upload(sender: str, ref_no: str, image_data: dict, user: d
         file_name = f"{ref_no}_{uuid.uuid4().hex[:6]}.{file_ext}"
         file_url = f"whatsapp_media://{media_id}"  # Placeholder until storage upload
 
+        actor = str(user.get("name") or "GEI_BOT")
+
         # Store in attachments table
         supabase.table("facilities_attachments").insert({
             "ref_no": ref_no,
             "file_url": file_url,
             "file_name": file_name,
             "file_type": mime_type,
-            "uploaded_by": user.get("name"),
+            "uploaded_by": actor,
         }).execute()
 
         # Write a note to the Latest Update field on the Sheet
-        note = f"Photo attached by {user.get('name', 'team member')}"
-        write_field(ref_no, "latest_update", note, source="gei_bot", actor=user.get("name"))
+        note = f"Photo attached by {actor}"
+        write_field(ref_no, "latest_update", note, source="gei_bot", actor=actor)
 
         send_text(
             sender,

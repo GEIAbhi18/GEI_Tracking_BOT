@@ -67,7 +67,7 @@ def confirm_reopen(sender: str, user: dict):
         clear_session(sender)
         return
 
-    actor = user.get("name")
+    actor = str(user.get("name") or "GEI_BOT")
 
     # Write the status change
     result = write_field(ref_no, "status", "Open", source="gei_bot", actor=actor)
@@ -91,6 +91,23 @@ def confirm_reopen(sender: str, user: dict):
     )
 
     send_text(sender, msg)
+
+    # ── Notify Kanav if this task was created by him ──
+    try:
+        from facilities.sheets_client import read_row
+        from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+        task_row = read_row(ref_no)
+        if task_row and is_facilities_task_created_by_kanav(task_row):
+            notify_kanav_task_change(
+                task_id=ref_no,
+                task_title=task_row.get("issue_action", ref_no),
+                change_made="Status changed from Closed to Open (Reopened)",
+                changed_by=actor or "Team Member",
+                domain="Facilities"
+            )
+    except Exception as e:
+        logger.error(f"Reopen Kanav notification failed: {e}")
+
     clear_session(sender)
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+from typing import Any
 from whatsapp.ux import send_interactive_buttons, send_list_message, send_text
 from elara.db import get_task_by_id, update_task
 from elara.session import set_elara_session, clear_elara_session, get_elara_session
@@ -76,12 +77,33 @@ def handle_status_selection(to: str, task_id: str, new_status: str, user: dict):
         )
 
     # Apply update to elara_tasks
-    updates = {"status": norm_status}
+    updates: dict[str, Any] = {"status": norm_status}
     if norm_status == "in_progress" and (task.get("progress") or 0) == 0:
         updates["progress"] = 25
 
     updated = update_task(task_id, updates)
     status_str = STATUS_DISPLAY_NAMES.get(norm_status, norm_status)
+    old_status = task.get("status", "pending")
+    old_status_str = STATUS_DISPLAY_NAMES.get(old_status, old_status)
+
+    # ── Notify Kanav if this task was created by him ──
+    try:
+        from notifications.kanav_notifier import is_elara_task_created_by_kanav, notify_kanav_task_change
+        if is_elara_task_created_by_kanav(task):
+            actor_name = user.get("name", "Team Member")
+            if norm_status == "completed":
+                change_desc = f"Status changed from {old_status_str} to Completed (Task closed)"
+            else:
+                change_desc = f"Status changed from {old_status_str} to {status_str}"
+            notify_kanav_task_change(
+                task_id=task_id,
+                task_title=task.get("title", "Task"),
+                change_made=change_desc,
+                changed_by=actor_name,
+                domain="Elara Home"
+            )
+    except Exception as notif_err:
+        logger.error(f"Failed to notify Kanav in handle_status_selection: {notif_err}")
 
     send_text(to, f"✅ Task status updated to *{status_str}*!")
     if updated:
@@ -124,6 +146,22 @@ def handle_blocker_reason_input(to: str, text: str, user: dict, session: dict):
         user_role=user.get("role", "Team Member"),
         content=f"🛑 Marked as Blocker: {reason}",
     )
+
+    # ── Notify Kanav if this task was created by him ──
+    try:
+        from notifications.kanav_notifier import is_elara_task_created_by_kanav, notify_kanav_task_change
+        task = get_task_by_id(task_id)
+        if task and is_elara_task_created_by_kanav(task):
+            actor_name = user.get("name", "Team Member")
+            notify_kanav_task_change(
+                task_id=task_id,
+                task_title=task.get("title", "Task"),
+                change_made=f"Status changed to Blocker (Reason: {reason})",
+                changed_by=actor_name,
+                domain="Elara Home"
+            )
+    except Exception as notif_err:
+        logger.error(f"Failed to notify Kanav in handle_blocker_reason_input: {notif_err}")
 
     send_text(to, f"🛑 Task marked as *Blocker*!\nReason: _{reason}_")
     if updated:
