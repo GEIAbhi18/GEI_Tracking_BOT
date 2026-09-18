@@ -60,6 +60,23 @@ def authenticate_whatsapp_request(sender_phone: str):
                         "original_role": "Developer"
                     }
 
+        # --- Chaitanya Temporary Tenant Override ---
+        # Strictly treat Chaitanya as a Tenant only (Role.CLIENT).
+        # Do not treat or identify Chaitanya as a Team Member anywhere in GEI_BOT flow.
+        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+        if TREAT_CHAITANYA_AS_TENANT_ONLY and (
+            is_chaitanya(sender_phone)
+            or is_chaitanya(user.get("whatsapp_number"))
+            or is_chaitanya(user.get("name"))
+            or is_chaitanya(user.get("id"))
+        ):
+            user["role"] = Role.CLIENT.value
+            user["department"] = None
+            user["team_id"] = None
+            user["permitted_buildings"] = []
+            user["is_facilities_user"] = False
+            user["is_elara_user"] = False
+
         # Resolve permissions
         user_role = user.get("role", Role.GUEST.value)
         permissions = get_permissions_for_role(user_role)

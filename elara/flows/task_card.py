@@ -48,6 +48,11 @@ def send_elara_task_card(to: str, task: dict):
     comments_list = task.get("comments") or []
     comments_count = len(comments_list) if isinstance(comments_list, list) else 0
 
+    # Attachments count
+    from elara.db import get_attachment_count
+    attachments_list = task.get("attachments") or []
+    attach_count = len(attachments_list) if isinstance(attachments_list, list) and attachments_list else get_attachment_count(task_id)
+
     body = (
         f"📁 *{proj_name}* ({dept_name})\n"
         f"*{title}*\n\n"
@@ -60,6 +65,9 @@ def send_elara_task_card(to: str, task: dict):
         f"💬 *Comments:* {comments_count}\n"
     )
 
+    if attach_count > 0:
+        body += f"📎 *Attachments:* {attach_count} file(s)\n"
+
     if task.get("is_blocked") and task.get("blocker_reason"):
         body += f"\n🛑 *Blocker:* {task.get('blocker_reason')}\n"
 
@@ -67,7 +75,8 @@ def send_elara_task_card(to: str, task: dict):
     buttons = [
         {"id": f"elara_stat_{task_id}", "title": "Update Status"},
         {"id": f"elara_cmt_{task_id}", "title": "Add Comment"},
-        {"id": f"elara_viewcmts_{task_id}", "title": "View Comments"},
+        {"id": f"elara_attach_{task_id}", "title": "📎 Attach"},
     ]
 
     return send_interactive_buttons(to, body, buttons)
+

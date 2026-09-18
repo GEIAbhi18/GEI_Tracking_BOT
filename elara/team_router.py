@@ -136,8 +136,15 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
     Returns True if the message was handled.
     """
     clean_num = clean_phone_number(sender)
+
+    # ── Chaitanya Temporary Tenant Override ──────────────────────────────────
+    from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(clean_num):
+        return False
+
     msg_text = voice_transcript if voice_transcript else (text or "")
     clean_msg = msg_text.strip().lower()
+
 
     elara_user = resolve_elara_user(clean_num)
     fac_user = resolve_facilities_user(clean_num)

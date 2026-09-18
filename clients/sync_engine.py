@@ -1,4 +1,6 @@
 import logging
+import os
+import json
 from datetime import datetime
 from db import supabase
 from clients.sheets_client import fetch_master_tenant_records
@@ -6,8 +8,32 @@ from clients.normalizer import normalize_client_row
 
 logger = logging.getLogger(__name__)
 
+CACHE_FILE_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "clients_cache.json")
+
 # In-memory fallback cache in case Supabase table is in transition or offline
 _IN_MEMORY_CLIENTS_CACHE = []
+
+
+def _save_cache_to_disk(records: list):
+    try:
+        os.makedirs(os.path.dirname(CACHE_FILE_PATH), exist_ok=True)
+        with open(CACHE_FILE_PATH, "w", encoding="utf-8") as f:
+            json.dump(records, f, indent=2, default=str)
+    except Exception as e:
+        logger.warning(f"Failed to persist client cache to disk: {e}")
+
+
+def _load_cache_from_disk() -> list:
+    try:
+        if os.path.exists(CACHE_FILE_PATH):
+            with open(CACHE_FILE_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, list):
+                    return data
+    except Exception as e:
+        logger.warning(f"Failed to load client cache from disk: {e}")
+    return []
+
 
 
 def run_client_master_sync() -> dict:
@@ -62,8 +88,9 @@ def run_client_master_sync() -> dict:
 
     stats["valid_records"] = len(valid_records)
 
-    # Update in-memory fallback cache
+    # Update in-memory fallback cache and persist to disk
     _IN_MEMORY_CLIENTS_CACHE = [dict(r) for r in valid_records]
+    _save_cache_to_disk(_IN_MEMORY_CLIENTS_CACHE)
 
     # Attempt Supabase Upsert
     try:
@@ -110,6 +137,11 @@ def run_client_master_sync() -> dict:
 
 
 def get_cached_clients() -> list:
-    """Returns in-memory fallback clients list."""
+    """Returns in-memory fallback clients list, loading from disk cache if uninitialized."""
     global _IN_MEMORY_CLIENTS_CACHE
+    if not _IN_MEMORY_CLIENTS_CACHE:
+        disk_cached = _load_cache_from_disk()
+        if disk_cached:
+            _IN_MEMORY_CLIENTS_CACHE = disk_cached
     return _IN_MEMORY_CLIENTS_CACHE
+

@@ -144,6 +144,7 @@ def create_task(title: str, project_id: str, description: str | None = None, pri
         "due_date": due_date,
         "is_blocked": (status == "blocker"),
         "comments": [],
+        "attachments": [],
         "created_at": now_iso,
         "updated_at": now_iso,
     }
@@ -237,3 +238,89 @@ def get_comments(task_id: str) -> list:
     except Exception as e:
         logger.error(f"get_comments failed for {task_id}: {e}")
         return []
+
+
+# ── Attachments ──────────────────────────────────────────────────────────────
+
+def add_attachment(task_id: str, file_url: str, file_name: str, file_type: str = "image/jpeg",
+                   uploaded_by: str = "User") -> dict:
+    """
+    Add an attachment to an Elara Home task.
+    1. Writes to `elara_attachments` table (mirrored after facilities_attachments).
+    2. Also appends to `elara_tasks.attachments` JSONB array for immediate Kanban sync.
+    """
+    import uuid
+    att_id = str(uuid.uuid4())
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    attachment_row = {
+        "id": att_id,
+        "task_id": task_id,
+        "file_url": file_url,
+        "file_name": file_name,
+        "file_type": file_type,
+        "uploaded_by": uploaded_by,
+        "uploaded_at": now_iso,
+    }
+
+    # 1. Insert into dedicated elara_attachments table
+    try:
+        res = supabase.table("elara_attachments").insert(attachment_row).execute()
+        created = res.data[0] if (isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict)) else attachment_row
+    except Exception as e:
+        logger.error(f"Failed to insert into elara_attachments: {e}")
+        created = attachment_row
+
+    # 2. Append to elara_tasks attachments JSONB array for instant Kanban UI sync
+    try:
+        task = get_task_by_id(task_id)
+        if task:
+            existing_attachments = task.get("attachments") or []
+            if not isinstance(existing_attachments, list):
+                existing_attachments = []
+            updated_attachments = existing_attachments + [created]
+            supabase.table("elara_tasks").update({
+                "attachments": updated_attachments,
+                "updated_at": now_iso
+            }).eq("id", task_id).execute()
+    except Exception as sync_err:
+        logger.warning(f"Failed to sync attachment into elara_tasks JSONB: {sync_err}")
+
+    return created
+
+
+def get_attachments(task_id: str) -> list:
+    """Retrieve all attachments for a specific task from `elara_attachments`."""
+    try:
+        res = supabase.table("elara_attachments").select("*").eq("task_id", task_id).order("uploaded_at").execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f"get_attachments failed for {task_id}: {e}")
+        return []
+
+
+def get_attachment_count(task_id: str) -> int:
+    """Get attachment count for a task."""
+    try:
+        # Try count query on elara_attachments
+        from postgrest.base_request_builder import CountMethod
+        res = supabase.table("elara_attachments").select("id", count=CountMethod.exact).eq("task_id", task_id).execute()
+        if res.count is not None:
+            return res.count
+        if res.data:
+            return len(res.data)
+    except Exception:
+        pass
+
+    # Fallback to checking task row JSONB attachments
+    try:
+        task = get_task_by_id(task_id)
+        if task:
+            atts = task.get("attachments") or []
+            if isinstance(atts, list):
+                return len(atts)
+    except Exception:
+        pass
+
+    return 0
+

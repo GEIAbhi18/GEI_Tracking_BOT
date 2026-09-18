@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 
 def route_elara_message(sender: str, text: str | None = None, button_id: str | None = None,
-                        user: dict | None = None, voice_transcript: str | None = None):
+                        user: dict | None = None, voice_transcript: str | None = None,
+                        image_data: dict | None = None):
     """
     Central dispatcher for all Elara Home module interactions.
     """
@@ -27,11 +28,17 @@ def route_elara_message(sender: str, text: str | None = None, button_id: str | N
         _route_button(sender, button_id, resolved_user, session)
         return
 
-    # 2. Handle voice transcript
+    # 2. Handle image/document attachments
+    if image_data:
+        route_elara_image(sender, image_data, resolved_user, session)
+        return
+
+    # 3. Handle voice transcript
     input_text = voice_transcript if voice_transcript else text
     if input_text:
         _route_text(sender, input_text, resolved_user, session)
         return
+
 
 
 def _route_button(sender: str, button_id: str, user: dict, session: dict | None):
@@ -115,6 +122,21 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict | None)
         show_task_comments(sender, task_id, user)
         return
 
+    # Task Action: Attach File
+    if button_id.startswith("elara_attach_"):
+        task_id = button_id.replace("elara_attach_", "")
+        from elara.flows.attachments import prompt_attachment
+        prompt_attachment(sender, task_id, user)
+        return
+
+    # Task Action: View Attachments
+    if button_id.startswith("elara_viewatt_"):
+        task_id = button_id.replace("elara_viewatt_", "")
+        from elara.flows.attachments import show_task_attachments
+        show_task_attachments(sender, task_id, user)
+        return
+
+
     # Set Status directly
     if button_id.startswith("elara_setst_"):
         parts = button_id.replace("elara_setst_", "").split("_", 1)
@@ -137,6 +159,35 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict | None)
 
     if button_id == "elara_proj_skip_desc":
         handle_project_description_input(sender, "skip", user, session or {})
+        return
+
+    # Task Creation: Confirm / Edit / Cancel / Assignee
+    if button_id == "elara_confirm_create_task":
+        from elara.flows.create_task import confirm_create_task
+        confirm_create_task(sender, user, session or {})
+        return
+
+    if button_id == "elara_edit_create_task":
+        from elara.flows.create_task import edit_draft_task
+        edit_draft_task(sender, user, session or {})
+        return
+
+    if button_id == "elara_cancel_create_task":
+        from elara.flows.create_task import cancel_create_task
+        cancel_create_task(sender, user)
+        return
+
+    if button_id == "elara_tassign_keep":
+        from elara.flows.create_task import show_task_draft_preview
+        draft = (session or {}).get("draft", {})
+        show_task_draft_preview(sender, draft, user)
+        return
+
+    if button_id == "elara_tassign_me":
+        from elara.flows.create_task import show_task_draft_preview
+        draft = (session or {}).get("draft", {})
+        draft["assignee"] = user.get("name") or "Team Member"
+        show_task_draft_preview(sender, draft, user)
         return
 
     # Task Creation: Project Selection
@@ -206,6 +257,21 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
         handle_project_description_input(sender, text, user, session_dict)
         return
 
+    if state == "create_task_select_project":
+        from elara.db import get_projects
+        from elara.flows.create_task import handle_task_project_selection
+        projects = get_projects()
+        matched = None
+        for p in projects:
+            if clean in p["name"].lower() or p["name"].lower() in clean:
+                matched = p
+                break
+        if matched:
+            handle_task_project_selection(sender, matched["id"], user, session_dict)
+        else:
+            send_text(sender, "Please select a project from the list above, or type a matching project name.")
+        return
+
     if state == "create_task_title":
         from elara.flows.create_task import handle_task_title_input
         handle_task_title_input(sender, text, user, session_dict)
@@ -214,6 +280,33 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
     if state == "create_task_due_date":
         from elara.flows.create_task import handle_task_due_date_input
         handle_task_due_date_input(sender, text, user, session_dict)
+        return
+
+    if state == "create_task_assignee":
+        from elara.flows.create_task import handle_task_assignee_input
+        handle_task_assignee_input(sender, text, user, session_dict)
+        return
+
+    if state == "create_task_preview":
+        clean_text = text.strip().lower()
+        if clean_text in ("confirm", "create", "yes", "ok", "done", "confirm & create"):
+            from elara.flows.create_task import confirm_create_task
+            confirm_create_task(sender, user, session_dict)
+        elif clean_text in ("cancel", "stop", "abort"):
+            from elara.flows.create_task import cancel_create_task
+            cancel_create_task(sender, user)
+        elif clean_text in ("edit", "change"):
+            from elara.flows.create_task import edit_draft_task
+            edit_draft_task(sender, user, session_dict)
+        else:
+            send_text(sender, "Please use the buttons below to *Confirm*, *Edit*, or *Cancel*.")
+            from elara.flows.create_task import show_task_draft_preview
+            show_task_draft_preview(sender, session_dict.get("draft", {}), user)
+        return
+
+    if state == "create_task_edit":
+        from elara.flows.create_task import handle_task_edit_input
+        handle_task_edit_input(sender, text, user, session_dict)
         return
 
     if state == "task_waiting_for_comment":
@@ -225,6 +318,15 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
         from elara.flows.update_task import handle_blocker_reason_input
         handle_blocker_reason_input(sender, text, user, session_dict)
         return
+
+    if state == "attach_awaiting":
+        if clean in ("cancel", "exit", "menu", "back", "no", "stop"):
+            clear_elara_session(sender)
+            send_text(sender, "❌ Attachment cancelled.\n\n_Type *menu* to return to Elara Home._")
+        else:
+            send_text(sender, "📎 Please send an image or document (PDF) in this chat to attach it to the task, or type *cancel* to return.")
+        return
+
 
     # 3. Direct task creation matching
     if any(clean.startswith(p) for p in ("create task", "add task", "new task", "create a task", "raise task")):
@@ -278,3 +380,24 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
     # Fallback to Elara Home menu
     from elara.flows.home import show_elara_home
     show_elara_home(sender, user)
+
+
+def route_elara_image(sender: str, image_data: dict, user: dict, session: dict | None = None) -> bool:
+    """
+    Handle image or document attachments for Elara Home.
+    Returns True if handled.
+    """
+    sess = session if session is not None else get_elara_session(sender)
+    state = sess.get("flow_state", "") if sess else ""
+
+    if state.startswith("attach_"):
+        draft = sess.get("draft", {}) if sess else {}
+        task_id = draft.get("task_id")
+        if task_id:
+            from elara.flows.attachments import handle_attachment_upload
+            handle_attachment_upload(sender, task_id, image_data, user)
+            return True
+
+    send_text(sender, "To attach a photo or document to an Elara Home task, first open the task card and tap *📎 Attach*.")
+    return True
+

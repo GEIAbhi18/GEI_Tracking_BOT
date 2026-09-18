@@ -423,6 +423,10 @@ def handle_whatsapp_message():
                     elif msg_type == "image":
                         threading.Thread(target=_handle_image, args=(sender, message), daemon=True).start()
 
+                    # ── Document (PDF, etc.) ──────────────────────────────────
+                    elif msg_type == "document":
+                        threading.Thread(target=_handle_document, args=(sender, message), daemon=True).start()
+
                     # ── Plain text ────────────────────────────────────────────
                     elif msg_type == "text":
                         text = message.get("text", {}).get("body", "").strip()
@@ -462,10 +466,11 @@ def handle_whatsapp_message():
                                 # Check for casual greetings (Main Menu / Client Flow trigger)
                                 greeting_words = ["hi", "hello", "menu", "hey", "start"]
                                 if msg_text.strip().lower() in greeting_words:
-                                    # 1. Check if sender is a registered Factech / tenant client
+                                    # 1. Check if sender is a registered Factech / tenant client (or Chaitanya)
                                     try:
+                                        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
                                         from clients.flows import is_registered_client, handle_client_hi
-                                        if is_registered_client(sender_num):
+                                        if (TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(sender_num)) or is_registered_client(sender_num):
                                             handle_client_hi(sender_num)
                                             return
                                     except Exception as client_hi_err:
@@ -476,6 +481,10 @@ def handle_whatsapp_message():
                                         auth_user.get("role") in ("Director", "Employee", "Developer")
                                         or auth_user.get("department") == "Facilities"
                                     )
+                                    from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+                                    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(sender_num):
+                                        is_internal = False
+
                                     if not is_internal:
                                         try:
                                             from elara.auth import is_elara_user
@@ -488,6 +497,7 @@ def handle_whatsapp_message():
                                         from clients.flows import send_unregistered_client_message
                                         send_unregistered_client_message(sender_num)
                                         return
+
 
                                     try:
                                         from whatsapp.task_assignment import check_and_deliver_pending_task_notifications
@@ -691,13 +701,22 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
 
     # ── Factech Client Automation Check ─────────────────────────────────────
     try:
-        from clients.flows import has_active_client_flow, handle_client_text, is_registered_client, handle_client_button_reply
+        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+        from clients.flows import (
+            has_active_client_flow,
+            handle_client_text,
+            is_registered_client,
+            handle_client_button_reply,
+            handle_client_hi,
+        )
+        is_client = (TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(sender)) or is_registered_client(sender)
+
         if has_active_client_flow(sender):
             if handle_client_text(sender, text):
                 return
 
         # Direct client text commands
-        if is_registered_client(sender):
+        if is_client:
             clean_cmd = text.strip().lower()
             if clean_cmd in ("log new complaint", "log complaint", "new complaint", "create complaint"):
                 handle_client_button_reply(sender, "log_new_complaint")
@@ -708,8 +727,12 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             elif clean_cmd in ("complaint history", "history", "previous complaints"):
                 handle_client_button_reply(sender, "complaint_history")
                 return
+            elif clean_cmd in ("menu", "main menu", "hi", "hello", "hey", "help", "factech", "support"):
+                handle_client_hi(sender)
+                return
     except Exception as client_err:
         logger.error(f"Client routing error in _handle_text: {client_err}", exc_info=True)
+
 
 
     # Check for clear/reset command (works from both text and voice)
@@ -1445,10 +1468,11 @@ def _handle_audio(sender: str, message: dict):
     _handle_text(sender, transcript, voice_note=True)
 
 
-def _handle_image(sender: str, message: dict):
+def _handle_image(sender: str, message: dict, media_type: str = "image"):
     """
-    Handles incoming image messages from WhatsApp (msg_type == "image").
-    If the user is in a task completion / proof upload state, saves the image URL
+    Handles incoming image and document messages from WhatsApp (msg_type in ('image', 'document')).
+    Routes to Elara Home or Facilities depending on active session state or team affiliation.
+    If the user is in a legacy task completion / proof upload state, saves the image URL
     in metadata and advances state to WAITING_FOR_COMPLETION_COMMENT.
     """
     import config
@@ -1462,25 +1486,39 @@ def _handle_image(sender: str, message: dict):
         logger.error(f"Auth middleware error in _handle_image: {e}")
         return
 
-    image_obj = message.get("image", {})
-    media_id = image_obj.get("id")
-    caption = image_obj.get("caption", "").strip()
+    media_obj = message.get(media_type, {})
+    media_id = media_obj.get("id")
+    caption = media_obj.get("caption", "").strip()
 
     if not media_id:
-        logger.warning(f"Image message from {sender} has no media ID")
+        logger.warning(f"Media message ({media_type}) from {sender} has no media ID")
         return
 
-    # Facilities routing for image attachments
+    # ── Media routing (Facilities vs Elara Home) ──
     try:
-        from facilities.flows.router import is_facilities_user, get_session, route_facilities_message
-        session = get_session(sender)
-        if is_facilities_user(sender) or (session and session.get("current_flow_state", "").startswith("attach_")):
-            route_facilities_message(sender, image_data=image_obj, user=auth_user)
-            return
-    except Exception as fac_err:
-        logger.error(f"Facilities image routing error: {fac_err}", exc_info=True)
+        from facilities.flows.router import is_facilities_user, get_session as get_fac_session, route_facilities_message
+        from elara.flows.router import route_elara_image
+        from elara.session import get_elara_session
+        from elara.auth import is_elara_user
+        from elara.team_router import get_active_team
 
-    logger.info(f"Image received from {sender}, media_id: {media_id}")
+        fac_session = get_fac_session(sender)
+        elara_session = get_elara_session(sender)
+        active_team = get_active_team(sender)
+
+        # 1. Check active in-progress attachment sessions first (prevents cross-team collision for dual users)
+        if elara_session and elara_session.get("flow_state", "").startswith("attach_"):
+            route_elara_image(sender, image_data=media_obj, user=auth_user, session=elara_session)
+            return
+
+        if fac_session and fac_session.get("current_flow_state", "").startswith("attach_"):
+            route_facilities_message(sender, image_data=media_obj, user=auth_user)
+            return
+
+    except Exception as route_err:
+        logger.error(f"Media routing error for {sender}: {route_err}", exc_info=True)
+
+    logger.info(f"Media ({media_type}) received from {sender}, media_id: {media_id}")
 
     # Resolve image URL via Meta Graph API
     media_url = None
@@ -1529,7 +1567,27 @@ def _handle_image(sender: str, message: dict):
             )
             return
 
+    # Team fallback when not in an active flow
+    try:
+        if active_team == "elara" or (is_elara_user(auth_user) and not is_facilities_user(sender)):
+            route_elara_image(sender, image_data=media_obj, user=auth_user, session=elara_session)
+            return
+        elif active_team == "facilities" or is_facilities_user(sender):
+            route_facilities_message(sender, image_data=media_obj, user=auth_user)
+            return
+    except Exception as fb_err:
+        logger.error(f"Team media fallback error for {sender}: {fb_err}")
+
     send_text(sender, "📸 Image received! If you are updating a task, please select the task update flow first.")
+
+
+
+def _handle_document(sender: str, message: dict):
+    """
+    Handles incoming document messages from WhatsApp (msg_type == 'document').
+    Delegates to _handle_image pipeline with media_type='document'.
+    """
+    _handle_image(sender, message, media_type="document")
 
 
 def _handle_voice_undo(sender: str):

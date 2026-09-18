@@ -2,6 +2,19 @@ from whatsapp.ux import send_list_message, send_interactive_buttons
 
 def send_main_menu(to: str, user: dict):
     """Generates and sends the main menu based on the user's role."""
+    # ── Client / Factech Tenant Menu ─────────────────────────────────────────
+    from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+    if (TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(to)) or user.get("role") == "Client":
+        from clients.flows import handle_client_hi
+        return handle_client_hi(to)
+
+    try:
+        from clients.flows import is_registered_client, handle_client_hi
+        if is_registered_client(to):
+            return handle_client_hi(to)
+    except Exception:
+        pass
+
     if user.get("team") == "Elara Home" or user.get("is_elara_user"):
         from elara.flows.home import show_elara_home
         return show_elara_home(to, user)
@@ -11,6 +24,7 @@ def send_main_menu(to: str, user: dict):
         return show_home(to, user)
 
     role = user.get("role", "Guest")
+
     
     if role == "Guest":
         rows = [

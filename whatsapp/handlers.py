@@ -674,9 +674,23 @@ def send_assignee_selection_prompt(to_phone: str, task_id: str, task_title: str,
     try:
         res = supabase.table("users").select("id, name, role, whatsapp_number, telegram_id, team_id").execute()
         users_list = res.data or []
+        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+        users_list = [
+            u for u in users_list
+            if u.get("role") not in ("Guest", "Client")
+            and not (
+                TREAT_CHAITANYA_AS_TENANT_ONLY
+                and (
+                    is_chaitanya(u.get("whatsapp_number"))
+                    or is_chaitanya(u.get("name"))
+                    or is_chaitanya(u.get("id"))
+                )
+            )
+        ]
     except Exception as e:
         logger.error(f"Error fetching users for task assignment prompt: {e}")
         users_list = []
+
 
     team_id = creator_user.get("team_id") if creator_user else None
     

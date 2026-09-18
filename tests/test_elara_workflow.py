@@ -25,7 +25,7 @@ from elara.auth import (
 from elara.db import (
     create_project, get_projects, get_project_by_id,
     create_task, get_tasks, get_task_by_id, update_task,
-    add_comment, get_comments
+    add_comment, get_comments, add_attachment, get_attachments, get_attachment_count
 )
 from elara.team_router import (
     route_incoming_message, set_active_team, get_active_team,
@@ -50,6 +50,7 @@ def mock_elara_supabase():
     ]
     tasks_store = []
     comments_store = []
+    attachments_store = []
 
     class MockQuery:
         def __init__(self, table_name: str):
@@ -133,8 +134,23 @@ def mock_elara_supabase():
                 res.data = [dict(x) for x in items]
                 return res
 
-            elif self.table_name == "tasks":
+            elif self.table_name == "elara_attachments":
+                if self._is_insert:
+                    new_att = dict(self._insert_data or {})
+                    attachments_store.append(new_att)
+                    res.data = [new_att]
+                    res.count = len(attachments_store)
+                    return res
+                items = attachments_store
+                for f, v in self._filters:
+                    items = [x for x in items if str(x.get(f)) == str(v)]
+                res.data = [dict(x) for x in items]
+                res.count = len(items)
+                return res
+
+            elif self.table_name in ("tasks", "facilities_attachments"):
                 res.data = []
+                res.count = 0
                 return res
 
             res.data = []
@@ -419,3 +435,99 @@ def test_zero_cross_team_data_leakage():
     # Verify intersection is empty
     overlap = elara_task_ids.intersection(legacy_task_ids)
     assert len(overlap) == 0, f"Cross-team leakage detected! Shared task IDs: {overlap}"
+
+
+# ── 10. Elara Attachments Workflow & Isolation ─────────────────────────────────
+
+def test_elara_attachments_workflow_and_isolation():
+    """Verify attachments can be added to Elara Home tasks with full parity to Facilities."""
+    from db import supabase
+    from elara.flows.attachments import prompt_attachment, handle_attachment_upload, show_task_attachments
+    from elara.flows.router import route_elara_image
+    from elara.session import get_elara_session, set_elara_session
+
+    user = {
+        "name": "Rachit",
+        "phone": "919867272041",
+        "role": "Site Incharge",
+        "department": "Construction & Design",
+        "team": "Elara Home",
+        "is_elara_user": True,
+    }
+
+    # 1. Create a project and a task
+    proj = create_project(name="Villa 101 Finishing", department="Construction & Design")
+    task = create_task(title="Inspect Living Room Ceiling", project_id=proj["id"], assigned_users=["Rachit"])
+    task_id = task["id"]
+
+    # Initially 0 attachments
+    assert get_attachment_count(task_id) == 0
+    assert len(get_attachments(task_id)) == 0
+
+    # 2. Test prompt_attachment
+    with patch("elara.flows.attachments.send_text") as mock_send_text:
+        prompt_attachment(to="919867272041", task_id=task_id, user=user)
+        mock_send_text.assert_called_once()
+        prompt_msg = mock_send_text.call_args[0][1]
+        assert "Attach File" in prompt_msg
+        assert task_id in prompt_msg
+
+    session = get_elara_session("919867272041")
+    assert session is not None
+    assert session.get("flow_state") == "attach_awaiting"
+    assert session.get("draft", {}).get("task_id") == task_id
+
+    # 3. Test handle_attachment_upload
+    img_data = {
+        "id": "media-wa-img-999",
+        "mime_type": "image/jpeg",
+        "filename": "ceiling_plaster_inspection.jpg",
+    }
+
+    with patch("elara.flows.attachments.send_interactive_buttons") as mock_send_btn:
+        handle_attachment_upload(sender="919867272041", task_id=task_id, media_data=img_data, user=user)
+        mock_send_btn.assert_called_once()
+        confirm_body = mock_send_btn.call_args[0][1]
+        assert "Attachment Saved" in confirm_body
+        assert "ceiling_plaster_inspection.jpg" in confirm_body
+
+    # 4. Verify elara_attachments table has the record
+    attachments = get_attachments(task_id)
+    assert len(attachments) == 1
+    att = attachments[0]
+    assert att["task_id"] == task_id
+    assert att["file_name"] == "ceiling_plaster_inspection.jpg"
+    assert att["uploaded_by"] == "Rachit"
+
+    # 5. Verify elara_tasks.attachments JSONB column was synced
+    refreshed_task = get_task_by_id(task_id)
+    assert refreshed_task is not None
+    task_atts = refreshed_task.get("attachments") or []
+    assert len(task_atts) == 1
+    assert task_atts[0]["file_name"] == "ceiling_plaster_inspection.jpg"
+
+    # 6. Verify audit comment was added to elara_comments
+    comments = get_comments(task_id)
+    comment_texts = [c.get("content", "") for c in comments]
+    assert any("Attachment added: ceiling_plaster_inspection.jpg" in ct for ct in comment_texts)
+
+    # 7. Test route_elara_image dispatcher when in attach_awaiting state
+    set_elara_session("919867272041", "attach_awaiting", draft={"task_id": task_id})
+    doc_data = {
+        "id": "media-wa-doc-888",
+        "mime_type": "application/pdf",
+        "filename": "structural_drawing.pdf",
+    }
+    with patch("elara.flows.attachments.send_interactive_buttons") as mock_send_doc:
+        handled = route_elara_image("919867272041", image_data=doc_data, user=user)
+        assert handled is True
+        mock_send_doc.assert_called_once()
+        assert "Attachment Saved" in mock_send_doc.call_args[0][1]
+
+    # Total attachments should now be 2
+    assert get_attachment_count(task_id) == 2
+
+    # 8. Verify strict zero cross-team data leakage (none in facilities_attachments)
+    fac_res = supabase.table("facilities_attachments").select("*").execute()
+    assert len(fac_res.data or []) == 0
+

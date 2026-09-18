@@ -56,10 +56,22 @@ def resolve_elara_user(whatsapp_number: str) -> dict | None:
         return None
 
 
-def is_elara_user(whatsapp_number: str) -> bool:
-    """Check if WhatsApp number belongs to Elara Home team."""
-    user = resolve_elara_user(whatsapp_number)
+def is_elara_user(user_or_phone: str | dict | None) -> bool:
+    """Check if user dict or WhatsApp number belongs to Elara Home team."""
+    if not user_or_phone:
+        return False
+    if isinstance(user_or_phone, dict):
+        if user_or_phone.get("team") == "Elara Home" or user_or_phone.get("is_elara_user"):
+            return True
+        phone = user_or_phone.get("phone") or user_or_phone.get("whatsapp_number")
+        if not phone:
+            return False
+        user = resolve_elara_user(str(phone))
+        return user is not None and user.get("is_elara_user", False)
+    # pyrefly: ignore [unnecessary-type-conversion]
+    user = resolve_elara_user(str(user_or_phone))
     return user is not None and user.get("is_elara_user", False)
+
 
 
 def is_elara_admin(user: dict | None) -> bool:

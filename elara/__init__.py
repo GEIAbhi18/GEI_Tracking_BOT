@@ -6,4 +6,5 @@ Handles Elara Home team operations:
 - elara_projects
 - elara_tasks
 - elara_comments
+- elara_attachments
 """

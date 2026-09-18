@@ -4,6 +4,12 @@ from db import supabase
 from clients.normalizer import normalize_mobile_number
 from clients.sync_engine import get_cached_clients
 
+from clients.config import (
+    TREAT_CHAITANYA_AS_TENANT_ONLY,
+    CHAITANYA_TENANT_RECORD,
+    is_chaitanya,
+)
+
 logger = logging.getLogger(__name__)
 
 # Temporary in-memory state for selected client context when one number has multiple units
@@ -16,9 +22,16 @@ def lookup_clients_by_phone(phone: str) -> list:
     Normalizes the phone number first to ensure consistent matching.
     Tries Supabase first; falls back to in-memory sync cache if table is absent.
     """
+    # 0. Chaitanya Tenant Override (strictly treated as Tenant only)
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(phone):
+        return [dict(CHAITANYA_TENANT_RECORD)]
+
     clean_num = normalize_mobile_number(phone)
     if not clean_num:
         return []
+
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(clean_num):
+        return [dict(CHAITANYA_TENANT_RECORD)]
 
     # 1. Query Supabase
     try:
@@ -36,12 +49,21 @@ def lookup_clients_by_phone(phone: str) -> list:
 
     # 2. Fallback to in-memory cache
     cached = get_cached_clients()
+    if not cached:
+        try:
+            from clients.sync_engine import run_client_master_sync
+            run_client_master_sync()
+            cached = get_cached_clients()
+        except Exception as sync_err:
+            logger.debug(f"Auto-sync on empty client cache failed: {sync_err}")
+
     matches = [
         c
         for c in cached
         if c.get("mobile_number") == clean_num and c.get("is_active", True)
     ]
     return matches
+
 
 
 def get_client_by_id(client_id: str, phone: str = "") -> dict | None:
