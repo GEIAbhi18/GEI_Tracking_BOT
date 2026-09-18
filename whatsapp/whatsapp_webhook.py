@@ -1495,6 +1495,9 @@ def _handle_image(sender: str, message: dict, media_type: str = "image"):
         return
 
     # ── Media routing (Facilities vs Elara Home) ──
+    fac_session = None
+    elara_session = None
+    active_team = None
     try:
         from facilities.flows.router import is_facilities_user, get_session as get_fac_session, route_facilities_message
         from elara.flows.router import route_elara_image
@@ -1569,6 +1572,10 @@ def _handle_image(sender: str, message: dict, media_type: str = "image"):
 
     # Team fallback when not in an active flow
     try:
+        from facilities.flows.router import is_facilities_user, route_facilities_message
+        from elara.flows.router import route_elara_image
+        from elara.auth import is_elara_user
+
         if active_team == "elara" or (is_elara_user(auth_user) and not is_facilities_user(sender)):
             route_elara_image(sender, image_data=media_obj, user=auth_user, session=elara_session)
             return

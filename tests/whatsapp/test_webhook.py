@@ -477,5 +477,31 @@ def test_handle_image_proof_upload(mocker):
     assert "Image proof received!" in reply
 
 
+def test_handle_image_fallback_when_routing_fails(mocker):
+    """Test that _handle_image handles exceptions during session routing without UnboundLocalError."""
+    mocker.patch("auth.middleware.authenticate_whatsapp_request", return_value={"id": "user-123"})
+    mock_send_text = mocker.patch("whatsapp.whatsapp_webhook.send_text")
+
+    # Mock get_fac_session to raise an Exception before active_team is computed
+    mocker.patch("facilities.flows.router.get_session", side_effect=Exception("DB connection error"))
+    mocker.patch("facilities.flows.router.is_facilities_user", return_value=False)
+    mocker.patch("elara.auth.is_elara_user", return_value=False)
+
+    mock_table = mocker.patch("db.supabase.table")
+    mock_table.return_value.select.return_value.eq.return_value.execute.return_value.data = []
+
+    from whatsapp.whatsapp_webhook import _handle_image
+    msg_payload = {
+        "image": {"id": "img-media-999", "caption": ""}
+    }
+
+    # Should not raise UnboundLocalError
+    _handle_image("+919876543210", msg_payload)
+    mock_send_text.assert_called_once()
+    reply = mock_send_text.call_args[0][1]
+    assert "Image received!" in reply
+
+
+
 
 
