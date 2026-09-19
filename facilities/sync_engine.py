@@ -265,21 +265,60 @@ def _handle_deleted_external_row(ref_no: str, building: str):
 def _notify_external_change(ref_no: str, building: str, change_type: str,
                             details: dict):
     """
-    Send a WhatsApp notification EXCLUSIVELY to Anoop whenever there is any change
+    Send a WhatsApp notification to Anoop and Kanav whenever there is any change
     in any building sheet or common sheet in Facilities task tracker Google Sheet.
-    No one other than Anoop receives this notification.
     """
+    # 1. Notify Anoop (existing behaviour — unchanged)
     try:
         from facilities.config import resolve_anoop_phone_number
         anoop_phone = resolve_anoop_phone_number()
         if not anoop_phone:
             logger.warning(f"Could not resolve Anoop's phone number for external change on {ref_no}.")
-            return
-
-        _send_external_edit_notification(anoop_phone, ref_no, building, change_type, details)
-
+        else:
+            _send_external_edit_notification(anoop_phone, ref_no, building, change_type, details)
     except Exception as e:
         logger.error(f"Failed to notify Anoop about external change for {ref_no}: {e}")
+
+    # 2. Notify Kanav of the same change
+    try:
+        from notifications.kanav_notifier import notify_kanav_task_change
+
+        # Build a human-readable description of the change for Kanav
+        if change_type == "updated" and isinstance(details, dict):
+            field = details.get("field", "unknown field").replace("_", " ").title()
+            old_val = details.get("old_value") or "—"
+            new_val = details.get("new_value") or "—"
+            change_desc = f"{field} changed from '{old_val}' to '{new_val}'"
+        elif change_type == "created":
+            change_desc = "New task added on Google Sheet"
+        elif change_type == "deleted":
+            change_desc = "Task removed from Google Sheet"
+        else:
+            change_desc = f"External {change_type}"
+
+        # Fetch task title from cache if available
+        task_title = ref_no
+        try:
+            cache_res = supabase.table("row_cache").select("issue_action").eq("ref_no", ref_no).execute()
+            if cache_res.data and cache_res.data[0].get("issue_action"):
+                task_title = cache_res.data[0]["issue_action"]
+        except Exception:
+            pass
+
+        from facilities.config import BUILDING_NAME_MAPPING
+        bldg_display = BUILDING_NAME_MAPPING.get(building, building) if building else "Sheet"
+        changed_by = f"Google Sheet ({bldg_display})"
+
+        notify_kanav_task_change(
+            task_id=ref_no,
+            task_title=task_title,
+            change_made=change_desc,
+            changed_by=changed_by,
+            domain="Facilities",
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify Kanav about external change for {ref_no}: {e}")
+
 
 
 def _send_external_edit_notification(to: str, ref_no: str, building: str,

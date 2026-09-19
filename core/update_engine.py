@@ -197,6 +197,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         # Prepare history for LLM context
         history = [{"role": "user", "content": m} for m in context.get("messages", [])[:-1]]
         
+        # pyrefly: ignore [bad-argument-type]
         parsed_obj = parse_with_llm(text, history=history, state=state)
         
         raw_intents = parsed_obj.get("intents", [])
@@ -251,6 +252,7 @@ async def handle_message(text: str, user_id: int, images: list, send_reply_func)
         elif "image" in text.lower() and ("add" in text.lower() or "upload" in text.lower()):
             intents_to_process.append({"intent": "add_image", "confidence": 0.8})
         elif "task" in text.lower() and re.search(r'task\s*\d+', text.lower()):
+            # pyrefly: ignore [missing-attribute]
             intents_to_process.append({"intent": "get_task_detail", "task_reference": re.search(r'task\s*(\d+)', text.lower()).group(0), "confidence": 0.9})
         else:
             rule_parsed = rule_based_parse_message(text)
@@ -598,6 +600,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
 
         from tasks.timeline import add_timeline_event
         if t_id:
+            # pyrefly: ignore [bad-argument-type]
             add_timeline_event(t_id, emp_uuid, "Additional note added to update", note=comment_text)
             try:
                 from db import supabase
@@ -1083,6 +1086,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                     
                     u_info = _resolve_user_ue(user_id)
                     emp_uuid = u_info['id'] if u_info else None
+                    # pyrefly: ignore [unbound-name]
                     save_update(match['id'], progress, "None", img, emp_uuid, new_deadline=deadline)
                     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="update_task")
                     set_state(user_id, {"action": "task_update", "task_id": match['id'], "task_name": match['name']})
@@ -1113,6 +1117,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
                 if match:
                     add_blocker(match['id'], description)
                     u_info = _resolve_user_ue(user_id)
+                    # pyrefly: ignore [unbound-name]
                     save_update(match['id'], match.get('progress', 0), description, img, u_info['id'] if u_info else None)
                     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_blocker")
                     await send_reply_func(f"Blocker added successfully 🛑\nTask: {match['name']}\nIssue: {description}")
@@ -1201,6 +1206,7 @@ async def continue_conversation(text, user_id, state, images, send_reply_func):
             
             if choice in ["yes", "yep", "sure", "ok", "y"]:
                 # Save note to DB
+                # pyrefly: ignore [unbound-name]
                 save_note(task_id, note_content)
                 await send_reply_func(f"📝 Note successfully added to *{task_name}*")
                 clear_state(user_id)
@@ -1223,13 +1229,13 @@ def _trigger_wa_task_assignment(task_id: str, task_name: str, project_name: str,
                                  due_date: str, creator_telegram_id: int,
                                  creator_db_id=None):
     """
-    Fires the WhatsApp task assignment flow ONLY when the creator is Kanav.
+    Fires the WhatsApp task assignment flow for any creator.
     Called synchronously from the create_task flow after DB insert succeeds.
 
     Looks up:
       - Creator's DB record (by telegram_id if creator_db_id missing)
-      - Kanav's WhatsApp number
-      - Asif's WhatsApp number (first assigned-to user found for this task)
+      - Creator's WhatsApp number
+      - Assigned user's WhatsApp number (first assigned-to user found for this task)
     """
     import logging as _log
     try:
@@ -1247,17 +1253,13 @@ def _trigger_wa_task_assignment(task_id: str, task_name: str, project_name: str,
             _log.warning("WA trigger: could not resolve creator — skipping")
             return
 
-        # 2. STRICT: only proceed if creator is Kanav
-        if creator.get("name", "").strip().lower() != "kanav":
-            _log.info(f"WA trigger: creator '{creator.get('name')}' is not Kanav — skipping")
+        creator_name = creator.get("name", "A team member").strip()
+        creator_wa = creator.get("whatsapp_number")
+        if not creator_wa:
+            _log.warning(f"WA trigger: creator '{creator_name}' has no whatsapp_number — skipping")
             return
 
-        kanav_wa = creator.get("whatsapp_number")
-        if not kanav_wa:
-            _log.warning("WA trigger: Kanav has no whatsapp_number — skipping")
-            return
-
-        # 3. Find the assigned user for this task
+        # 2. Find the assigned user for this task
         task_res = supabase.table("tasks").select(
             "assigned_to, assigned_to_user:users!assigned_to(name, whatsapp_number)"
         ).eq("id", task_id).execute()
@@ -1275,20 +1277,22 @@ def _trigger_wa_task_assignment(task_id: str, task_name: str, project_name: str,
         assignee_name = assignee.get("name", "the assignee")
 
         if not assignee_wa:
-            _log.warning(f"WA trigger: assigned user has no whatsapp_number — notifying Kanav only")
+            _log.warning(f"WA trigger: assigned user '{assignee_name}' has no whatsapp_number — notifying creator only")
             from whatsapp.task_assignment import send_text
-            send_text(kanav_wa, f"✅ Task Created.\n⚠️ {assignee_name} has no WhatsApp number registered. Please notify manually.")
+            send_text(creator_wa, f"✅ Task Created.\n⚠️ {assignee_name} has no WhatsApp number registered. Please notify manually.")
             return
 
-        # 4. Fire the assignment message
+        # 3. Fire the assignment message
         on_task_created_by_kanav(
             task_id=task_id,
             task_name=task_name,
             project_name=project_name,
             due_date=due_date,
-            creator_wa=kanav_wa,
+            creator_wa=creator_wa,
             assignee_wa=assignee_wa,
-            kanav_wa=kanav_wa,
+            kanav_wa=creator_wa,
+            creator_name=creator_name,
+            assignee_name=assignee_name,
         )
 
     except Exception as e:

@@ -17,25 +17,28 @@ from notifications.kanav_notifier import (
     is_elara_task_created_by_kanav,
     notify_kanav_task_change,
 )
-from elara.config import KANAV_PHONE
+from elara.config import KANAV_PHONE, DEVELOPER_PHONE
 
 
-# ── 1. Helper & Formatting Tests ─────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def mock_rachit_notifier_send():
+    with patch("notifications.rachit_notifier.send_text"):
+        yield
+
 
 def test_get_kanav_phone_fallback():
-    """Verify fallback to KANAV_PHONE constant if db has no entry or fails."""
+    """Verify fallback to DEVELOPER_PHONE in test mode so Kanav never gets test messages."""
     with patch("db.supabase.table") as mock_table:
         mock_table.side_effect = Exception("DB offline")
         phone = get_kanav_phone()
-        assert phone == KANAV_PHONE
+        assert phone == DEVELOPER_PHONE
 
 
 def test_get_kanav_phone_with_unconfigured_mock():
-    """Verify get_kanav_phone does not return MagicMock when db.supabase is a raw mock."""
+    """Verify get_kanav_phone returns DEVELOPER_PHONE in testing."""
     with patch("db.supabase") as mock_sb:
-        # Default MagicMock returns MagicMock for res.data
         phone = get_kanav_phone()
-        assert phone == KANAV_PHONE
+        assert phone == DEVELOPER_PHONE
         assert isinstance(phone, str)
 
 
@@ -147,11 +150,11 @@ def test_facilities_confirm_update_notifies_kanav():
 
         confirm_update("918826896085", user={"name": "Anoop", "role": "Facility Head"})
 
-        # WhatsApp message to Kanav must be sent
+        # WhatsApp message must be sent to Developer, NOT Kanav
         assert mock_send_wa.called
         call_args = mock_send_wa.call_args[0]
         to_number, body = call_args[0], call_args[1]
-        assert to_number == KANAV_PHONE
+        assert to_number == DEVELOPER_PHONE
         assert "GEBB1-010" in body
         assert "Fix Chiller Pump" in body
         assert "Status changed from Open to Closed" in body
@@ -210,6 +213,7 @@ def test_facilities_reassign_notifies_kanav():
     with patch("facilities.flows.router.get_session", return_value=mock_session), \
          patch("facilities.flows.task_card.read_row", return_value=mock_row), \
          patch("facilities.flows.task_card.write_field", return_value={"status": "synced"}), \
+         patch("facilities.sheets_client._log_audit"), \
          patch("facilities.flows.task_card.send_text"), \
          patch("facilities.flows.task_card._notify_new_owner"), \
          patch("facilities.flows.router.clear_session"), \
@@ -219,7 +223,7 @@ def test_facilities_reassign_notifies_kanav():
 
         assert mock_send_wa.called
         to_number, body = mock_send_wa.call_args[0]
-        assert to_number == KANAV_PHONE
+        assert to_number == DEVELOPER_PHONE
         assert "GETT-005" in body
         assert "Reassigned from Vikash to Anoop" in body
         assert "Vikramjeet" in body
@@ -254,7 +258,7 @@ def test_elara_status_update_notifies_kanav():
 
         assert mock_send_wa.called
         to_number, body = mock_send_wa.call_args[0]
-        assert to_number == KANAV_PHONE
+        assert to_number == DEVELOPER_PHONE
         assert "elara-t-100" in body
         assert "Vendor Quotation Review" in body
         assert "Completed (Task closed)" in body
@@ -320,7 +324,7 @@ def test_elara_blocker_notifies_kanav():
 
         assert mock_send_wa.called
         to_number, body = mock_send_wa.call_args[0]
-        assert to_number == KANAV_PHONE
+        assert to_number == DEVELOPER_PHONE
         assert "elara-t-102" in body
         assert "Blocker (Reason: Waiting for architect seal)" in body
         assert "Gaurav" in body
@@ -339,7 +343,7 @@ def test_elara_comment_notifies_kanav():
     mock_session = {"draft": {"task_id": "elara-t-103"}}
 
     with patch("elara.flows.comments.get_task_by_id", return_value=mock_task), \
-         patch("elara.db.add_comment"), \
+         patch("elara.flows.comments.add_comment"), \
          patch("elara.flows.comments.clear_elara_session"), \
          patch("elara.flows.comments.send_interactive_buttons"), \
          patch("notifications.kanav_notifier.send_text") as mock_send_wa:
@@ -353,7 +357,7 @@ def test_elara_comment_notifies_kanav():
 
         assert mock_send_wa.called
         to_number, body = mock_send_wa.call_args[0]
-        assert to_number == KANAV_PHONE
+        assert to_number == DEVELOPER_PHONE
         assert "elara-t-103" in body
         assert "Revised drawing submitted to client for approval" in body
         assert "Rachit" in body

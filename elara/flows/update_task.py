@@ -105,6 +105,24 @@ def handle_status_selection(to: str, task_id: str, new_status: str, user: dict):
     except Exception as notif_err:
         logger.error(f"Failed to notify Kanav in handle_status_selection: {notif_err}")
 
+    # ── Notify Rachit of Elara Home task change ──
+    try:
+        from notifications.rachit_notifier import notify_rachit_task_change
+        actor_name = user.get("name", "Team Member")
+        if norm_status == "completed":
+            change_desc = f"Status changed from {old_status_str} to Completed (Task closed)"
+        else:
+            change_desc = f"Status changed from {old_status_str} to {status_str}"
+        notify_rachit_task_change(
+            task_id=task_id,
+            task_title=task.get("title", "Task"),
+            change_made=change_desc,
+            changed_by=actor_name,
+            domain="Elara Home"
+        )
+    except Exception as notif_err:
+        logger.error(f"Failed to notify Rachit in handle_status_selection: {notif_err}")
+
     send_text(to, f"✅ Task status updated to *{status_str}*!")
     if updated:
         send_elara_task_card(to, updated)
@@ -162,6 +180,21 @@ def handle_blocker_reason_input(to: str, text: str, user: dict, session: dict):
             )
     except Exception as notif_err:
         logger.error(f"Failed to notify Kanav in handle_blocker_reason_input: {notif_err}")
+
+    # ── Notify Rachit of Elara Home task change ──
+    try:
+        from notifications.rachit_notifier import notify_rachit_task_change
+        task = get_task_by_id(task_id)
+        actor_name = user.get("name", "Team Member")
+        notify_rachit_task_change(
+            task_id=task_id,
+            task_title=(task.get("title") if task else "Task") or "Task",
+            change_made=f"Status changed to Blocker (Reason: {reason})",
+            changed_by=actor_name,
+            domain="Elara Home"
+        )
+    except Exception as notif_err:
+        logger.error(f"Failed to notify Rachit in handle_blocker_reason_input: {notif_err}")
 
     send_text(to, f"🛑 Task marked as *Blocker*!\nReason: _{reason}_")
     if updated:

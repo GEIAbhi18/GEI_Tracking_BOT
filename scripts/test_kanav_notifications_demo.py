@@ -17,15 +17,15 @@ from notifications.kanav_notifier import (
     notify_kanav_task_change,
     get_formatted_timestamp
 )
-from elara.config import KANAV_PHONE
+from elara.config import DEVELOPER_PHONE
 
 def run_demo():
     print("=" * 70)
-    print(" 🚀 GEI_BOT: Kanav Task Change Notification Terminal Test Suite")
+    print(" 🚀 GEI_BOT: Task Change Notification Terminal Test Suite")
     print("=" * 70)
 
-    kanav_number = get_kanav_phone()
-    print(f"[*] Target WhatsApp recipient: Kanav ({kanav_number})\n")
+    target_number = DEVELOPER_PHONE
+    print(f"[*] Target WhatsApp recipient: Developer ({target_number})\n")
 
     captured_notifications = []
 
@@ -152,7 +152,7 @@ def run_demo():
         assert is_kanav_elara is False
 
     print("\n" + "=" * 70)
-    print(f" 📬 Captured {len(captured_notifications)} WhatsApp Notification Messages to Kanav ({kanav_number}):")
+    print(f" 📬 Captured {len(captured_notifications)} WhatsApp Notification Messages to Developer ({target_number}):")
     print("=" * 70)
 
     for i, notif in enumerate(captured_notifications, 1):

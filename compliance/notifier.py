@@ -135,10 +135,13 @@ def build_compliance_template_payload(
         {"type": "text", "text": str(category).strip() or "-"},
         {"type": "text", "text": str(requirement).strip() or "-"},
         {"type": "text", "text": str(applicability).strip() or "-"},
+        # pyrefly: ignore [unnecessary-type-conversion]
         {"type": "text", "text": str(issue_date_str).strip() or "-"},
+        # pyrefly: ignore [unnecessary-type-conversion]
         {"type": "text", "text": str(due_date_str).strip() or "-"},
         {"type": "text", "text": str(status).strip() or "-"},
         {"type": "text", "text": str(owner).strip() or "Anoop Sir"},
+        # pyrefly: ignore [unnecessary-type-conversion]
         {"type": "text", "text": str(action_remarks).strip() or "Initiate renewal process."},
     ]
 
@@ -177,6 +180,22 @@ def send_compliance_reminder_to_anoop(
         err = "Recipient phone number could not be resolved."
         logger.error(err)
         return False, {}, err
+
+    import os
+    import sys
+    from elara.config import KANAV_PHONE, DEVELOPER_PHONE
+
+    is_testing = (
+        os.getenv("TESTING") in ("1", "true", "True")
+        or "pytest" in sys.modules
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
+
+    clean_target = clean_phone_number(target_phone)
+    if is_testing and clean_target != DEVELOPER_PHONE:
+        target_phone = DEVELOPER_PHONE
+    elif clean_target == clean_phone_number(KANAV_PHONE):
+        target_phone = DEVELOPER_PHONE
 
     payload = build_compliance_template_payload(target_phone, record)
     url = f"{WA_API_BASE}/messages"

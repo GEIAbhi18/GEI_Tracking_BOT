@@ -232,12 +232,12 @@ def test_six_canonical_departments():
 
 @patch("elara.team_router.send_team_selection_prompt")
 def test_kanav_greeting_shows_both_teams(mock_prompt):
-    """When Kanav sends 'hi' or 'hello', he must see options for both teams."""
-    handled = route_incoming_message(KANAV_PHONE, text="hi")
+    """When greeting is sent by dual-access user, see options for both teams."""
+    handled = route_incoming_message(DEVELOPER_PHONE, text="hi")
     assert handled is True
     mock_prompt.assert_called_once()
     args, kwargs = mock_prompt.call_args
-    assert args[0] == KANAV_PHONE
+    assert args[0] == DEVELOPER_PHONE
     assert "Which Team would you like to access today?" in kwargs["custom_body"]
 
 
@@ -245,23 +245,23 @@ def test_kanav_greeting_shows_both_teams(mock_prompt):
 
 @patch("elara.team_router.send_team_selection_prompt")
 def test_kanav_ambiguous_request_prompts_selection(mock_prompt):
-    """Ambiguous task request from Kanav must prompt for team selection."""
+    """Ambiguous task request from dual-access user must prompt for team selection."""
     ambiguous_text = "Create a task to check the work tomorrow"
-    handled = route_incoming_message(KANAV_PHONE, text=ambiguous_text)
+    handled = route_incoming_message(DEVELOPER_PHONE, text=ambiguous_text)
     assert handled is True
-    mock_prompt.assert_called_once_with(KANAV_PHONE)
+    mock_prompt.assert_called_once_with(DEVELOPER_PHONE)
 
 
 @patch("whatsapp.ux.send_text")
 @patch("elara.flows.router.route_elara_message")
 def test_kanav_selects_elara_resumes_pending(mock_route_elara, mock_send_text):
-    """When Kanav selects Elara Home, pending ambiguous request runs in Elara."""
+    """When dual-access user selects Elara Home, pending ambiguous request runs in Elara."""
     from elara.team_router import set_pending_action
-    set_pending_action(KANAV_PHONE, "Create a task to check the work tomorrow")
+    set_pending_action(DEVELOPER_PHONE, "Create a task to check the work tomorrow")
 
-    handled = route_incoming_message(KANAV_PHONE, button_id="team_sel_elara")
+    handled = route_incoming_message(DEVELOPER_PHONE, button_id="team_sel_elara")
     assert handled is True
-    assert get_active_team(KANAV_PHONE) == "elara"
+    assert get_active_team(DEVELOPER_PHONE) == "elara"
     mock_route_elara.assert_called_once()
     _, kwargs = mock_route_elara.call_args
     assert kwargs["text"] == "Create a task to check the work tomorrow"
@@ -270,13 +270,13 @@ def test_kanav_selects_elara_resumes_pending(mock_route_elara, mock_send_text):
 @patch("whatsapp.ux.send_text")
 @patch("facilities.flows.router.route_facilities_message")
 def test_kanav_selects_facilities_resumes_pending(mock_route_fac, mock_send_text):
-    """When Kanav selects Facilities Team, pending ambiguous request runs in Facilities."""
+    """When dual-access user selects Facilities Team, pending ambiguous request runs in Facilities."""
     from elara.team_router import set_pending_action
-    set_pending_action(KANAV_PHONE, "Create a task to check the work tomorrow")
+    set_pending_action(DEVELOPER_PHONE, "Create a task to check the work tomorrow")
 
-    handled = route_incoming_message(KANAV_PHONE, button_id="team_sel_facilities")
+    handled = route_incoming_message(DEVELOPER_PHONE, button_id="team_sel_facilities")
     assert handled is True
-    assert get_active_team(KANAV_PHONE) == "facilities"
+    assert get_active_team(DEVELOPER_PHONE) == "facilities"
     mock_route_fac.assert_called_once()
     _, kwargs = mock_route_fac.call_args
     assert kwargs["text"] == "Create a task to check the work tomorrow"
@@ -295,11 +295,11 @@ def test_detect_team_intent_explicit():
 
 def test_team_context_persistence():
     """Once team is set, it persists for subsequent messages."""
-    set_active_team(KANAV_PHONE, "elara")
-    assert get_active_team(KANAV_PHONE) == "elara"
+    set_active_team(DEVELOPER_PHONE, "elara")
+    assert get_active_team(DEVELOPER_PHONE) == "elara"
 
-    set_active_team(KANAV_PHONE, "facilities")
-    assert get_active_team(KANAV_PHONE) == "facilities"
+    set_active_team(DEVELOPER_PHONE, "facilities")
+    assert get_active_team(DEVELOPER_PHONE) == "facilities"
 
 
 # ── 6. Elara Project Creation & Retrieval ────────────────────────────────────

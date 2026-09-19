@@ -186,11 +186,12 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
 
         msg = f"📋 *Your Active Complaints:*\n\n"
         for idx, c in enumerate(complaints[:5], start=1):
-            c_id = c.get("complaintId") or c.get("complaintNumber") or c.get("id") or f"FT-{idx}"
-            nature = c.get("nature") or c.get("category") or c.get("issue") or "Maintenance"
+            c_id = c.get("com_no") or c.get("complaintId") or c.get("complaintNumber") or c.get("id") or f"FT-{idx}"
+            cat = c.get("complaint_category") or {}
+            nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             desc = c.get("description") or c.get("details") or ""
             status = c.get("status") or "In Progress"
-            updated = c.get("updatedAt") or c.get("createdAt") or datetime.now().strftime("%d %b %Y")
+            updated = c.get("updated_at") or c.get("created_at") or c.get("updatedAt") or datetime.now().strftime("%d %b %Y")
 
             msg += f"• *Complaint #{c_id}*\n"
             msg += f"  Issue: {nature}\n"
@@ -216,10 +217,11 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
 
         msg = f"📜 *Your Complaint History:*\n\n"
         for idx, c in enumerate(complaints[:5], start=1):
-            c_id = c.get("complaintId") or c.get("complaintNumber") or c.get("id") or f"FT-{idx}"
-            nature = c.get("nature") or c.get("issue") or "Maintenance"
+            c_id = c.get("com_no") or c.get("complaintId") or c.get("complaintNumber") or c.get("id") or f"FT-{idx}"
+            cat = c.get("complaint_category") or {}
+            nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             status = c.get("status") or "Closed"
-            date = c.get("createdAt") or c.get("closedAt") or "Recent"
+            date = c.get("created_at") or c.get("closed_at") or c.get("createdAt") or "Recent"
 
             msg += f"{idx}. *{c_id}*\n"
             msg += f"   {nature}\n"
@@ -306,9 +308,11 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             )
             send_text(sender_phone, confirmation)
         else:
+            api_msg = result.get("message", "")
+            logger.warning(f"Factech complaint creation failed: {api_msg}")
             send_text(
                 sender_phone,
-                "Sorry, we're unable to submit your complaint right now. Please try again shortly.",
+                f"Sorry, we're unable to submit your complaint right now.\n⚠️ _Reason: {api_msg}_\n\nPlease try again shortly.",
             )
 
         return True

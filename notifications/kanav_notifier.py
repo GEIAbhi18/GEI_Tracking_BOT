@@ -17,7 +17,18 @@ logger = logging.getLogger(__name__)
 
 def get_kanav_phone() -> str:
     """Resolve Kanav's WhatsApp phone number from the database with fallback."""
-    from elara.config import KANAV_PHONE
+    from elara.config import KANAV_PHONE, DEVELOPER_PHONE
+    import sys
+
+    # Kanav is not a developer — while testing, use Developer's number (917717754421)
+    if (
+        os.getenv("TESTING") in ("1", "true", "True")
+        or "pytest" in sys.modules
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+        or any("test" in arg.lower() for arg in sys.argv)
+    ):
+        return DEVELOPER_PHONE
+
     try:
         from db import supabase
         res = supabase.table("users").select("whatsapp_number").ilike("name", "%Kanav%").execute()
@@ -159,7 +170,22 @@ def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
     Never raises exceptions, ensuring calling flows are unaffected.
     """
     try:
-        kanav_wa = get_kanav_phone()
+        from elara.config import DEVELOPER_PHONE, KANAV_PHONE
+        import sys
+        is_test_task = (
+            os.getenv("TESTING") in ("1", "true", "True")
+            or "pytest" in sys.modules
+            or os.getenv("PYTEST_CURRENT_TEST") is not None
+            or any("test" in arg.lower() for arg in sys.argv)
+            or "test" in str(task_id).lower()
+            or "test" in str(task_title).lower()
+            or "test" in str(change_made).lower()
+        )
+        if is_test_task:
+            kanav_wa = DEVELOPER_PHONE
+        else:
+            kanav_wa = get_kanav_phone()
+
         ts = timestamp or get_formatted_timestamp()
         message = format_task_change_message(
             task_id=task_id,
@@ -171,7 +197,7 @@ def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
         )
 
         sent = send_text(kanav_wa, message)
-        logger.info(f"Task change notification sent to Kanav ({kanav_wa}) for {domain} task '{task_id}': {change_made}")
+        logger.info(f"Task change notification sent to {kanav_wa} for {domain} task '{task_id}': {change_made}")
         print(f"[KANAV_NOTIFICATION] Sent to {kanav_wa} | Task: {task_id} ({task_title}) | Change: {change_made} | By: {changed_by} | Domain: {domain}", flush=True)
         # pyrefly: ignore [unnecessary-type-conversion]
         return bool(sent)

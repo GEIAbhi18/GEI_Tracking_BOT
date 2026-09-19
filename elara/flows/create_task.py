@@ -530,6 +530,24 @@ def finalize_task_creation(to: str, user: dict, draft: dict):
     proj_name = proj.get("name", "Elara Project") if proj else "Elara Project"
     _notify_elara_assignee(created_task, assignee, creator_name, proj_name)
 
+    # Notify Rachit of new Elara Home task (unless Rachit is creator or already notified as assignee)
+    try:
+        if (
+            creator_name.strip().lower() != "rachit"
+            and (not assignee or assignee.strip().lower() != "rachit")
+        ):
+            from notifications.rachit_notifier import notify_rachit_task_change
+            assignee_str = f" and assigned to *{assignee}*" if assignee else ""
+            notify_rachit_task_change(
+                task_id=created_task.get("id", "Task"),
+                task_title=created_task.get("title", title),
+                change_made=f"New task created in {proj_name}{assignee_str}",
+                changed_by=creator_name,
+                domain="Elara Home"
+            )
+    except Exception as r_err:
+        logger.error(f"Failed to notify Rachit on Elara task creation: {r_err}")
+
     clear_elara_session(to)
     send_text(to, "✅ *Elara Task Created Successfully!*")
     return send_elara_task_card(to, created_task)

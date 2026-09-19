@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 WhatsApp Task Assignment Module
 ================================
@@ -30,6 +31,31 @@ def _post_wa(payload: dict) -> bool:
     if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WA Task Assignment: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
         return False
+
+    import os
+    import sys
+    from elara.config import KANAV_PHONE, DEVELOPER_PHONE
+    from whatsapp.ux import clean_phone_number
+
+    is_testing = (
+        os.getenv("TESTING") in ("1", "true", "True")
+        or "pytest" in sys.modules
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
+
+    clean_to = clean_phone_number(payload.get("to", ""))
+    kanav_clean = clean_phone_number(KANAV_PHONE)
+
+    if is_testing:
+        if clean_to != DEVELOPER_PHONE:
+            logger.info(f"[TEST SAFETY] Task assignment rerouting {clean_to} to developer ({DEVELOPER_PHONE})")
+            payload["to"] = DEVELOPER_PHONE
+    elif clean_to == kanav_clean:
+        payload_str = str(payload).lower()
+        if any(marker in payload_str for marker in ("test", "demo", "dummy")):
+            logger.warning(f"[TEST SAFETY] Blocked task assignment test message to Kanav. Rerouting to developer ({DEVELOPER_PHONE})")
+            payload["to"] = DEVELOPER_PHONE
+
     url = f"{WA_API_BASE}/messages"
     headers = {
         "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
@@ -203,6 +229,7 @@ def _get_supabase():
 def get_user_by_whatsapp(phone: str):
     """Return user row by whatsapp_number. Phone in E.164 (e.g. 919xxxxxxxx or +919xxxxxxxx)."""
     try:
+        # pyrefly: ignore [unnecessary-type-conversion]
         clean_phone = str(phone).lstrip("+")
         r = _get_supabase().table("users").select("*").or_(f"whatsapp_number.eq.{clean_phone},whatsapp_number.eq.+{clean_phone}").execute()
         return r.data[0] if r.data else None
@@ -253,6 +280,7 @@ def set_wa_state(phone: str, action: str, task_id: str):
             "whatsapp_number": phone,
             "action": action,
             "task_id": task_id,
+            # pyrefly: ignore [deprecated]
             "updated_at": datetime.utcnow().isoformat(),
         }, on_conflict="whatsapp_number").execute()
     except Exception as e:
@@ -273,7 +301,7 @@ def clear_wa_state(phone: str):
 
 def on_task_created_by_kanav(task_id: str, task_name: str, project_name: str,
                               due_date: str, creator_wa: str, assignee_wa: str,
-                              kanav_wa: str = None, creator_name: str = "A team member", assignee_name: str = "Team Member"):
+                              kanav_wa: str | None = None, creator_name: str = "A team member", assignee_name: str = "Team Member"):
     """
     Called after a task creator creates a task.
     Sends interactive approval message to the assignee and confirms to creator.
@@ -456,6 +484,7 @@ def _handle_reject_step2(sender_phone: str, task_id: str, reason: str):
     # Notify Creator
     creator_number = _get_creator_number(task) if task else None
     if creator_number:
+        # pyrefly: ignore [missing-attribute]
         task_name = task.get("name", "the task")
         assignee_name = sender.get("name", "Assignee") if sender else "Assignee"
         send_text(creator_number,

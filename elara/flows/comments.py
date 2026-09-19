@@ -60,6 +60,20 @@ def handle_comment_text_input(to: str, text: str, user: dict, session: dict):
     except Exception as notif_err:
         logger.error(f"Failed to notify Kanav in handle_comment_text_input: {notif_err}")
 
+    # ── Notify Rachit of Elara Home task change ──
+    try:
+        from notifications.rachit_notifier import notify_rachit_task_change
+        task = get_task_by_id(task_id)
+        notify_rachit_task_change(
+            task_id=task_id,
+            task_title=(task.get("title") if task else "Task") or "Task",
+            change_made=f"Task updated (Comment added: \"{content}\")",
+            changed_by=user_name,
+            domain="Elara Home"
+        )
+    except Exception as notif_err:
+        logger.error(f"Failed to notify Rachit in handle_comment_text_input: {notif_err}")
+
     clear_elara_session(to)
 
     buttons = [

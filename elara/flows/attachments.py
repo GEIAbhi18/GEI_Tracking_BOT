@@ -98,6 +98,19 @@ def handle_attachment_upload(sender: str, task_id: str, media_data: dict, user: 
         except Exception as notif_err:
             logger.error(f"Failed to notify Kanav for Elara attachment: {notif_err}")
 
+        # 4. Notify Rachit of Elara Home task change
+        try:
+            from notifications.rachit_notifier import notify_rachit_task_change
+            notify_rachit_task_change(
+                task_id=task_id,
+                task_title=(task.get("title") if task else "Task") or "Task",
+                change_made=f"Attachment added: {file_name}",
+                changed_by=user_name,
+                domain="Elara Home",
+            )
+        except Exception as notif_err:
+            logger.error(f"Failed to notify Rachit for Elara attachment: {notif_err}")
+
         clear_elara_session(sender)
 
         buttons = [

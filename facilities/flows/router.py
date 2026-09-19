@@ -104,6 +104,15 @@ def route_facilities_message(sender: str, text: str | None = None,
     # Always resolve through Facilities auth to get is_facilities_user flag.
     # The `user` dict from auth middleware doesn't include this field.
     fac_user = resolve_facilities_user(sender)
+    if not fac_user and user and (
+        user.get("role") in ("Director", "Developer")
+        or user.get("department") == "Facilities"
+        or bool(user.get("permitted_buildings"))
+        or user.get("is_facilities_user")
+    ):
+        fac_user = dict(user)
+        fac_user["is_facilities_user"] = True
+
     if not fac_user or not fac_user.get("is_facilities_user"):
         # Not a Facilities user — shouldn't reach here, but handle gracefully
         from whatsapp.ux import send_text

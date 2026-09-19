@@ -60,3 +60,30 @@ def mock_requests(mocker):
 @pytest.fixture
 def mock_post_requests(mocker):
     return mocker.patch('requests.post')
+
+
+@pytest.fixture(autouse=True)
+def prevent_whatsapp_messages_leak(monkeypatch):
+    """
+    Universal test safety fixture:
+    1. Kanav is NOT a developer and must NEVER receive test messages.
+    2. While testing, all messages redirect to Developer (917717754421) or are safely mocked.
+    3. Prevents live Meta API calls during tests from reaching external recipients.
+    """
+    import os
+    os.environ["TESTING"] = "1"
+
+    from elara.config import KANAV_PHONE, DEVELOPER_PHONE
+    from whatsapp import ux
+
+    orig_post = ux._post_wa
+
+    def safe_post_wa(payload: dict) -> bool:
+        to_phone = ux.clean_phone_number(payload.get("to"))
+        # Strictly ensure Kanav never gets test messages
+        if to_phone == ux.clean_phone_number(KANAV_PHONE):
+            payload["to"] = DEVELOPER_PHONE
+        # In automated testing, mock the network return to prevent spamming phones
+        return True
+
+    monkeypatch.setattr(ux, "_post_wa", safe_post_wa)

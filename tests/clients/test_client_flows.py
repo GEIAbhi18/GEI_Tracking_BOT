@@ -53,6 +53,10 @@ def setup_test_clients(mocker):
     mocker.patch("clients.service.lookup_clients_by_phone", side_effect=lambda p: [
         c for c in clients_data if c["mobile_number"] == p or c["mobile_number"] == "91" + p
     ])
+    mock_sub = MagicMock()
+    mock_sub.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    mock_sub.upsert.return_value.execute.return_value = MagicMock(data=[])
+    mocker.patch("clients.service.supabase.table", return_value=mock_sub)
     clear_client_context("918826896085")
     clear_client_context("919958995715")
     yield

@@ -44,6 +44,11 @@ def test_sync_engine_with_mocked_sheets(mocker):
         "clients.sync_engine.fetch_master_tenant_records",
         return_value=mock_rows,
     )
+    mock_supabase_table = MagicMock()
+    mock_supabase_table.select.return_value.limit.return_value.execute.return_value = MagicMock(data=[{"id": 1}])
+    mock_supabase_table.upsert.return_value.execute.return_value = MagicMock(data=[])
+    mock_supabase_table.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
+    mocker.patch("clients.sync_engine.supabase.table", return_value=mock_supabase_table)
 
     # Run sync
     stats = run_client_master_sync()

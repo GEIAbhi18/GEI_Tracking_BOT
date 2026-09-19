@@ -25,6 +25,31 @@ def _post_wa(payload: dict) -> bool:
     if not META_ACCESS_TOKEN or not PHONE_NUMBER_ID:
         logger.error("Flow sender: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
         return False
+
+    import os
+    import sys
+    from elara.config import KANAV_PHONE, DEVELOPER_PHONE
+    from whatsapp.ux import clean_phone_number
+
+    is_testing = (
+        os.getenv("TESTING") in ("1", "true", "True")
+        or "pytest" in sys.modules
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
+
+    clean_to = clean_phone_number(payload.get("to", ""))
+    kanav_clean = clean_phone_number(KANAV_PHONE)
+
+    if is_testing:
+        if clean_to != DEVELOPER_PHONE:
+            logger.info(f"[TEST SAFETY] Flow sender rerouting {clean_to} to developer ({DEVELOPER_PHONE})")
+            payload["to"] = DEVELOPER_PHONE
+    elif clean_to == kanav_clean:
+        payload_str = str(payload).lower()
+        if any(marker in payload_str for marker in ("test", "demo", "dummy")):
+            logger.warning(f"[TEST SAFETY] Flow sender blocked test message to Kanav. Rerouting to developer ({DEVELOPER_PHONE})")
+            payload["to"] = DEVELOPER_PHONE
+
     url = f"{WA_API_BASE}/messages"
     headers = {
         "Authorization": f"Bearer {META_ACCESS_TOKEN}",

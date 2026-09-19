@@ -55,11 +55,25 @@ def mock_supabase_positions():
 class TestOwnerResolver:
     def test_resolve_position_to_user(self):
         # Mandatory mappings
-        assert resolve_position_to_user("Facility Head")["user_name"] == "Anoop"
-        assert resolve_position_to_user("Facility Manager GEBB1")["user_name"] == "Vikramjeet"
-        assert resolve_position_to_user("Facility Manager GEBB2")["user_name"] == "Vikramjeet"
-        assert resolve_position_to_user("Facility Manager GETT")["user_name"] == "Vikash"
-        assert resolve_position_to_user("Facility Director")["user_name"] == "Kanav"
+        user = resolve_position_to_user("Facility Head")
+        assert user is not None
+        assert user["user_name"] == "Anoop"
+
+        user = resolve_position_to_user("Facility Manager GEBB1")
+        assert user is not None
+        assert user["user_name"] == "Vikramjeet"
+
+        user = resolve_position_to_user("Facility Manager GEBB2")
+        assert user is not None
+        assert user["user_name"] == "Vikramjeet"
+
+        user = resolve_position_to_user("Facility Manager GETT")
+        assert user is not None
+        assert user["user_name"] == "Vikash"
+
+        user = resolve_position_to_user("Facility Director")
+        assert user is not None
+        assert user["user_name"] == "Kanav"
 
     def test_resolve_user_to_positions(self):
         # Vikramjeet holds both GEBB1 and GEBB2 positions
@@ -250,14 +264,15 @@ class TestCreateTaskFlowAndDirectorAccess:
 
         with patch("facilities.flows.create_task.handle_building_selection") as mock_create_bldg, \
              patch("facilities.flows.team_tasks.show_team_tasks") as mock_team_tasks:
-            _handle_building_selection("919811867829", "GEBB1", user, session)
+            _handle_building_selection("917717754421", "GEBB1", user, session)
             # Must call handle_building_selection in create flow, NOT show_team_tasks!
-            mock_create_bldg.assert_called_once_with("919811867829", "GEBB1", user)
+            mock_create_bldg.assert_called_once_with("917717754421", "GEBB1", user)
             mock_team_tasks.assert_not_called()
 
-    def test_description_with_employee_name_not_hijacked(self):
+    @patch("whatsapp.ux.send_text")
+    def test_description_with_employee_name_not_hijacked(self, mock_send_text):
         from facilities.flows.router import route_facilities_message
-        sender = "919811867829"
+        sender = "917717754421"
         user = {"name": "Kanav", "role": "Director", "permitted_buildings": ["GEBB1", "GEBB2", "GETT", "Common"]}
         session_store = {
             "current_flow_state": "create_issue",
@@ -364,6 +379,7 @@ class TestCreateTaskFlowAndDirectorAccess:
         assert normalize_added_by("Abhijeet") == "Abhijeet"
         assert normalize_added_by("Facility Head") == "Facility Head"
         assert normalize_added_by("") == "GEI_BOT"
+        # pyrefly: ignore [bad-argument-type]
         assert normalize_added_by(None) == "GEI_BOT"
 
         # When Kanav adds a task, Column E (index 4) on Google Sheets is strictly "Facilities Director"
@@ -755,6 +771,7 @@ class TestAliasNormalizer:
 
     def test_none_passthrough(self):
         from facilities.alias_normalizer import normalize_building_aliases
+        # pyrefly: ignore [bad-argument-type]
         assert normalize_building_aliases(None) is None
 
     def test_multiple_aliases_in_one_sentence(self):
@@ -954,6 +971,7 @@ class TestVoiceRouteIntegration:
 
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "Show my tasks. Show my tasks.", user, None)
 
             # Should route to _route_text, NOT to voice_handler
@@ -974,6 +992,7 @@ class TestVoiceRouteIntegration:
 
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "Show tasks of GEBB1 or B1.", user, None)
 
             assert mock_route_text.called
@@ -993,6 +1012,7 @@ class TestVoiceRouteIntegration:
 
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "Waterproofing 60% done in top terrace", user, None)
 
             # Should go to voice_handler, NOT _route_text
@@ -1013,6 +1033,7 @@ class TestVoiceRouteIntegration:
 
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "The meeting with the contractor went well today", user, None)
 
             assert not mock_route_text.called
@@ -1029,6 +1050,7 @@ class TestVoiceRouteIntegration:
 
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "show overdue tasks", user, None)
 
             assert mock_route_text.called
@@ -1046,6 +1068,7 @@ class TestVoiceRouteIntegration:
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
             # "Trade Tower" → normalized to "GETT", then "show tasks of GETT" is navigational
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "show tasks of Trade Tower", user, None)
 
             assert mock_route_text.called
@@ -1062,6 +1085,7 @@ class TestVoiceRouteIntegration:
 
         with patch("facilities.flows.router._route_text") as mock_route_text, \
              patch("facilities.flows.voice_handler.handle_voice_note") as mock_voice:
+            # pyrefly: ignore [bad-argument-type]
             _route_voice(sender, "Mark GETT-013 as closed", user, None)
 
             assert mock_route_text.called

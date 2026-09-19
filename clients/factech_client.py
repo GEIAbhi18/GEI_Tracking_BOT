@@ -41,22 +41,27 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
     site_id = get_site_id_for_building(building)
     url = f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaint"
 
+    # Factech API expects unit_no (not unitNo), category (not nature),
+    # and requires a created_at timestamp in UTC.
+    # pyrefly: ignore [deprecated]
+    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+
     payload = {
         "name": client_context.get("admin_name") or client_context.get("company_name", "Tenant"),
         "mobile": client_context.get("mobile_number", ""),
         "email": client_context.get("email", ""),
         "building": client_context.get("building", ""),
         "floor": client_context.get("floor", ""),
-        "unitNo": client_context.get("unit_number", ""),
-        "unit": client_context.get("unit_number", ""),
+        "unit_no": client_context.get("unit_number", ""),
         "company": client_context.get("company_name", ""),
-        "nature": complaint_data.get("nature", "General"),
-        "subNature": complaint_data.get("sub_nature", ""),
+        "category": complaint_data.get("nature", "General"),
+        "sub_category": complaint_data.get("sub_nature", "other"),
         "description": complaint_data.get("description", ""),
         "comments": complaint_data.get("comments", ""),
+        "created_at": now_utc,
     }
 
-    logger.info(f"Submitting Factech complaint for unit '{payload['unitNo']}' at site {site_id}")
+    logger.info(f"Submitting Factech complaint for unit '{payload['unit_no']}' at site {site_id}")
 
     try:
         auth = None
@@ -76,6 +81,7 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
             complaint_id = (
                 data.get("complaintId")
                 or data.get("complaintNumber")
+                or data.get("com_no")
                 or data.get("id")
                 # pyrefly: ignore [missing-attribute]
                 or data.get("data", {}).get("complaintId")
@@ -89,7 +95,7 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
             }
         else:
             err_msg = data.get("message") or res.text[:200]
-            logger.error(f"Factech complaint creation returned error: {err_msg}")
+            logger.error(f"Factech complaint creation returned error: {err_msg} | payload: {payload}")
             return {
                 "success": False,
                 "complaint_id": None,
@@ -113,6 +119,7 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
             "message": "Unable to communicate with Factech server.",
             "raw": {},
         }
+
 
 
 def get_complaints(
@@ -164,23 +171,30 @@ def get_complaints(
         if isinstance(body, list):
             raw_list = body
         elif isinstance(body, dict):
-            raw_list = body.get("data") or body.get("complaints") or []
+            raw_list = body.get("objects") or body.get("data") or body.get("complaints") or []
 
         # Filter strictly by the current client to ensure tenant privacy
         target_unit = str(client_context.get("unit_number", "")).strip().upper()
         target_mobile = str(client_context.get("mobile_number", "")).strip()
+        # Strip non-digit chars for mobile matching
+        target_mobile_digits = "".join(ch for ch in target_mobile if ch.isdigit())
 
         filtered = []
         for c in raw_list:
             if not isinstance(c, dict):
                 continue
 
-            c_unit = str(c.get("unitNo") or c.get("unit") or c.get("flatNo") or "").strip().upper()
-            c_mobile = "".join(ch for ch in str(c.get("mobile") or c.get("phone") or "") if ch.isdigit())
+            # Factech returns reference_unit_no for unit, and created_by.phone_no for mobile
+            c_unit = str(
+                c.get("reference_unit_no") or c.get("unitNo") or c.get("unit") or c.get("flatNo") or ""
+            ).strip().upper()
+            created_by = c.get("created_by") or {}
+            c_mobile_raw = created_by.get("phone_no") or c.get("mobile") or c.get("phone") or ""
+            c_mobile = "".join(ch for ch in str(c_mobile_raw) if ch.isdigit())
 
             # Match on unit or mobile
             unit_match = bool(target_unit and (target_unit == c_unit or target_unit in c_unit))
-            mobile_match = bool(target_mobile and target_mobile in c_mobile)
+            mobile_match = bool(target_mobile_digits and target_mobile_digits[-10:] in c_mobile[-10:] and len(c_mobile) >= 10)
 
             if unit_match or mobile_match:
                 status = str(c.get("status") or "Open").strip()

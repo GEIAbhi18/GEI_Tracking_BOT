@@ -101,7 +101,16 @@ def get_active_client_context(phone: str) -> dict | None:
     If only one unit exists, returns that.
     If multiple exist and none selected, returns None (triggering selection prompt).
     """
+    # 0. Chaitanya Tenant Override (strictly treated as Tenant only)
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(phone):
+        return dict(CHAITANYA_TENANT_RECORD)
+
     clean_num = normalize_mobile_number(phone)
+    if not clean_num:
+        return None
+
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(clean_num):
+        return dict(CHAITANYA_TENANT_RECORD)
 
     # 1. Check in-memory selected context
     if clean_num in _SELECTED_CLIENT_CONTEXT:
@@ -137,6 +146,9 @@ def set_active_client_context(phone: str, client: dict):
     """Stores the active client context for the sender phone."""
     clean_num = normalize_mobile_number(phone)
     _SELECTED_CLIENT_CONTEXT[clean_num] = client
+
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and (is_chaitanya(phone) or is_chaitanya(clean_num)):
+        return
 
     try:
         payload = {

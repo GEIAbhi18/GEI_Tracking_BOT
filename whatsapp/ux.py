@@ -23,6 +23,14 @@ def clean_phone_number(phone) -> str:
     return digits
 
 
+def is_testing_env() -> bool:
+    import sys
+    return (
+        os.getenv("TESTING") in ("1", "true", "True")
+        or "pytest" in sys.modules
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
+
 def _post_wa(payload: dict) -> bool:
     if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
         logger.error("WA UX: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
@@ -30,6 +38,23 @@ def _post_wa(payload: dict) -> bool:
 
     if "to" in payload:
         payload["to"] = clean_phone_number(payload["to"])
+
+    # ── Test Safety Guard ─────────────────────────────────────────────
+    # Kanav is not a developer and must NEVER receive test messages.
+    # While testing anything, only the developer (917717754421) should receive test messages.
+    from elara.config import KANAV_PHONE, DEVELOPER_PHONE
+    clean_to = payload.get("to", "")
+    kanav_clean = clean_phone_number(KANAV_PHONE)
+
+    if is_testing_env():
+        if clean_to != DEVELOPER_PHONE:
+            logger.info(f"[TEST SAFETY] Rerouting test message from {clean_to} to developer ({DEVELOPER_PHONE})")
+            payload["to"] = DEVELOPER_PHONE
+    elif clean_to == kanav_clean:
+        payload_str = str(payload).lower()
+        if any(marker in payload_str for marker in ("test", "demo", "dummy", "simulation", "mock")):
+            logger.warning(f"[TEST SAFETY] Blocked test message to Kanav ({KANAV_PHONE}). Rerouting to developer ({DEVELOPER_PHONE})")
+            payload["to"] = DEVELOPER_PHONE
 
     url = f"{WA_API_BASE}/messages"
     headers = {
