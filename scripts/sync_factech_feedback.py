@@ -270,7 +270,7 @@ def sync_feedback(verify_only: bool = False):
             "Sentiment": sentiment,
             "Escalation Status": escalation_status,
             "Escalation Reason": escalation_reason,
-            "Feedback Source": "Factech",
+            "Feedback Source": "GEI_BOT",
         }
 
         # 1. Update building sheet
