@@ -181,20 +181,9 @@ def send_compliance_reminder_to_anoop(
         logger.error(err)
         return False, {}, err
 
-    import os
-    import sys
     from elara.config import KANAV_PHONE, DEVELOPER_PHONE
-
-    is_testing = (
-        os.getenv("TESTING") in ("1", "true", "True")
-        or "pytest" in sys.modules
-        or os.getenv("PYTEST_CURRENT_TEST") is not None
-    )
-
     clean_target = clean_phone_number(target_phone)
-    if is_testing and clean_target != DEVELOPER_PHONE:
-        target_phone = DEVELOPER_PHONE
-    elif clean_target == clean_phone_number(KANAV_PHONE):
+    if clean_target == clean_phone_number(KANAV_PHONE):
         target_phone = DEVELOPER_PHONE
 
     payload = build_compliance_template_payload(target_phone, record)
