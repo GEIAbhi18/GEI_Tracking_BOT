@@ -17,6 +17,7 @@ Both are registered as APScheduler interval jobs in whatsapp_webhook.py.
 """
 
 import logging
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -29,6 +30,79 @@ from facilities.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ── Notification Deduplication & Flap Protection ─────────────────────────────
+_NOTIFICATION_LOCK = threading.Lock()
+_RECENT_NOTIFICATIONS: dict = {}  # dedup_key -> timestamp
+_REF_NOTIFICATION_TIMESTAMPS: dict = {}  # ref_no -> list of timestamps
+
+# Cooldown for exact same notification signature (10 minutes)
+NOTIFICATION_DEDUP_WINDOW_SECONDS = 600
+
+# Flap suppression: max notifications allowed for the same ref_no within flap window (5 minutes)
+FLAP_WINDOW_SECONDS = 300
+MAX_NOTIFS_PER_REF_WINDOW = 3
+
+
+def _reset_notification_tracker():
+    """Clear in-memory deduplication tracker (useful for testing)."""
+    with _NOTIFICATION_LOCK:
+        _RECENT_NOTIFICATIONS.clear()
+        _REF_NOTIFICATION_TIMESTAMPS.clear()
+
+
+def _should_suppress_notification(ref_no: str, change_type: str, details: dict) -> bool:
+    """
+    Check if a notification should be suppressed due to:
+    1. Exact duplicate notification sent recently (within 10 minutes)
+    2. Flap suppression: task rapidly changing states (> 3 times in 5 minutes)
+    """
+    now = time.time()
+    with _NOTIFICATION_LOCK:
+        cutoff = now - max(NOTIFICATION_DEDUP_WINDOW_SECONDS, FLAP_WINDOW_SECONDS)
+        expired_keys = [k for k, ts in _RECENT_NOTIFICATIONS.items() if ts < cutoff]
+        for k in expired_keys:
+            del _RECENT_NOTIFICATIONS[k]
+
+        for r, ts_list in list(_REF_NOTIFICATION_TIMESTAMPS.items()):
+            filtered = [ts for ts in ts_list if ts >= cutoff]
+            if filtered:
+                _REF_NOTIFICATION_TIMESTAMPS[r] = filtered
+            else:
+                del _REF_NOTIFICATION_TIMESTAMPS[r]
+
+        if change_type == "updated" and isinstance(details, dict):
+            if "fields" in details and isinstance(details["fields"], list):
+                sig = tuple(sorted((f.get("field", ""), str(f.get("new_value", ""))) for f in details["fields"]))
+            else:
+                sig = (details.get("field", ""), str(details.get("new_value", "")))
+            dedup_key = f"{ref_no}:updated:{sig}"
+        else:
+            dedup_key = f"{ref_no}:{change_type}"
+
+        last_sent = _RECENT_NOTIFICATIONS.get(dedup_key)
+        if last_sent and (now - last_sent) < NOTIFICATION_DEDUP_WINDOW_SECONDS:
+            logger.warning(
+                f"Suppressing duplicate external notification for {ref_no} ({change_type}): "
+                f"identical notification sent {now - last_sent:.1f}s ago."
+            )
+            return True
+
+        recent_ref_times = _REF_NOTIFICATION_TIMESTAMPS.get(ref_no, [])
+        if len(recent_ref_times) >= MAX_NOTIFS_PER_REF_WINDOW:
+            logger.warning(
+                f"Flap suppression triggered for {ref_no}: already sent {len(recent_ref_times)} "
+                f"notifications in the last {FLAP_WINDOW_SECONDS}s. Suppressing to prevent flood."
+            )
+            return True
+
+        _RECENT_NOTIFICATIONS[dedup_key] = now
+        if ref_no not in _REF_NOTIFICATION_TIMESTAMPS:
+            _REF_NOTIFICATION_TIMESTAMPS[ref_no] = []
+        _REF_NOTIFICATION_TIMESTAMPS[ref_no].append(now)
+
+        return False
+
 
 
 # ── Polling Job ──────────────────────────────────────────────────────────────
@@ -45,10 +119,11 @@ def poll_sheet_changes():
     logger.info("Facilities sync: polling Sheet for external changes...")
     start_time = time.time()
     changes_found = 0
+    seen_global_refs = set()
 
     for building in BUILDING_TABS:
         try:
-            changes_found += _poll_building_tab(building)
+            changes_found += _poll_building_tab(building, seen_global_refs)
         except Exception as e:
             logger.error(f"Polling failed for tab {building}: {e}", exc_info=True)
 
@@ -59,9 +134,13 @@ def poll_sheet_changes():
     )
 
 
-def _poll_building_tab(building: str) -> int:
+# pyrefly: ignore [bad-function-definition]
+def _poll_building_tab(building: str, seen_global_refs: set = None) -> int:
     """Poll a single building tab and return count of changes detected."""
     from facilities.sheets_client import _get_worksheet, _retry_on_429, _row_to_dict
+
+    if seen_global_refs is None:
+        seen_global_refs = set()
 
     try:
         ws = _get_worksheet(building)
@@ -78,7 +157,7 @@ def _poll_building_tab(building: str) -> int:
     changes = 0
     sheet_ref_nos = set()
 
-    for row_values in data_rows:
+    for idx, row_values in enumerate(data_rows, start=2):
         if not row_values or not row_values[0]:
             continue  # Skip empty rows
 
@@ -86,7 +165,22 @@ def _poll_building_tab(building: str) -> int:
         if not ref_no:
             continue
 
+        if ref_no in sheet_ref_nos:
+            logger.warning(
+                f"Duplicate ref_no '{ref_no}' found in Sheet tab '{building}' at row {idx}. "
+                f"Skipping duplicate row to prevent cache oscillation and notification storms."
+            )
+            continue
+
+        if ref_no in seen_global_refs:
+            logger.warning(
+                f"Cross-tab duplicate ref_no '{ref_no}' found in Sheet tab '{building}' at row {idx} "
+                f"(already seen in another tab). Skipping duplicate row to prevent collision."
+            )
+            continue
+
         sheet_ref_nos.add(ref_no)
+        seen_global_refs.add(ref_no)
         sheet_row = _row_to_dict(row_values, building)
         sheet_row["building"] = building
 
@@ -107,6 +201,7 @@ def _poll_building_tab(building: str) -> int:
 
         # Compare each field
         col_map = get_column_map(building)
+        changed_fields = []
         for field in col_map.values():
             if field in ("ref_no", "delay_days", "actual_completion_date"):
                 continue  # ref_no is immutable; delay_days and actual_completion_date are computed by Sheets
@@ -115,8 +210,22 @@ def _poll_building_tab(building: str) -> int:
             cached_val = (cached.get(field) or "").strip()
 
             if sheet_val != cached_val:
-                _handle_field_change(ref_no, building, field, cached_val, sheet_val)
-                changes += 1
+                changed_fields.append({
+                    "field": field,
+                    "old_value": cached_val,
+                    "new_value": sheet_val,
+                })
+
+        if not changed_fields:
+            continue
+
+        if len(changed_fields) == 1:
+            cf = changed_fields[0]
+            _handle_field_change(ref_no, building, cf["field"], cf["old_value"], cf["new_value"])
+            changes += 1
+        else:
+            _handle_multi_field_change(ref_no, building, changed_fields)
+            changes += len(changed_fields)
 
     # Check for rows in row_cache that were deleted externally from the Sheet
     try:
@@ -230,6 +339,51 @@ def _handle_field_change(ref_no: str, building: str, field: str,
     })
 
 
+def _handle_multi_field_change(ref_no: str, building: str, changed_fields: list):
+    """Handle multiple fields that changed on the Sheet simultaneously for a single row."""
+    from facilities.sheets_client import _update_cache_field
+
+    field_names = [cf["field"] for cf in changed_fields]
+    logger.info(f"External multi-field change for {ref_no}: {field_names}")
+
+    non_bot_changes = []
+    for cf in changed_fields:
+        field = cf["field"]
+        old_val = cf["old_value"]
+        new_val = cf["new_value"]
+
+        # Update row_cache
+        _update_cache_field(ref_no, field, new_val)
+
+        # Skip notification/audit if updated recently by GEI_BOT
+        if _was_recently_synced_by_bot(ref_no, field):
+            logger.info(f"Skipping external notification for {ref_no}.{field}: updated by GEI_BOT")
+            continue
+
+        _log_audit_entry(
+            # pyrefly: ignore [bad-argument-type]
+            ref_no, "google_sheets", None,
+            f"External edit: {field} changed",
+            field, old_val, new_val
+        )
+        non_bot_changes.append(cf)
+
+    if not non_bot_changes:
+        return
+
+    if len(non_bot_changes) == 1:
+        cf = non_bot_changes[0]
+        _notify_external_change(ref_no, building, "updated", {
+            "field": cf["field"],
+            "old_value": cf["old_value"],
+            "new_value": cf["new_value"],
+        })
+    else:
+        _notify_external_change(ref_no, building, "updated", {
+            "fields": non_bot_changes,
+        })
+
+
 def _handle_deleted_external_row(ref_no: str, building: str):
     """Handle a row that exists in row_cache but was deleted from the Sheet."""
     logger.info(f"External deletion detected: {ref_no} ({building}) was deleted from Google Sheet")
@@ -268,6 +422,10 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
     Send a WhatsApp notification to Anoop and Kanav whenever there is any change
     in any building sheet or common sheet in Facilities task tracker Google Sheet.
     """
+    # 0. Suppress duplicates and rapid flapping
+    if _should_suppress_notification(ref_no, change_type, details):
+        return
+
     # 1. Notify Anoop (existing behaviour — unchanged)
     try:
         from facilities.config import resolve_anoop_phone_number
@@ -285,10 +443,19 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
 
         # Build a human-readable description of the change for Kanav
         if change_type == "updated" and isinstance(details, dict):
-            field = details.get("field", "unknown field").replace("_", " ").title()
-            old_val = details.get("old_value") or "—"
-            new_val = details.get("new_value") or "—"
-            change_desc = f"{field} changed from '{old_val}' to '{new_val}'"
+            if "fields" in details and isinstance(details["fields"], list):
+                parts = []
+                for f_info in details["fields"]:
+                    f_name = f_info.get("field", "unknown field").replace("_", " ").title()
+                    o_val = f_info.get("old_value") or "—"
+                    n_val = f_info.get("new_value") or "—"
+                    parts.append(f"{f_name}: '{o_val}' → '{n_val}'")
+                change_desc = "; ".join(parts)
+            else:
+                field = details.get("field", "unknown field").replace("_", " ").title()
+                old_val = details.get("old_value") or "—"
+                new_val = details.get("new_value") or "—"
+                change_desc = f"{field} changed from '{old_val}' to '{new_val}'"
         elif change_type == "created":
             change_desc = "New task added on Google Sheet"
         elif change_type == "deleted":
@@ -353,24 +520,41 @@ def _send_external_edit_notification(to: str, ref_no: str, building: str,
             pass
 
         if change_type == "updated" and isinstance(details, dict):
-            field = details.get("field", "unknown field")
-            field_display = field.replace("_", " ").title()
-            old_val = details.get("old_value") or "—"
-            new_val = details.get("new_value") or "—"
-
             desc_line = f"*Task:* {task_desc}\n" if task_desc else ""
+            if "fields" in details and isinstance(details["fields"], list):
+                fields_text_lines = []
+                for f_info in details["fields"]:
+                    f_name = f_info.get("field", "field").replace("_", " ").title()
+                    o_val = f_info.get("old_value") or "—"
+                    n_val = f_info.get("new_value") or "—"
+                    fields_text_lines.append(f"• *{f_name}:* {o_val} → {n_val}")
+                fields_block = "\n".join(fields_text_lines)
+                msg = (
+                    f"📊 *Facilities Sheet Update Detected*\n\n"
+                    f"*Ref:* {ref_no}\n"
+                    f"*Building/Sheet:* {bldg_display}\n"
+                    f"{desc_line}"
+                    f"*Updates Made:*\n{fields_block}\n\n"
+                    f"🕐 Detected at {now_ist} IST\n\n"
+                    f"_This change was made directly on the Facilities Google Sheet._"
+                )
+            else:
+                field = details.get("field", "unknown field")
+                field_display = field.replace("_", " ").title()
+                old_val = details.get("old_value") or "—"
+                new_val = details.get("new_value") or "—"
 
-            msg = (
-                f"📊 *Facilities Sheet Update Detected*\n\n"
-                f"*Ref:* {ref_no}\n"
-                f"*Building/Sheet:* {bldg_display}\n"
-                f"{desc_line}"
-                f"*Field Changed:* {field_display}\n"
-                f"*Previous:* {old_val}\n"
-                f"*Updated to:* {new_val}\n\n"
-                f"🕐 Detected at {now_ist} IST\n\n"
-                f"_This change was made directly on the Facilities Google Sheet._"
-            )
+                msg = (
+                    f"📊 *Facilities Sheet Update Detected*\n\n"
+                    f"*Ref:* {ref_no}\n"
+                    f"*Building/Sheet:* {bldg_display}\n"
+                    f"{desc_line}"
+                    f"*Field Changed:* {field_display}\n"
+                    f"*Previous:* {old_val}\n"
+                    f"*Updated to:* {new_val}\n\n"
+                    f"🕐 Detected at {now_ist} IST\n\n"
+                    f"_This change was made directly on the Facilities Google Sheet._"
+                )
         elif change_type == "created":
             issue = (details.get("issue_action") or details.get("Key Issue / Action") or task_desc or "—") if isinstance(details, dict) else "—"
             owner = (details.get("owner") or details.get("Owner") or cached_owner or "—") if isinstance(details, dict) else "—"

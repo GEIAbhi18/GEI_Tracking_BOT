@@ -361,3 +361,129 @@ def test_resolve_anoop_phone_number(mocker):
     assert resolve_anoop_phone_number() == "919211501013"
 
 
+def test_duplicate_ref_no_in_sheet_skipped(mocker):
+    """Verify that duplicate ref_no rows in the same sheet tab are skipped and do not cause oscillation."""
+    from facilities.sync_engine import _poll_building_tab, _reset_notification_tracker
+
+    _reset_notification_tracker()
+    mock_ws = mocker.MagicMock()
+    # Header + 2 data rows with identical Ref No GEBB2-019
+    mock_ws.get_all_values.return_value = [
+        ["Ref. No.", "Type", "Key Issue / Action", "Latest Update", "Added By", "Owner", "Date Raised", "Planned Date", "Delay Days", "Status", "Estimated Completion Date", "Actual Completion Date"],
+        ["GEBB2-019", "Other", "Substation cable", "sl_1", "Dir", "Head", "15-Sep-2026", "16-Sep-2026", "0", "Closed", "", ""],
+        ["GEBB2-019", "Improvement", "Neptune EV", "sl_2", "Dir", "Head", "17-Sep-2026", "30-Sep-2026", "0", "WIP", "", ""],
+    ]
+    mocker.patch("facilities.sheets_client._get_worksheet", return_value=mock_ws)
+    mocker.patch("facilities.sheets_client._retry_on_429", side_effect=lambda fn: fn())
+
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    # Return cache matching row 1
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{
+            "ref_no": "GEBB2-019",
+            "building": "GEBB2",
+            "type": "Other",
+            "issue_action": "Substation cable",
+            "latest_update": "sl_1",
+            "last_modified_by_at": "Dir",
+            "owner": "Head",
+            "created_date": "15-Sep-2026",
+            "planned_date": "16-Sep-2026",
+            "status": "Closed",
+            "estimated_completion_date": "",
+            "actual_completion_date": "",
+        }]
+    )
+
+    mock_field_change = mocker.patch("facilities.sync_engine._handle_field_change")
+    mock_multi_change = mocker.patch("facilities.sync_engine._handle_multi_field_change")
+    mock_new_row = mocker.patch("facilities.sync_engine._handle_new_external_row")
+
+    changes = _poll_building_tab("GEBB2")
+
+    # Row 1 matched cache -> 0 changes. Row 2 was duplicate -> skipped! Total changes should be 0.
+    assert changes == 0
+    mock_field_change.assert_not_called()
+    mock_multi_change.assert_not_called()
+    mock_new_row.assert_not_called()
+
+
+def test_notification_deduplication_suppresses_identical(mocker):
+    """Verify that identical notifications within cooldown window are suppressed."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+
+    _reset_notification_tracker()
+    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Fix pump"}]
+    )
+
+    details = {"field": "status", "old_value": "Open", "new_value": "WIP"}
+
+    # First call: should send
+    _notify_external_change("GEBB1-010", "GEBB1", "updated", details)
+    assert mock_send.call_count == 1
+
+    # Second call with identical payload: should be suppressed
+    _notify_external_change("GEBB1-010", "GEBB1", "updated", details)
+    assert mock_send.call_count == 1
+
+
+def test_flap_suppression_silences_rapid_changes(mocker):
+    """Verify that rapid state changes (> 3 in 5 min) for the same task trigger flap suppression."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+
+    _reset_notification_tracker()
+    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Flapping task"}]
+    )
+
+    # 1st change (allowed)
+    _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "A", "new_value": "B"})
+    # 2nd change (allowed)
+    _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "B", "new_value": "C"})
+    # 3rd change (allowed - limit is 3)
+    _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "C", "new_value": "D"})
+    assert mock_send.call_count == 3
+
+    # 4th rapid change on the same task -> suppressed by flap damping!
+    _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "D", "new_value": "E"})
+    assert mock_send.call_count == 3
+
+
+def test_multi_field_update_batched_notification(mocker):
+    """Verify that multiple field changes on a row generate a single consolidated WhatsApp message."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+
+    _reset_notification_tracker()
+    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Basement waterproofing", "owner": "Facility Head", "status": "WIP", "planned_date": "20-Sep-2026"}]
+    )
+
+    details = {
+        "fields": [
+            {"field": "status", "old_value": "Open", "new_value": "WIP"},
+            {"field": "planned_date", "old_value": "15-Sep-2026", "new_value": "20-Sep-2026"},
+        ]
+    }
+
+    _notify_external_change("GEBB1-008", "GEBB1", "updated", details)
+
+    mock_send.assert_called_once()
+    to_phone, msg = mock_send.call_args[0]
+    assert to_phone == "919211501013"
+    assert "GEBB1-008" in msg
+    assert "Updates Made:" in msg
+    assert "Status:* Open → WIP" in msg
+    assert "Planned Date:* 15-Sep-2026 → 20-Sep-2026" in msg
+
+
+
