@@ -2,11 +2,14 @@ import os
 import logging
 import requests
 
+from dotenv import load_dotenv
+load_dotenv()
+
 logger = logging.getLogger(__name__)
 
 WHATSAPP_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
-WA_API_BASE = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}"
+WA_API_BASE = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}" if PHONE_NUMBER_ID else ""
 
 def clean_phone_number(phone) -> str:
     """
@@ -32,7 +35,9 @@ def is_testing_env() -> bool:
     )
 
 def _post_wa(payload: dict) -> bool:
-    if not WHATSAPP_ACCESS_TOKEN or not PHONE_NUMBER_ID:
+    token = os.getenv("META_ACCESS_TOKEN") or WHATSAPP_ACCESS_TOKEN
+    phone_id = os.getenv("PHONE_NUMBER_ID") or PHONE_NUMBER_ID
+    if not token or not phone_id:
         logger.error("WA UX: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
         return False
 
@@ -56,9 +61,10 @@ def _post_wa(payload: dict) -> bool:
             logger.warning(f"[TEST SAFETY] Blocked test message to Kanav ({KANAV_PHONE}). Rerouting to developer ({DEVELOPER_PHONE})")
             payload["to"] = DEVELOPER_PHONE
 
-    url = f"{WA_API_BASE}/messages"
+    api_base = f"https://graph.facebook.com/v19.0/{phone_id}"
+    url = f"{api_base}/messages"
     headers = {
-        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
     try:

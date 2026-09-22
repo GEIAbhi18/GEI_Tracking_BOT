@@ -138,3 +138,145 @@ def test_elara_team_router_bypasses_chaitanya():
     # Team router should immediately return False for Chaitanya
     handled = route_incoming_message(CHAITANYA_PHONE, text="hi")
     assert handled is False
+
+
+def test_send_client_welcome_menu_fallback_on_button_failure(mocker):
+    from clients.flows import send_client_welcome_menu
+
+    # Simulate interactive buttons failing (e.g. Meta limitation or network error)
+    mocker.patch("clients.flows.send_interactive_buttons", return_value=False)
+    mock_text = mocker.patch("clients.flows.send_text", return_value=True)
+
+    client = {
+        "admin_name": "Chaitanya Test",
+        "company_name": "Good Earth Infra",
+        "building": "GEBB2",
+        "unit_number": "1",
+    }
+    send_client_welcome_menu(CHAITANYA_PHONE, client)
+
+    mock_text.assert_called_once()
+    sent_content = mock_text.call_args[0][1]
+    assert "1️⃣ *Log New Complaint*" in sent_content
+    assert "2️⃣ *Check Status*" in sent_content
+    assert "3️⃣ *Complaint History*" in sent_content
+
+
+def test_factech_create_complaint_pads_short_unit(mocker):
+    from clients.factech_client import create_complaint
+
+    mock_post = mocker.patch("requests.post")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"status": "success", "complaintId": "FT-9999"}
+    mock_post.return_value = mock_resp
+
+    client = {
+        "admin_name": "Chaitanya",
+        "company_name": "Good Earth Infra",
+        "building": "GEBB2",
+        "unit_number": "1",
+        "mobile_number": CHAITANYA_PHONE,
+        "email": "",
+        "floor": "Ground",
+    }
+    res = create_complaint(client, {"nature": "AC", "description": "AC not cooling"})
+
+    assert res["success"] is True
+    assert res["complaint_id"] == "FT-9999"
+
+    # Verify payload had padded unit number (>= 3 chars)
+    payload = mock_post.call_args[1]["json"]
+    assert payload["unit_no"] == "001"
+
+
+def test_factech_create_complaint_resilient_fallback_on_api_error(mocker):
+    from clients.factech_client import create_complaint
+
+    # Simulate Factech returning site error: unit not found
+    mock_post = mocker.patch("requests.post")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 400
+    mock_resp.text = "Unit not found in site"
+    mock_resp.json.return_value = {"status": "error", "message": "Unit not found in site"}
+    mock_post.return_value = mock_resp
+
+    mock_insert = MagicMock()
+    mock_insert.execute.return_value = MagicMock(data=[])
+    mock_table = MagicMock()
+    mock_table.insert.return_value = mock_insert
+    mocker.patch("db.supabase.table", return_value=mock_table)
+
+    client = {
+        "admin_name": "Chaitanya",
+        "company_name": "Good Earth Infra",
+        "building": "GEBB2",
+        "unit_number": "1",
+        "mobile_number": CHAITANYA_PHONE,
+    }
+    res = create_complaint(client, {"nature": "AC", "description": "AC not cooling"})
+
+    assert res["success"] is True
+    assert res["fallback"] is True
+    assert res["complaint_id"].startswith("GEI-")
+
+
+def test_get_complaints_strict_unit_matching_prevents_leakage(mocker):
+    from clients.factech_client import get_complaints
+
+    # Raw complaints from site including unit 101, 201, 1 (exact), and Shop 1
+    raw_api_complaints = [
+        {"com_no": "C-101", "unitNo": "101", "status": "Open"},
+        {"com_no": "C-201", "unitNo": "201", "status": "Open"},
+        {"com_no": "C-1", "unitNo": "1", "status": "Open"},
+        {"com_no": "C-001", "unitNo": "001", "status": "Open"},
+        {"com_no": "C-601", "unitNo": "601", "status": "Open"},
+    ]
+    mock_get = mocker.patch("requests.get")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"objects": raw_api_complaints}
+    mock_get.return_value = mock_resp
+
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    mocker.patch("db.supabase.table", return_value=mock_table)
+
+    client = {"building": "GEBB2", "unit_number": "1", "mobile_number": CHAITANYA_PHONE}
+    results = get_complaints(client, days_back=30)
+
+    matched_ids = [c["com_no"] for c in results]
+    # Only exact unit 1 and 001 should match; 101, 201, 601 must NOT match
+    assert "C-1" in matched_ids
+    assert "C-001" in matched_ids
+    assert "C-101" not in matched_ids
+    assert "C-201" not in matched_ids
+    assert "C-601" not in matched_ids
+
+
+def test_webhook_client_text_routing(mocker):
+    from whatsapp.whatsapp_webhook import _handle_text
+
+    mock_btn_reply = mocker.patch("clients.flows.handle_client_button_reply")
+    mock_client_hi = mocker.patch("clients.flows.handle_client_hi")
+
+    # 1 -> log_new_complaint
+    _handle_text(CHAITANYA_PHONE, "1")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "log_new_complaint")
+
+    # 2 -> check_complaint_status
+    _handle_text(CHAITANYA_PHONE, "2")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "check_complaint_status")
+
+    # 3 -> complaint_history
+    _handle_text(CHAITANYA_PHONE, "3")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "complaint_history")
+
+    # greeting with punctuation e.g. "Hello!"
+    _handle_text(CHAITANYA_PHONE, "Hello!")
+    mock_client_hi.assert_called_with(CHAITANYA_PHONE)
+
+    # arbitrary unrouted text -> shows client menu
+    _handle_text(CHAITANYA_PHONE, "What are the facilities here?")
+    mock_client_hi.assert_called_with(CHAITANYA_PHONE)
+

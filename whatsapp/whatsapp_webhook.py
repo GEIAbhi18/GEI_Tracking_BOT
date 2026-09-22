@@ -13,6 +13,9 @@ Flow routing:
   4. All other text             → core bot engine (process_user_message)
 """
 
+from dotenv import load_dotenv
+load_dotenv()
+
 import os
 import sys
 import logging
@@ -464,8 +467,14 @@ def handle_whatsapp_message():
                                     return
                                 
                                 # Check for casual greetings (Main Menu / Client Flow trigger)
-                                greeting_words = ["hi", "hello", "menu", "hey", "start"]
-                                if msg_text.strip().lower() in greeting_words:
+                                import re
+                                clean_greeting = re.sub(r'[^\w\s]', '', msg_text).strip().lower()
+                                greeting_words = ["hi", "hello", "menu", "hey", "start", "support", "help"]
+                                is_greeting = any(
+                                    clean_greeting == g or clean_greeting.startswith(f"{g} ")
+                                    for g in greeting_words
+                                )
+                                if is_greeting:
                                     # 1. Check if sender is a registered Factech / tenant client (or Chaitanya)
                                     try:
                                         from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
@@ -717,17 +726,22 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
 
         # Direct client text commands
         if is_client:
-            clean_cmd = text.strip().lower()
-            if clean_cmd in ("log new complaint", "log complaint", "new complaint", "create complaint"):
+            import re
+            clean_cmd = re.sub(r'[^\w\s]', '', text).strip().lower()
+            if clean_cmd in ("1", "log new complaint", "log complaint", "new complaint", "create complaint", "raise complaint"):
                 handle_client_button_reply(sender, "log_new_complaint")
                 return
-            elif clean_cmd in ("check complaint status", "check status", "complaint status", "status"):
+            elif clean_cmd in ("2", "check complaint status", "check status", "complaint status", "status", "active complaints"):
                 handle_client_button_reply(sender, "check_complaint_status")
                 return
-            elif clean_cmd in ("complaint history", "history", "previous complaints"):
+            elif clean_cmd in ("3", "complaint history", "history", "previous complaints", "all complaints"):
                 handle_client_button_reply(sender, "complaint_history")
                 return
-            elif clean_cmd in ("menu", "main menu", "hi", "hello", "hey", "help", "factech", "support"):
+            elif any(clean_cmd == g or clean_cmd.startswith(f"{g} ") for g in ("menu", "main menu", "hi", "hello", "hey", "help", "factech", "support")):
+                handle_client_hi(sender)
+                return
+            else:
+                logger.info(f"Client {sender} sent unrouted text '{text[:60]}' — showing client menu and assistance")
                 handle_client_hi(sender)
                 return
     except Exception as client_err:

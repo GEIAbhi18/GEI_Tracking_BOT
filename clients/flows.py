@@ -74,7 +74,7 @@ def handle_client_hi(sender_phone: str):
 
 
 def send_client_welcome_menu(sender_phone: str, client: dict):
-    """Sends the 3 interactive options to the client."""
+    """Sends the 3 interactive options to the client with guaranteed plain text fallback."""
     admin_name = client.get("admin_name") or "there"
     company = client.get("company_name", "N/A")
     building = client.get("building", "N/A")
@@ -97,7 +97,16 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
         {"id": "complaint_history", "title": "Complaint History"},
     ]
 
-    send_interactive_buttons(sender_phone, body, buttons)
+    ok = send_interactive_buttons(sender_phone, body, buttons)
+    if not ok:
+        text_menu = (
+            f"{body}\n\n"
+            f"1️⃣ *Log New Complaint*\n"
+            f"2️⃣ *Check Status*\n"
+            f"3️⃣ *Complaint History*\n\n"
+            f"_Reply with 1, 2, or 3, or type your complaint description directly._"
+        )
+        send_text(sender_phone, text_menu)
 
 
 def send_unregistered_client_message(sender_phone: str):
@@ -315,6 +324,8 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                 f"Sorry, we're unable to submit your complaint right now.\n⚠️ _Reason: {api_msg}_\n\nPlease try again shortly.",
             )
 
+        # Re-render welcome menu so the user is never stranded in a dead end
+        send_client_welcome_menu(sender_phone, client)
         return True
 
     except Exception as e:
