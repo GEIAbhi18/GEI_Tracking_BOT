@@ -29,7 +29,8 @@ from elara.db import (
 )
 from elara.team_router import (
     route_incoming_message, set_active_team, get_active_team,
-    detect_team_intent_from_text, is_dual_access_user
+    detect_team_intent_from_text, is_dual_access_user,
+    clear_all_team_contexts,
 )
 
 
@@ -159,10 +160,12 @@ def mock_elara_supabase():
     mock_client = MagicMock()
     mock_client.table.side_effect = lambda t: MockQuery(t)
 
+    clear_all_team_contexts()
     with patch("elara.db.supabase", mock_client), \
          patch("elara.auth.supabase", mock_client), \
          patch("db.supabase", mock_client):
         yield
+    clear_all_team_contexts()
 
 
 # ── 1. User Identification & Team Separation Tests ───────────────────────────

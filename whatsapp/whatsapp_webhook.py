@@ -698,19 +698,9 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
     except Exception as team_err:
         logger.error(f"Team router error in _handle_text: {team_err}", exc_info=True)
 
-    # Facilities routing check
-    try:
-        from facilities.flows.router import is_facilities_user, get_session, route_facilities_message
-        session = get_session(sender)
-        if is_facilities_user(sender) or (session and session.get("current_flow_state")):
-            route_facilities_message(sender, text=text)
-            return
-    except Exception as fac_err:
-        logger.error(f"Facilities routing error in _handle_text: {fac_err}", exc_info=True)
-
     # ── Factech Client Automation Check ─────────────────────────────────────
     try:
-        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya, is_developer_phone
         from clients.flows import (
             has_active_client_flow,
             handle_client_text,
@@ -718,7 +708,12 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             handle_client_button_reply,
             handle_client_hi,
         )
-        is_client = (TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(sender)) or is_registered_client(sender)
+        from elara.team_router import get_active_team
+        is_client = (
+            (TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(sender))
+            or (is_developer_phone(sender) and get_active_team(sender) == "factech")
+            or is_registered_client(sender)
+        )
 
         if has_active_client_flow(sender):
             if handle_client_text(sender, text):
@@ -746,6 +741,16 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 return
     except Exception as client_err:
         logger.error(f"Client routing error in _handle_text: {client_err}", exc_info=True)
+
+    # Facilities routing check
+    try:
+        from facilities.flows.router import is_facilities_user, get_session, route_facilities_message
+        session = get_session(sender)
+        if is_facilities_user(sender) or (session and session.get("current_flow_state")):
+            route_facilities_message(sender, text=text)
+            return
+    except Exception as fac_err:
+        logger.error(f"Facilities routing error in _handle_text: {fac_err}", exc_info=True)
 
 
 

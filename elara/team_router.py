@@ -42,6 +42,22 @@ def get_active_team(sender: str) -> str | None:
         return ctx.get("team")
 
 
+def clear_active_team(sender: str):
+    """Clear active team context and pending action for a sender."""
+    clean_num = clean_phone_number(sender)
+    with _team_lock:
+        _active_team_contexts.pop(clean_num, None)
+        _pending_actions.pop(clean_num, None)
+
+
+def clear_all_team_contexts():
+    """Clear all active team contexts and pending actions across all users."""
+    with _team_lock:
+        _active_team_contexts.clear()
+        _pending_actions.clear()
+
+
+
 def set_pending_action(sender: str, text: str):
     """Store ambiguous request while waiting for Kanav's team choice."""
     clean_num = clean_phone_number(sender)
@@ -237,7 +253,8 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
 
         # Developer Factech mode active context handling
         if clean_num == DEVELOPER_PHONE and active_team == "factech":
-            if clean_msg in ("switch team", "switch teams", "change team", "team menu"):
+            if clean_msg in ("switch team", "switch teams", "change team", "team menu", "reset", "clear", "cancel"):
+                clear_active_team(clean_num)
                 body = "👋 Hello *Developer*!\n\nWhich Team would you like to access?"
                 send_team_selection_prompt(sender, custom_body=body)
                 return True

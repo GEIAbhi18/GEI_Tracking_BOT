@@ -10,7 +10,15 @@ from elara.team_router import (
     route_incoming_message,
     set_active_team,
     get_active_team,
+    clear_all_team_contexts,
 )
+
+
+@pytest.fixture(autouse=True)
+def cleanup_team_contexts():
+    yield
+    clear_all_team_contexts()
+
 
 
 def test_is_developer_phone_helper():

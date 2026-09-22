@@ -29,6 +29,10 @@ def resolve_facilities_user(whatsapp_number: str) -> dict | None:
         None if the user doesn't exist at all
     """
     try:
+        from clients.config import TREAT_CHAITANYA_AS_TENANT_ONLY, is_chaitanya
+        if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(whatsapp_number):
+            return None
+
         res = supabase.table("users").select(
             "id, name, role, department, whatsapp_number, permitted_buildings"
         ).eq("whatsapp_number", whatsapp_number).execute()
@@ -175,6 +179,7 @@ def get_fuzzy_building_suggestions(text: str) -> list:
     return suggestions
 
 
+# pyrefly: ignore [bad-function-definition]
 def get_facilities_team_members(building: str = None) -> list:
     """
     Get all Facilities department users, optionally filtered by building.
