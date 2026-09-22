@@ -116,17 +116,34 @@ def detect_team_intent_from_text(text: str) -> str | None:
 
 def send_team_selection_prompt(to: str, custom_body: str | None = None):
     """
-    Prompt Kanav with the exact required team selection buttons:
+    Prompt Kanav / Developer with team selection buttons:
     "For which Team do you want to do this?"
     [Facilities Team]
     [Elara Home]
+    [Factech Automation] (for developer)
     """
     body = custom_body or "For which Team do you want to do this?"
+    clean_num = clean_phone_number(to)
     buttons = [
         {"id": "team_sel_facilities", "title": "Facilities Team"},
         {"id": "team_sel_elara", "title": "Elara Home"},
     ]
-    return send_interactive_buttons(to, body, buttons)
+    if clean_num == DEVELOPER_PHONE:
+        buttons.append({"id": "team_sel_factech", "title": "Factech Automation"})
+
+    ok = send_interactive_buttons(to, body, buttons)
+    if not ok:
+        menu_items = (
+            f"{body}\n\n"
+            f"1️⃣ *Facilities Team*\n"
+            f"2️⃣ *Elara Home*\n"
+        )
+        if clean_num == DEVELOPER_PHONE:
+            menu_items += f"3️⃣ *Factech Automation*\n\n_Reply with 1, 2, or 3, or type 'facilities', 'elara', or 'factech'._"
+        else:
+            menu_items += f"\n_Reply with 1 or 2, or type 'facilities' or 'elara'._"
+        send_text(to, menu_items)
+    return ok
 
 
 def route_incoming_message(sender: str, text: str | None = None, button_id: str | None = None,
@@ -150,8 +167,14 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
     fac_user = resolve_facilities_user(clean_num)
 
     # ── 1. Handle Team Selection Buttons ─────────────────────────────────────
-    if button_id in ("team_sel_facilities", "team_sel_elara"):
-        selected_team = "facilities" if button_id == "team_sel_facilities" else "elara"
+    if button_id in ("team_sel_facilities", "team_sel_elara", "team_sel_factech"):
+        if button_id == "team_sel_factech":
+            selected_team = "factech"
+        elif button_id == "team_sel_facilities":
+            selected_team = "facilities"
+        else:
+            selected_team = "elara"
+
         set_active_team(clean_num, selected_team)
 
         from elara.session import clear_elara_session
@@ -160,7 +183,12 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
         clear_fac_session(clean_num)
 
         pending_text = pop_pending_action(clean_num)
-        if selected_team == "elara":
+        if selected_team == "factech":
+            from clients.flows import handle_client_hi
+            send_text(sender, "🏢 Switched context to *Factech Automation (Tenant Mode)*.\n\nYou are now in the tenant testing flow.")
+            handle_client_hi(sender)
+            return True
+        elif selected_team == "elara":
             from elara.flows.router import route_elara_message
             from elara.flows.home import show_elara_home
             send_text(sender, "🏠 Switched context to *Elara Home*.")
@@ -205,6 +233,35 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
 
     # Priority 1: DUAL-ACCESS USER (Kanav Director, Developer)
     if is_dual_access_user(clean_num):
+        active_team = get_active_team(clean_num)
+
+        # Developer Factech mode active context handling
+        if clean_num == DEVELOPER_PHONE and active_team == "factech":
+            if clean_msg in ("switch team", "switch teams", "change team", "team menu"):
+                body = "👋 Hello *Developer*!\n\nWhich Team would you like to access?"
+                send_team_selection_prompt(sender, custom_body=body)
+                return True
+            elif clean_msg in ("switch to facilities", "facilities team", "facilities"):
+                set_active_team(clean_num, "facilities")
+                from facilities.flows.home import show_home
+                send_text(sender, "🏢 Switched context to *Facilities Team*.")
+                show_home(sender, fac_user or {"name": "Developer", "role": "Developer"})
+                return True
+            elif clean_msg in ("switch to elara", "elara home", "open elara", "elara"):
+                set_active_team(clean_num, "elara")
+                from elara.flows.home import show_elara_home
+                send_text(sender, "🏠 Switched context to *Elara Home*.")
+                show_elara_home(sender, elara_user or {"name": "Developer", "role": "Developer"})
+                return True
+            elif clean_msg in ("switch to factech", "switch factech", "factech", "factech automation", "open factech"):
+                set_active_team(clean_num, "factech")
+                send_text(sender, "🏢 Switched context to *Factech Automation (Tenant Mode)*.\n\nYou are now in the tenant testing flow.")
+                from clients.flows import handle_client_hi
+                handle_client_hi(sender)
+                return True
+            # When testing Factech, allow all other messages (greetings, 1/2/3, complaints) to flow to Factech
+            return False
+
         # 1. Greeting & Reset check ("hi", "hello", "hey", "start", "menu", "reset", "clear", "cancel"):
         # Explicit requirement: Clears all cached sessions & active team context
         # and prompts for team selection so user always gets a clean, fresh start.
@@ -248,6 +305,28 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
             return True
 
         # 3. Explicit switch command check
+        if clean_msg in ("switch to factech", "switch factech", "factech", "factech automation", "open factech"):
+            set_active_team(clean_num, "factech")
+            from elara.session import clear_elara_session
+            from facilities.flows.router import clear_session as clear_fac_session
+            clear_elara_session(clean_num)
+            clear_fac_session(clean_num)
+            send_text(sender, "🏢 Switched context to *Factech Automation (Tenant Mode)*.\n\nYou are now in the tenant testing flow.")
+            from clients.flows import handle_client_hi
+            handle_client_hi(sender)
+            return True
+
+        if clean_msg == "3" and clean_num == DEVELOPER_PHONE:
+            set_active_team(clean_num, "factech")
+            from elara.session import clear_elara_session
+            from facilities.flows.router import clear_session as clear_fac_session
+            clear_elara_session(clean_num)
+            clear_fac_session(clean_num)
+            send_text(sender, "🏢 Switched context to *Factech Automation (Tenant Mode)*.\n\nYou are now in the tenant testing flow.")
+            from clients.flows import handle_client_hi
+            handle_client_hi(sender)
+            return True
+
         if clean_msg in ("switch team", "switch to elara", "elara home", "open elara"):
             set_active_team(clean_num, "elara")
             from elara.flows.home import show_elara_home
@@ -283,6 +362,8 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
             from facilities.flows.router import route_facilities_message
             route_facilities_message(sender, text=text or "", button_id=button_id or "", user=fac_user or {}, voice_transcript=voice_transcript or "")
             return True
+        elif active_team == "factech":
+            return False
 
         # 6. Team intent is UNCLEAR / AMBIGUOUS for Kanav/Developer:
         # Prompt Kanav: "For which Team do you want to do this?" with buttons [Facilities Team] and [Elara Home]

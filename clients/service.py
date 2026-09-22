@@ -30,8 +30,13 @@ def lookup_clients_by_phone(phone: str) -> list:
     if not clean_num:
         return []
 
-    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(clean_num):
-        return [dict(CHAITANYA_TENANT_RECORD)]
+    # 0b. Developer Test Tenant Record (only active when in factech mode)
+    from clients.config import is_developer_phone, DEVELOPER_TENANT_RECORD
+    if is_developer_phone(phone) or is_developer_phone(clean_num):
+        from elara.team_router import get_active_team
+        if get_active_team(phone) == "factech" or get_active_team(clean_num) == "factech":
+            return [dict(DEVELOPER_TENANT_RECORD)]
+        return []
 
     # 1. Query Supabase
     try:
@@ -107,6 +112,13 @@ def get_active_client_context(phone: str) -> dict | None:
 
     clean_num = normalize_mobile_number(phone)
     if not clean_num:
+        return None
+
+    from clients.config import is_developer_phone, DEVELOPER_TENANT_RECORD
+    if is_developer_phone(phone) or is_developer_phone(clean_num):
+        from elara.team_router import get_active_team
+        if get_active_team(phone) == "factech" or get_active_team(clean_num) == "factech":
+            return dict(DEVELOPER_TENANT_RECORD)
         return None
 
     if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(clean_num):

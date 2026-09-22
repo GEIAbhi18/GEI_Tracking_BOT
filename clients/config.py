@@ -98,3 +98,32 @@ def is_chaitanya(identifier: str | None) -> bool:
         return True
     return False
 
+
+# ── Developer Tenant Testing Support ─────────────────────────────────────────
+from elara.config import DEVELOPER_PHONE
+
+DEVELOPER_TENANT_RECORD = {
+    "building": "GEBB2",
+    "company_name": "Good Earth Infra (Dev Test)",
+    "floor": "Ground Floor",
+    "unit_number": "001",
+    "admin_name": "Abhijeet (Developer)",
+    "designation": "Developer / Admin",
+    "mobile_number": DEVELOPER_PHONE,
+    "email": "developer@gei.com",
+    "factech_client_id": None,
+    "is_active": True,
+    "source_sheet": "MASTER",
+    "sync_key": "dev_test_factech_record",
+}
+
+
+def is_developer_phone(identifier: str | None) -> bool:
+    """Checks if a given phone matches the developer."""
+    if not identifier:
+        return False
+    # pyrefly: ignore [unnecessary-type-conversion]
+    digits = "".join(c for c in str(identifier) if c.isdigit())
+    return digits == DEVELOPER_PHONE or digits.endswith(DEVELOPER_PHONE[-10:])
+
+
