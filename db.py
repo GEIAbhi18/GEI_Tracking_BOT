@@ -4,6 +4,37 @@ from datetime import datetime, timedelta
 import threading as _threading
 
 
+def _make_default_mock_client():
+    from unittest.mock import MagicMock
+    mock_client = MagicMock()
+    table_mocks = {}
+
+    def get_mock_table(table_name):
+        if table_name in table_mocks:
+            return table_mocks[table_name]
+        t = MagicMock()
+        exec_mock = MagicMock()
+        exec_mock.data = []
+        exec_mock.count = 0
+        t.select.return_value = t
+        t.insert.return_value = t
+        t.update.return_value = t
+        t.delete.return_value = t
+        t.eq.return_value = t
+        t.neq.return_value = t
+        t.ilike.return_value = t
+        t.in_.return_value = t
+        t.order.return_value = t
+        t.limit.return_value = t
+        t.execute.return_value = exec_mock
+        table_mocks[table_name] = t
+        return t
+
+    mock_client.table.side_effect = get_mock_table
+    mock_client.rpc.return_value = MagicMock(execute=MagicMock(return_value=MagicMock(data=[], count=0)))
+    return mock_client
+
+
 class _LazySupabase:
     """Lazy-init wrapper: creates the Supabase client on first use instead of
     at import time, so gunicorn can bind the port without waiting for a
@@ -17,13 +48,11 @@ class _LazySupabase:
                 if self._client is None:  # double-checked locking
                     try:
                         if not SUPABASE_URL or not SUPABASE_KEY:
-                            from unittest.mock import MagicMock
-                            type(self)._client = MagicMock()
+                            type(self)._client = _make_default_mock_client()
                         else:
                             type(self)._client = create_client(SUPABASE_URL, SUPABASE_KEY)
                     except Exception:
-                        from unittest.mock import MagicMock
-                        type(self)._client = MagicMock()
+                        type(self)._client = _make_default_mock_client()
         return self._client
 
     def __getattr__(self, name):

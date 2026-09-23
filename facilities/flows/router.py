@@ -33,8 +33,8 @@ def get_session(whatsapp_number: str) -> dict | None:
         res = supabase.table("facilities_sessions").select("*").eq(
             "whatsapp_number", whatsapp_number
         ).execute()
-        if res.data:
-            session = res.data[0]
+        if res and isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
+            session = dict(res.data[0])
             # Parse JSON fields
             if isinstance(session.get("draft_task_json"), str):
                 try:

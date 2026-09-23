@@ -19,8 +19,8 @@ def resolve_elara_user(whatsapp_number: str) -> dict | None:
     try:
         # Check by clean phone
         res = supabase.table("elara_users").select("*").eq("phone", clean_num).execute()
-        if res.data:
-            user = res.data[0]
+        if res and isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
+            user = dict(res.data[0])
             user["is_elara_user"] = True
             return user
 
@@ -28,8 +28,8 @@ def resolve_elara_user(whatsapp_number: str) -> dict | None:
         if len(clean_num) > 10 and clean_num.startswith("91"):
             short_num = clean_num[2:]
             res = supabase.table("elara_users").select("*").eq("phone", short_num).execute()
-            if res.data:
-                user = res.data[0]
+            if res and isinstance(res.data, list) and len(res.data) > 0 and isinstance(res.data[0], dict):
+                user = dict(res.data[0])
                 user["is_elara_user"] = True
                 return user
 

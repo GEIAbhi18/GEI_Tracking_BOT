@@ -37,10 +37,10 @@ def resolve_facilities_user(whatsapp_number: str) -> dict | None:
             "id, name, role, department, whatsapp_number, permitted_buildings"
         ).eq("whatsapp_number", whatsapp_number).execute()
 
-        if not res.data:
+        if not res or not isinstance(res.data, list) or not res.data or not isinstance(res.data[0], dict):
             return None
 
-        user = res.data[0]
+        user = dict(res.data[0])
         role = user.get("role", "")
         department = user.get("department", "")
         user["is_facilities_user"] = (

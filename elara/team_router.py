@@ -305,23 +305,7 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
             send_team_selection_prompt(sender, custom_body=body)
             return True
 
-        # 2. Check if user is in an active in-flight multi-step flow
-        from elara.session import get_elara_session
-        from facilities.flows.router import get_session as get_fac_session
-
-        elara_sess = get_elara_session(clean_num)
-        if elara_sess and elara_sess.get("flow_state"):
-            from elara.flows.router import route_elara_message
-            route_elara_message(sender, text=text, button_id=button_id, user=elara_user, voice_transcript=voice_transcript)
-            return True
-
-        fac_sess = get_fac_session(clean_num)
-        if fac_sess and fac_sess.get("current_flow_state"):
-            from facilities.flows.router import route_facilities_message
-            route_facilities_message(sender, text=text or "", button_id=button_id or "", user=fac_user or {}, voice_transcript=voice_transcript or "")
-            return True
-
-        # 3. Explicit switch command check
+        # 2. Explicit switch command check
         if clean_msg in ("switch to factech", "switch factech", "factech", "factech automation", "open factech"):
             set_active_team(clean_num, "factech")
             from elara.session import clear_elara_session
@@ -354,6 +338,22 @@ def route_incoming_message(sender: str, text: str | None = None, button_id: str 
             set_active_team(clean_num, "facilities")
             from facilities.flows.home import show_home
             show_home(sender, fac_user or {"name": "Kanav", "role": "Director"})
+            return True
+
+        # 3. Check if user is in an active in-flight multi-step flow
+        from elara.session import get_elara_session
+        from facilities.flows.router import get_session as get_fac_session
+
+        elara_sess = get_elara_session(clean_num)
+        if elara_sess and isinstance(elara_sess, dict) and elara_sess.get("flow_state"):
+            from elara.flows.router import route_elara_message
+            route_elara_message(sender, text=text, button_id=button_id, user=elara_user, voice_transcript=voice_transcript)
+            return True
+
+        fac_sess = get_fac_session(clean_num)
+        if fac_sess and isinstance(fac_sess, dict) and fac_sess.get("current_flow_state"):
+            from facilities.flows.router import route_facilities_message
+            route_facilities_message(sender, text=text or "", button_id=button_id or "", user=fac_user or {}, voice_transcript=voice_transcript or "")
             return True
 
         # 4. Check if text clearly indicates a specific team
