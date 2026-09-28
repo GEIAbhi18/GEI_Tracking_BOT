@@ -90,6 +90,7 @@ async def test_perform_update_with_note(mocker):
     mocker.patch("core.intent_handlers._resolve_user", return_value={"id": "u-1"})
     mocker.patch("core.intent_handlers.update_context")
     mocker.patch("core.intent_handlers.set_state")
+    mocker.patch("core.intent_handlers.check_building_access", return_value=True)
     mock_save_update = mocker.patch("core.intent_handlers.save_update")
 
     mock_send = mocker.AsyncMock()

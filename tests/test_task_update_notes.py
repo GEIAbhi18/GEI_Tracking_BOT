@@ -14,6 +14,7 @@ async def test_perform_update_explicit_progress_and_note(mocker):
     mocker.patch("core.intent_handlers.resolve_task_from_list", return_value={"id": "t-101", "name": "Set meeting with Goyal", "progress": 0})
     mocker.patch("core.intent_handlers._resolve_user", return_value={"id": "user-123"})
     mocker.patch("core.intent_handlers.update_context")
+    mocker.patch("core.intent_handlers.check_building_access", return_value=True)
 
     await perform_update("Set meeting with Goyal", "25%", "user-123", mock_send_reply, note="meeting requested")
 
@@ -39,6 +40,7 @@ async def test_perform_update_default_progress_10_to_35(mocker):
     mocker.patch("core.intent_handlers.resolve_task_from_list", return_value={"id": "t-102", "name": "Inspect site generator", "progress": 0})
     mocker.patch("core.intent_handlers._resolve_user", return_value={"id": "user-123"})
     mocker.patch("core.intent_handlers.update_context")
+    mocker.patch("core.intent_handlers.check_building_access", return_value=True)
 
     # Pass progress_str = None
     await perform_update("Inspect site generator", None, "user-123", mock_send_reply, note="initial check done")
