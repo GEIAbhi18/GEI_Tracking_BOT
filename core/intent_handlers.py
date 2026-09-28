@@ -1,18 +1,27 @@
+import sys
+import os
 import logging
-import json
 import re
+
+# Ensure project root is in sys.path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# pyrefly: ignore [missing-import]
 from db import (
-    get_all_tasks, save_update, create_ticket, get_user_by_telegram_id, 
-    get_projects, complete_task, add_blocker, get_tasks_for_user, get_task_blockers,
-    get_open_tickets, get_user_by_name, remove_blocker, update_task_image
+    get_all_tasks, save_update, get_user_by_telegram_id, 
+    get_projects, add_blocker, get_tasks_for_user,
+    get_open_tickets, get_user_by_name, remove_blocker, update_task_image,
+    check_building_access
 )
+# pyrefly: ignore [missing-import]
 from core.conversation_state import set_state, clear_state
+# pyrefly: ignore [missing-import]
 from core.context_manager import update_context, get_context
+# pyrefly: ignore [missing-import]
 from core.utils import parse_human_date, resolve_project, resolve_task_from_list
+# pyrefly: ignore [missing-import]
 from core.error_messages import (
-    get_error_message, friendly_task_not_found, friendly_project_not_found,
-    friendly_clarify, friendly_system_error, friendly_missing_info,
-    friendly_permission_denied,
+    friendly_task_not_found, friendly_clarify, friendly_system_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -29,6 +38,7 @@ def _resolve_user(user_id):
     
     # 2. Fallback: try WhatsApp number (works for WhatsApp users)
     try:
+        # pyrefly: ignore [missing-import]
         from whatsapp.task_assignment import get_user_by_whatsapp
         u_info = get_user_by_whatsapp(str(user_id))
         if u_info:
@@ -38,6 +48,7 @@ def _resolve_user(user_id):
         
     # 3. Fallback: try DB ID / UUID
     try:
+        # pyrefly: ignore [missing-import]
         from db import get_user_by_id
         u_info = get_user_by_id(str(user_id))
         if u_info:
@@ -57,7 +68,6 @@ async def handle_task_update(entities, user_id, context, send_reply_func, images
 
     
     # Context Management: Prompt user to select project first if active_project_id is missing and task_name is a pure number
-    import re
     is_numeric_task = task_name and re.match(r'^(task\s*)?\d+$', str(task_name).lower().strip())
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
@@ -137,7 +147,6 @@ async def handle_complete_task(entities, user_id, context, send_reply_func, imag
         task_name = context["recent_task_name"]
 
     # Context Management check
-    import re
     is_numeric_task = task_name and re.match(r'^(task\s*)?\d+$', str(task_name).lower().strip())
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
@@ -206,7 +215,6 @@ async def handle_add_blocker(entities, user_id, context, send_reply_func, images
         task_name = context["recent_task_name"]
 
     # Context Management check
-    import re
     is_numeric_task = task_name and re.match(r'^(task\s*)?\d+$', str(task_name).lower().strip())
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
@@ -352,7 +360,9 @@ def filter_tasks(tasks, filters):
     from datetime import datetime, timedelta
     
     # Simple naive date for comparison matching JS
+    # pyrefly: ignore [missing-import]
     import pytz
+    # pyrefly: ignore [missing-import]
     from config import TIMEZONE
     tz = pytz.timezone(TIMEZONE)
     today = datetime.now(tz).date()
@@ -460,9 +470,9 @@ def build_building_grouped_tasks(building_structured_data, personal_tasks=None):
         
         has_tasks = any(p.get("tasks") for p in projects)
             
-        lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
         lines.append(f"🏢 *{b_name}*")
-        lines.append(f"━━━━━━━━━━━━━━━━━━━━")
+        lines.append("━━━━━━━━━━━━━━━━━━━━")
         lines.append("")
         
         if not has_tasks:
@@ -552,7 +562,6 @@ def build_grouped_tasks_list_py(tasks):
     if not tasks: return "No tasks found."
     
     from collections import defaultdict
-    from datetime import datetime
     
     grouped = defaultdict(list)
     for idx, t in enumerate(tasks):
@@ -697,6 +706,7 @@ def _resolve_user(user_id):
     
     # 3. Fallback: try WhatsApp number directly
     try:
+        # pyrefly: ignore [missing-import]
         from whatsapp.task_assignment import get_user_by_whatsapp
         u_info = get_user_by_whatsapp(str(user_id))
         if u_info:
@@ -706,6 +716,7 @@ def _resolve_user(user_id):
         
     # 4. Fallback: try DB ID / UUID
     try:
+        # pyrefly: ignore [missing-import]
         from db import get_user_by_id
         u_info = get_user_by_id(str(user_id))
         if u_info:
@@ -723,6 +734,7 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         await send_reply_func("Your account is not registered. Please contact Kanav.")
         return
 
+    # pyrefly: ignore [missing-import]
     from db import get_tasks_by_buildings, get_all_tasks
     
     raw_message = (entities.get("raw_text") or "").lower()
@@ -762,9 +774,11 @@ async def handle_query_tasks(entities, user_id, context, send_reply_func):
         elif is_only_team:
             msg = "📋 *Team Tasks*\n\nNo team tasks currently assigned for your assigned buildings."
         else:
+            # pyrefly: ignore [missing-import]
             from db import get_user_buildings
             u_b = get_user_buildings(target_user_id)
-            if not u_b and u_info.get("role") not in ["Director", "Developer"]:
+            user_role = u_info.get("role") if u_info else None
+            if not u_b and user_role not in ["Director", "Developer"]:
                 msg = "No building/task access assigned to your profile."
             else:
                 msg = "No active tasks found."
@@ -786,7 +800,6 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
         await send_reply_func("Which task do you want to see details for? (e.g., 'task 1')")
         return
         
-    import re
     is_numeric_task = task_reference and re.match(r'^(task\s*)?\d+$', str(task_reference).lower().strip())
     ctx = get_context(user_id)
     active_project_id = ctx.get("active_project_id")
@@ -804,7 +817,6 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
         if not active_project_id:
             # Ask for project context to show info
             set_state(user_id, {"action": "get_task_detail", "step": "waiting_for_project", "task_query_pending": task_reference})
-            from db import get_projects
             projects = get_projects()
             p_list = "\n".join([f"{idx+1}. {p['name']}" for idx, p in enumerate(projects)])
             await send_reply_func(f"Context missing: Which project is this task in? (Type the number)\n\n{p_list}")
@@ -829,12 +841,12 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
     u_info = _resolve_user(user_id)
     target_uid = u_info['id'] if u_info else None
     if target_uid:
-        from db import check_building_access
         if not check_building_access(target_uid, match['id']):
             await send_reply_func("🚫 Unauthorized: You do not have access to view details for tasks in this building.")
             return
 
     # Fetch full details
+    # pyrefly: ignore [missing-import]
     from db import supabase
     t_id = match['id']
     
@@ -856,7 +868,7 @@ async def handle_get_task_detail(entities, user_id, context, send_reply_func):
             dl = str(dl)[:10]
 
     # Format Message (Step 5)
-    msg = f"📋 **Task Details:**\n\n"
+    msg = "📋 **Task Details:**\n\n"
     msg += f"**Project:** {p_name}\n"
     msg += f"**Task:** {match['name']}\n"
     msg += f"**Deadline:** {dl}\n\n"
@@ -924,6 +936,7 @@ async def handle_view_tickets(entities, user_id, context, send_reply_func):
 async def handle_reply_ticket(entities, user_id, context, send_reply_func):
     ticket_index = entities.get("ticket_index")
     reply_msg = entities.get("message")
+    # pyrefly: ignore [missing-import]
     from db import get_open_tickets, add_ticket_message
     tickets = get_open_tickets()
     if ticket_index and 1 <= ticket_index <= len(tickets):
@@ -939,6 +952,7 @@ async def handle_reply_ticket(entities, user_id, context, send_reply_func):
 
 async def handle_close_ticket(entities, user_id, context, send_reply_func):
     ticket_index = entities.get("ticket_index")
+    # pyrefly: ignore [missing-import]
     from db import get_open_tickets, close_ticket
     tickets = get_open_tickets()
     if ticket_index and 1 <= ticket_index <= len(tickets):
@@ -949,12 +963,15 @@ async def handle_close_ticket(entities, user_id, context, send_reply_func):
         await send_reply_func(f"Couldn't find Ticket {ticket_index}.\nTry: 'view tickets' to see all open tickets")
 
 def generate_pdf_report(team_name=None):
+    # pyrefly: ignore [missing-import]
     from fpdf import FPDF
-    import os
     from datetime import datetime
+    # pyrefly: ignore [missing-import]
     import pytz
     from core.utils import format_date_human
+    # pyrefly: ignore [missing-import]
     from db import supabase, get_user_by_id, get_projects, get_all_tasks
+    # pyrefly: ignore [missing-import]
     from config import TIMEZONE
     from collections import defaultdict
 
@@ -1571,6 +1588,7 @@ async def handle_create_ticket(entities, user_id, context, send_reply_func):
     await send_reply_func(msg)
 
 async def handle_create_project(entities, user_id, context, send_reply_func):
+    # pyrefly: ignore [missing-import]
     from db import get_buildings
     buildings = get_buildings()
     if not buildings:
@@ -1581,6 +1599,7 @@ async def handle_create_project(entities, user_id, context, send_reply_func):
     set_state(user_id, {"action": "create_project", "step": "waiting_for_building", "buildings": [b['id'] for b in buildings]})
     # Try WhatsApp interactive buttons (max 3)
     try:
+        # pyrefly: ignore [missing-import]
         from whatsapp.ux import send_interactive_buttons
         buttons = [{"id": f"create_proj_b_{b['name']}", "title": b['name']} for b in buildings[:3]]
         send_interactive_buttons(str(user_id), "Which building is this new project for?", buttons)
@@ -1636,6 +1655,7 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
         parsed_deadline = parse_human_date(deadline_raw) if deadline_raw else None
 
         try:
+            # pyrefly: ignore [missing-import]
             from db import add_task
             project_id = match['id'] if match else None
             
@@ -1662,12 +1682,12 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
             from core.utils import format_date_human
             f_dl = format_date_human(parsed_deadline) if parsed_deadline else "Not set"
             
+            project_name = match['name'] if match else ("Personal" if is_personal else "None")
             # Format custom messages based on personal or assigned status
             if is_personal:
                 msg_body = f"✅ Personal reminder created successfully!\n📌 Task: {task_name_for_creation}\n📅 Deadline: {f_dl}"
             else:
                 assigned_text = f"\n👤 Assigned to: {assignee_name}" if assignee_name else ""
-                project_name = match['name'] if match else "None"
                 msg_body = (
                     f"✅ Task created successfully!\n"
                     f"📌 Task: {task_name_for_creation}\n"
@@ -1679,11 +1699,12 @@ async def handle_create_task(entities, user_id, context, send_reply_func):
 
             # Trigger WA task assignment if creator is Kanav
             try:
+                # pyrefly: ignore [missing-import]
                 from core.update_engine import _trigger_wa_task_assignment
                 _trigger_wa_task_assignment(
                     task_id=result['id'],
                     task_name=task_name_for_creation,
-                    project_name=match['name'],
+                    project_name=project_name,
                     due_date=f_dl,
                     creator_telegram_id=user_id,
                     creator_db_id=creator_db_id,
@@ -1798,8 +1819,9 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     # Check for ambiguous matches — ask user to choose
-    if not match and resolve_task_from_list.ambiguous_matches:
-        amb = resolve_task_from_list.ambiguous_matches
+    amb_matches = getattr(resolve_task_from_list, "ambiguous_matches", [])
+    amb: list = amb_matches if isinstance(amb_matches, list) else []
+    if not match and amb:
         msg = f"Multiple tasks match *\"{task_query}\"*. Which one?\n\n"
         for i, t in enumerate(amb, 1):
             p_name = t.get('projects', {}).get('name', '') if isinstance(t.get('projects'), dict) else ''
@@ -1827,7 +1849,6 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     u_info = _resolve_user(user_id)
     emp_uuid = u_info['id'] if u_info else None
     if emp_uuid:
-        from db import check_building_access
         if not check_building_access(emp_uuid, match['id']):
             await send_reply_func("🚫 Unauthorized: You do not have permission to update tasks from this building.")
             return
@@ -1866,7 +1887,7 @@ async def perform_update(task_query, progress_str, user_id, send_reply_func, ima
     })
     
     dl_msg = f"\nDeadline: {deadline}" if deadline else ""
-    proof_msg = f"\nProof: [Image]" if images else ""
+    proof_msg = "\nProof: [Image]" if images else ""
     note_msg = f"\nNote: {note}" if note else ""
     await send_reply_func(
         f"Update saved ✅\nTask: {match['name']}\nProgress: {progress}%{dl_msg}{note_msg}{proof_msg}\n\n"
@@ -1882,8 +1903,9 @@ async def perform_add_blocker(task_query, description, user_id, send_reply_func,
     match = resolve_task_from_list(task_query, tasks, last_list_ids=last_list, active_project_id=active_project_id)
     
     # Check for ambiguous matches — ask user to choose
-    if not match and resolve_task_from_list.ambiguous_matches:
-        amb = resolve_task_from_list.ambiguous_matches
+    amb_matches = getattr(resolve_task_from_list, "ambiguous_matches", [])
+    amb: list = amb_matches if isinstance(amb_matches, list) else []
+    if not match and amb:
         msg = f"Multiple tasks match *\"{task_query}\"*. Which one?\n\n"
         for i, t in enumerate(amb, 1):
             p_name = t.get('projects', {}).get('name', '') if isinstance(t.get('projects'), dict) else ''
@@ -1935,7 +1957,6 @@ async def perform_add_image(task_query, user_id, send_reply_func, images=None):
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="add_image")
-    from core.conversation_state import clear_state
     clear_state(user_id)
     
     await send_reply_func(f"Image added and updated successfully for '{match['name']}'. 🖼️")
@@ -1983,6 +2004,5 @@ async def perform_remove_blocker(task_query, user_id, send_reply_func):
     
     # Update Context
     update_context(user_id, task_id=match['id'], task_name=match['name'], last_command="remove_blocker")
-    from core.conversation_state import clear_state
     clear_state(user_id)
     await send_reply_func(f"Blocker removed from '{match['name']}' 🟢")

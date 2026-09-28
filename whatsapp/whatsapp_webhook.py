@@ -732,6 +732,9 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             elif clean_cmd in ("3", "complaint history", "history", "previous complaints", "all complaints"):
                 handle_client_button_reply(sender, "complaint_history")
                 return
+            elif clean_cmd in ("4", "update complaint", "update", "edit complaint", "modify complaint"):
+                handle_client_button_reply(sender, "update_complaint")
+                return
             elif any(clean_cmd == g or clean_cmd.startswith(f"{g} ") for g in ("menu", "main menu", "hi", "hello", "hey", "help", "factech", "support")):
                 handle_client_hi(sender)
                 return

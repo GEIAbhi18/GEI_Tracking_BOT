@@ -9,7 +9,7 @@ from clients.service import (
     set_active_client_context,
     clear_client_context,
 )
-from clients.factech_client import create_complaint, get_complaints
+from clients.factech_client import create_complaint, get_complaints, update_complaint
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +23,16 @@ def is_registered_client(sender_phone: str) -> bool:
 def handle_client_hi(sender_phone: str):
     """
     Handles greeting ('HI', 'hello', etc.) from a registered client.
-    Renders personalized greeting and 3 interactive buttons.
+    Renders personalized greeting and interactive options.
     If multiple units exist for the sender, shows a selection menu.
     """
     clients = lookup_clients_by_phone(sender_phone)
     if not clients:
-        # Unknown number message
         send_unregistered_client_message(sender_phone)
         return
 
     # If multiple units associated with this number
     if len(clients) > 1:
-        current_ctx = get_active_client_context(sender_phone)
-        # If user already selected a context recently, we can use it, but also offer choice
         admin_name = clients[0].get("admin_name") or "there"
         body = (
             f"Hi {admin_name} 👋\n\n"
@@ -43,7 +40,6 @@ def handle_client_hi(sender_phone: str):
             f"Please select your company/unit to continue:"
         )
 
-        # Max 3 buttons or list message
         if len(clients) <= 3:
             buttons = []
             for idx, c in enumerate(clients):
@@ -74,7 +70,7 @@ def handle_client_hi(sender_phone: str):
 
 
 def send_client_welcome_menu(sender_phone: str, client: dict):
-    """Sends the 3 interactive options to the client with guaranteed plain text fallback."""
+    """Sends the 3 primary interactive options to the client with plain text fallback."""
     admin_name = client.get("admin_name") or "there"
     company = client.get("company_name", "N/A")
     building = client.get("building", "N/A")
@@ -89,8 +85,7 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
         f"How can I help you today?"
     )
 
-    # 3 Interactive WhatsApp Buttons
-    # Note: "Check Status" is 12 chars, strictly within Meta's 20-char limit
+    # 3 Interactive WhatsApp Buttons (Meta strictly enforces max 3 buttons, <= 20 chars each)
     buttons = [
         {"id": "log_new_complaint", "title": "Log New Complaint"},
         {"id": "check_complaint_status", "title": "Check Status"},
@@ -103,10 +98,35 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
             f"{body}\n\n"
             f"1️⃣ *Log New Complaint*\n"
             f"2️⃣ *Check Status*\n"
-            f"3️⃣ *Complaint History*\n\n"
-            f"_Reply with 1, 2, or 3, or type your complaint description directly._"
+            f"3️⃣ *Complaint History*\n"
+            f"4️⃣ *Update Complaint*\n\n"
+            f"_Reply with 1, 2, 3, or 4, or type your complaint description directly._"
         )
         send_text(sender_phone, text_menu)
+
+
+def send_post_complaint_options(sender_phone: str, client: dict, complaint_id: str | None = None):
+    """
+    Shows appropriate next options after complaint actions (create, update)
+    without triggering the main greeting / welcome menu again.
+    """
+    body = "What would you like to do next?"
+    buttons = [
+        {"id": "check_complaint_status", "title": "Check Status"},
+        {"id": "update_complaint", "title": "Update Complaint"},
+        {"id": "log_new_complaint", "title": "Log New Complaint"},
+    ]
+
+    ok = send_interactive_buttons(sender_phone, body, buttons)
+    if not ok:
+        fallback = (
+            f"{body}\n\n"
+            f"1️⃣ *Check Status* (Reply 'status' or '2')\n"
+            f"2️⃣ *Update Complaint* (Reply 'update' or '4')\n"
+            f"3️⃣ *Log New Complaint* (Reply 'log' or '1')\n"
+            f"4️⃣ *Main Menu* (Reply 'menu')\n"
+        )
+        send_text(sender_phone, fallback)
 
 
 def send_unregistered_client_message(sender_phone: str):
@@ -119,6 +139,115 @@ def send_unregistered_client_message(sender_phone: str):
     send_text(sender_phone, text)
 
 
+def handle_update_complaint_initiation(sender_phone: str, client: dict, target_cid: str | None = None):
+    """
+    Initiates the update complaint flow:
+    - Fetches client's active complaints.
+    - If none, informs user.
+    - If single complaint or target_cid provided, prompts for update note.
+    - If multiple complaints, prompts user to select which complaint to update.
+    """
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+    complaints = get_complaints(client, days_back=60, active_only=True)
+
+    if not complaints:
+        msg = f"ℹ️ You currently have no active complaints to update for *{company}* (Unit {unit}).\n\nWould you like to log a new complaint?"
+        buttons = [
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "complaint_history", "title": "Complaint History"},
+            {"id": "client_main_menu", "title": "Main Menu"},
+        ]
+        if not send_interactive_buttons(sender_phone, msg, buttons):
+            send_text(sender_phone, f"{msg}\n\n1️⃣ Log New Complaint\n2️⃣ Complaint History\n3️⃣ Main Menu")
+        return
+
+    selected = None
+    if target_cid:
+        # pyrefly: ignore [unnecessary-type-conversion]
+        clean_target = str(target_cid).lstrip("#").strip().lower()
+        for c in complaints:
+            cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#").strip().lower()
+            if clean_target == cid:
+                selected = c
+                break
+
+    if not selected:
+        if len(complaints) == 1:
+            selected = complaints[0]
+        else:
+            # Multiple active complaints — ask client to choose
+            body = f"📋 *Select Complaint to Update* ({company} - Unit {unit})\n\nPlease choose which active complaint you want to update:"
+            buttons = []
+            for c in complaints[:3]:
+                cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "")
+                cat = c.get("complaint_category") or {}
+                nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Issue"
+                title = f"#{cid} ({nature})"[:20]
+                buttons.append({"id": f"upd_cid_{cid}", "title": title})
+
+            options_text = ""
+            for idx, c in enumerate(complaints[:5], start=1):
+                cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "")
+                cat = c.get("complaint_category") or {}
+                nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
+                options_text += f"{idx}️⃣ *#{cid}* — {nature}\n"
+
+            payload = {
+                "whatsapp_number": sender_phone,
+                "action": "AWAITING_CLIENT_COMPLAINT_SELECT",
+                "metadata": {
+                    "client_context": client,
+                    "active_complaints": complaints[:5],
+                },
+            }
+            try:
+                supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
+            except Exception as e:
+                logger.error(f"Error setting WA state: {e}")
+
+            buttons_sent = False
+            if len(complaints) <= 3:
+                buttons_sent = send_interactive_buttons(sender_phone, body, buttons)
+
+            if not buttons_sent:
+                send_text(
+                    sender_phone,
+                    f"{body}\n\n{options_text}\n_Reply with the number (e.g. 1) or Complaint ID._",
+                )
+            return
+
+    # Single or selected complaint
+    cid = str(selected.get("com_no") or selected.get("complaintId") or selected.get("id") or "")
+    cat = selected.get("complaint_category") or {}
+    nature = (cat.get("name") if isinstance(cat, dict) else None) or selected.get("sub_category") or selected.get("nature") or "Maintenance"
+    desc = selected.get("description") or selected.get("details") or ""
+
+    payload = {
+        "whatsapp_number": sender_phone,
+        "action": "AWAITING_CLIENT_COMPLAINT_UPDATE",
+        "metadata": {
+            "client_context": client,
+            "target_complaint_id": cid,
+            "complaint": selected,
+        },
+    }
+    try:
+        supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
+    except Exception as e:
+        logger.error(f"Error setting WA state: {e}")
+
+    prompt_msg = (
+        f"📝 *Update Complaint #{cid}*\n\n"
+        f"🏢 *{company}* (Unit {unit})\n"
+        f"Issue: *{nature}*\n"
+        f"Current Details: _{desc[:120]}_\n\n"
+        f"Please enter the updated details or additional note for this complaint:\n"
+        f"_(Reply with 'cancel' to exit)_"
+    )
+    send_text(sender_phone, prompt_msg)
+
+
 def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | None = None):
     """
     Handles interactive button / list actions for clients:
@@ -126,6 +255,9 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
       - log_new_complaint
       - check_complaint_status
       - complaint_history
+      - update_complaint
+      - upd_cid_{cid}
+      - client_main_menu
     """
     logger.info(f"Client button handler: {button_id} from {sender_phone}")
 
@@ -152,11 +284,15 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             send_unregistered_client_message(sender_phone)
             return
 
-    # 2. Log New Complaint
+    # 2. Main menu return
+    if button_id == "client_main_menu":
+        send_client_welcome_menu(sender_phone, client)
+        return
+
+    # 3. Log New Complaint
     if button_id == "log_new_complaint":
         company = client.get("company_name", "")
         unit = client.get("unit_number", "")
-        # Set state to wait for complaint description
         try:
             payload = {
                 "whatsapp_number": sender_phone,
@@ -178,7 +314,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
         send_text(sender_phone, prompt_msg)
         return
 
-    # 3. Check Complaint Status
+    # 4. Check Complaint Status
     elif button_id == "check_complaint_status":
         company = client.get("company_name", "")
         unit = client.get("unit_number", "")
@@ -191,6 +327,12 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
                 sender_phone,
                 f"✅ You currently have no active complaints for *{company}* (Unit {unit}). Everything is in good order!",
             )
+            buttons = [
+                {"id": "log_new_complaint", "title": "Log New Complaint"},
+                {"id": "complaint_history", "title": "Complaint History"},
+                {"id": "client_main_menu", "title": "Main Menu"},
+            ]
+            send_interactive_buttons(sender_phone, "Options:", buttons)
             return
 
         msg = f"📋 *Your Active Complaints:*\n\n"
@@ -210,9 +352,17 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             msg += f"  Updated: {updated}\n\n"
 
         send_text(sender_phone, msg.strip())
+
+        # Next actions buttons
+        buttons = [
+            {"id": "update_complaint", "title": "Update Complaint"},
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "complaint_history", "title": "Complaint History"},
+        ]
+        send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
         return
 
-    # 4. Complaint History
+    # 5. Complaint History
     elif button_id == "complaint_history":
         company = client.get("company_name", "")
         unit = client.get("unit_number", "")
@@ -222,6 +372,12 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
 
         if not complaints:
             send_text(sender_phone, "No previous complaints were found for your account.")
+            buttons = [
+                {"id": "log_new_complaint", "title": "Log New Complaint"},
+                {"id": "check_complaint_status", "title": "Check Status"},
+                {"id": "client_main_menu", "title": "Main Menu"},
+            ]
+            send_interactive_buttons(sender_phone, "Options:", buttons)
             return
 
         msg = f"📜 *Your Complaint History:*\n\n"
@@ -232,17 +388,34 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             status = c.get("status") or "Closed"
             date = c.get("created_at") or c.get("closed_at") or c.get("createdAt") or "Recent"
 
-            msg += f"{idx}. *{c_id}*\n"
-            msg += f"   {nature}\n"
+            msg += f"{idx}. *#{c_id}*\n"
+            msg += f"   Issue: {nature}\n"
             msg += f"   Status: {status}\n"
             msg += f"   Date: {date}\n\n"
 
         send_text(sender_phone, msg.strip())
+
+        buttons = [
+            {"id": "check_complaint_status", "title": "Check Status"},
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "client_main_menu", "title": "Main Menu"},
+        ]
+        send_interactive_buttons(sender_phone, "Options:", buttons)
+        return
+
+    # 6. Update Complaint
+    elif button_id == "update_complaint":
+        handle_update_complaint_initiation(sender_phone, client)
+        return
+
+    elif button_id.startswith("upd_cid_"):
+        target_cid = button_id.replace("upd_cid_", "").strip()
+        handle_update_complaint_initiation(sender_phone, client, target_cid=target_cid)
         return
 
 
 def has_active_client_flow(sender_phone: str) -> bool:
-    """Checks if sender is currently awaiting complaint input."""
+    """Checks if sender is currently in an active complaint creation, selection, or update flow."""
     try:
         res = (
             supabase.table("wa_task_states")
@@ -250,8 +423,13 @@ def has_active_client_flow(sender_phone: str) -> bool:
             .eq("whatsapp_number", sender_phone)
             .execute()
         )
-        if res.data and res.data[0].get("action") == "AWAITING_CLIENT_COMPLAINT_DESC":
-            return True
+        if res.data:
+            action = res.data[0].get("action")
+            return action in (
+                "AWAITING_CLIENT_COMPLAINT_DESC",
+                "AWAITING_CLIENT_COMPLAINT_UPDATE",
+                "AWAITING_CLIENT_COMPLAINT_SELECT",
+            )
     except Exception:
         pass
     return False
@@ -259,7 +437,7 @@ def has_active_client_flow(sender_phone: str) -> bool:
 
 def handle_client_text(sender_phone: str, text: str) -> bool:
     """
-    Processes plain text when the client is in a complaint creation flow.
+    Processes plain text when the client is in a complaint creation or update flow.
     Returns True if handled, False otherwise.
     """
     try:
@@ -269,7 +447,15 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             .eq("whatsapp_number", sender_phone)
             .execute()
         )
-        if not res.data or res.data[0].get("action") != "AWAITING_CLIENT_COMPLAINT_DESC":
+        if not res.data:
+            return False
+
+        action = res.data[0].get("action")
+        if action not in (
+            "AWAITING_CLIENT_COMPLAINT_DESC",
+            "AWAITING_CLIENT_COMPLAINT_UPDATE",
+            "AWAITING_CLIENT_COMPLAINT_SELECT",
+        ):
             return False
 
         meta = res.data[0].get("metadata") or {}
@@ -279,54 +465,124 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             clients = lookup_clients_by_phone(sender_phone)
             client = clients[0] if clients else {}
 
-        # Clear the awaiting state
-        try:
-            supabase.table("wa_task_states").delete().eq(
-                "whatsapp_number", sender_phone
-            ).execute()
-        except Exception:
-            pass
-
         clean_text = text.strip()
+
+        # Cancellation check
         if clean_text.lower() in ("cancel", "exit", "menu"):
-            send_text(sender_phone, "Complaint logging cancelled.")
-            send_client_welcome_menu(sender_phone, client)
+            try:
+                supabase.table("wa_task_states").delete().eq(
+                    "whatsapp_number", sender_phone
+                ).execute()
+            except Exception:
+                pass
+            send_text(sender_phone, "Action cancelled.")
+            send_post_complaint_options(sender_phone, client)
             return True
 
-        # Send to Factech
-        send_text(sender_phone, "⏳ Registering your complaint with Factech...")
-        result = create_complaint(client, {
-            "nature": "General Maintenance",
-            "sub_nature": "",
-            "description": clean_text,
-        })
+        # Flow 1: New Complaint Creation
+        if action == "AWAITING_CLIENT_COMPLAINT_DESC":
+            try:
+                supabase.table("wa_task_states").delete().eq(
+                    "whatsapp_number", sender_phone
+                ).execute()
+            except Exception:
+                pass
 
-        if result.get("success"):
-            cid = result.get("complaint_id", "FT-Recorded")
+            send_text(sender_phone, "⏳ Registering your complaint with Factech...")
+            result = create_complaint(client, {
+                "nature": "General Maintenance",
+                "sub_nature": "",
+                "description": clean_text,
+            })
+
+            if result.get("success"):
+                cid = result.get("complaint_id", "FT-Recorded")
+                company = client.get("company_name", "")
+                unit = client.get("unit_number", "")
+                building = client.get("building", "")
+
+                confirmation = (
+                    f"✅ *Complaint Logged Successfully!*\n\n"
+                    f"🎫 *Complaint ID:* #{cid}\n"
+                    f"🏢 *Company:* {company}\n"
+                    f"📍 *Building:* {building} | *Unit:* {unit}\n"
+                    f"📝 *Description:* {clean_text}\n\n"
+                    f"Our facility team has received your ticket and is working on it."
+                )
+                send_text(sender_phone, confirmation)
+                send_post_complaint_options(sender_phone, client, complaint_id=cid)
+            else:
+                api_msg = result.get("message", "")
+                logger.warning(f"Factech complaint creation failed: {api_msg}")
+                send_text(
+                    sender_phone,
+                    f"Sorry, we're unable to submit your complaint right now.\n⚠️ _Reason: {api_msg}_\n\nPlease try again shortly.",
+                )
+                send_post_complaint_options(sender_phone, client)
+            return True
+
+        # Flow 2: Multiple Complaints Selection for Update
+        if action == "AWAITING_CLIENT_COMPLAINT_SELECT":
+            active_list = meta.get("active_complaints") or []
+            selected_cid = None
+
+            if clean_text.isdigit():
+                sel_idx = int(clean_text) - 1
+                if 0 <= sel_idx < len(active_list):
+                    selected_cid = active_list[sel_idx].get("com_no") or active_list[sel_idx].get("complaintId") or active_list[sel_idx].get("id")
+
+            if not selected_cid:
+                target_str = clean_text.lstrip("#").lower()
+                for c in active_list:
+                    cid_str = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#").lower()
+                    if target_str == cid_str or target_str in cid_str:
+                        selected_cid = c.get("com_no") or c.get("complaintId") or c.get("id")
+                        break
+
+            if selected_cid:
+                try:
+                    supabase.table("wa_task_states").delete().eq(
+                        "whatsapp_number", sender_phone
+                    ).execute()
+                except Exception:
+                    pass
+                handle_update_complaint_initiation(sender_phone, client, target_cid=str(selected_cid))
+                return True
+            else:
+                send_text(
+                    sender_phone,
+                    "⚠️ Could not find that complaint.\nPlease reply with the number (e.g. 1) or Complaint ID (or reply 'cancel'):",
+                )
+                return True
+
+        # Flow 3: Update Complaint Details Input
+        if action == "AWAITING_CLIENT_COMPLAINT_UPDATE":
+            target_cid = meta.get("target_complaint_id", "")
+            try:
+                supabase.table("wa_task_states").delete().eq(
+                    "whatsapp_number", sender_phone
+                ).execute()
+            except Exception:
+                pass
+
+            send_text(sender_phone, f"⏳ Updating complaint #{target_cid}...")
+            update_complaint(client, target_cid, {"description": clean_text})
+
             company = client.get("company_name", "")
             unit = client.get("unit_number", "")
             building = client.get("building", "")
 
             confirmation = (
-                f"✅ *Complaint Logged Successfully!*\n\n"
-                f"🎫 *Complaint ID:* #{cid}\n"
+                f"✅ *Complaint Updated Successfully!*\n\n"
+                f"🎫 *Complaint ID:* #{target_cid}\n"
                 f"🏢 *Company:* {company}\n"
                 f"📍 *Building:* {building} | *Unit:* {unit}\n"
-                f"📝 *Description:* {clean_text}\n\n"
-                f"Our facility team has received your ticket and is working on it."
+                f"📝 *Updated Details:* {clean_text}\n\n"
+                f"Our facility team has received your update."
             )
             send_text(sender_phone, confirmation)
-        else:
-            api_msg = result.get("message", "")
-            logger.warning(f"Factech complaint creation failed: {api_msg}")
-            send_text(
-                sender_phone,
-                f"Sorry, we're unable to submit your complaint right now.\n⚠️ _Reason: {api_msg}_\n\nPlease try again shortly.",
-            )
-
-        # Re-render welcome menu so the user is never stranded in a dead end
-        send_client_welcome_menu(sender_phone, client)
-        return True
+            send_post_complaint_options(sender_phone, client, complaint_id=target_cid)
+            return True
 
     except Exception as e:
         logger.error(f"Error handling client text input: {e}", exc_info=True)

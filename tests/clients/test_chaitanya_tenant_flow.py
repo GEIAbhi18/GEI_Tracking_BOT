@@ -272,6 +272,10 @@ def test_webhook_client_text_routing(mocker):
     _handle_text(CHAITANYA_PHONE, "3")
     mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "complaint_history")
 
+    # 4 -> update_complaint
+    _handle_text(CHAITANYA_PHONE, "4")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "update_complaint")
+
     # greeting with punctuation e.g. "Hello!"
     _handle_text(CHAITANYA_PHONE, "Hello!")
     mock_client_hi.assert_called_with(CHAITANYA_PHONE)
