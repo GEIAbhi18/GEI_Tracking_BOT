@@ -86,22 +86,21 @@ def handle_status_selection(to: str, task_id: str, new_status: str, user: dict):
     old_status = task.get("status", "pending")
     old_status_str = STATUS_DISPLAY_NAMES.get(old_status, old_status)
 
-    # ── Notify Kanav if this task was created by him ──
+    # ── Notify Kanav of all Elara Home task changes ──
     try:
-        from notifications.kanav_notifier import is_elara_task_created_by_kanav, notify_kanav_task_change
-        if is_elara_task_created_by_kanav(task):
-            actor_name = user.get("name", "Team Member")
-            if norm_status == "completed":
-                change_desc = f"Status changed from {old_status_str} to Completed (Task closed)"
-            else:
-                change_desc = f"Status changed from {old_status_str} to {status_str}"
-            notify_kanav_task_change(
-                task_id=task_id,
-                task_title=task.get("title", "Task"),
-                change_made=change_desc,
-                changed_by=actor_name,
-                domain="Elara Home"
-            )
+        from notifications.kanav_notifier import notify_kanav_task_change
+        actor_name = user.get("name", "Team Member")
+        if norm_status == "completed":
+            change_desc = f"Status changed from {old_status_str} to Completed (Task closed)"
+        else:
+            change_desc = f"Status changed from {old_status_str} to {status_str}"
+        notify_kanav_task_change(
+            task_id=task_id,
+            task_title=task.get("title", "Task"),
+            change_made=change_desc,
+            changed_by=actor_name,
+            domain="Elara Home"
+        )
     except Exception as notif_err:
         logger.error(f"Failed to notify Kanav in handle_status_selection: {notif_err}")
 
@@ -165,19 +164,18 @@ def handle_blocker_reason_input(to: str, text: str, user: dict, session: dict):
         content=f"🛑 Marked as Blocker: {reason}",
     )
 
-    # ── Notify Kanav if this task was created by him ──
+    # ── Notify Kanav of all Elara Home task changes ──
     try:
-        from notifications.kanav_notifier import is_elara_task_created_by_kanav, notify_kanav_task_change
+        from notifications.kanav_notifier import notify_kanav_task_change
         task = get_task_by_id(task_id)
-        if task and is_elara_task_created_by_kanav(task):
-            actor_name = user.get("name", "Team Member")
-            notify_kanav_task_change(
-                task_id=task_id,
-                task_title=task.get("title", "Task"),
-                change_made=f"Status changed to Blocker (Reason: {reason})",
-                changed_by=actor_name,
-                domain="Elara Home"
-            )
+        actor_name = user.get("name", "Team Member")
+        notify_kanav_task_change(
+            task_id=task_id,
+            task_title=(task.get("title") if task else "Task") or "Task",
+            change_made=f"Status changed to Blocker (Reason: {reason})",
+            changed_by=actor_name,
+            domain="Elara Home"
+        )
     except Exception as notif_err:
         logger.error(f"Failed to notify Kanav in handle_blocker_reason_input: {notif_err}")
 

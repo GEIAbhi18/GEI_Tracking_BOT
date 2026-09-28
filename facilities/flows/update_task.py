@@ -304,32 +304,31 @@ def confirm_update(sender: str, user: dict):
 
     send_text(sender, msg)
 
-    # ── Notify Kanav if this task was created by him ──
+    # ── Notify Kanav of all Facilities task changes ──
     try:
-        from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+        from notifications.kanav_notifier import notify_kanav_task_change
         task_row = read_row(ref_no)
-        if task_row and is_facilities_task_created_by_kanav(task_row):
-            task_title = task_row.get("issue_action", ref_no)
-            current_st = context.get("current_status", "Open")
-            changes = []
-            if new_status == "Closed":
-                changes.append(f"Status changed from {current_st} to Closed (Task closed)")
-            elif new_status != current_st:
-                changes.append(f"Status changed from {current_st} to {new_status}")
-            if update_text:
-                changes.append(f"Note: {update_text}")
-            if new_est:
-                changes.append(f"Est. completion: {new_est}")
+        task_title = task_row.get("issue_action", ref_no) if task_row else ref_no
+        current_st = context.get("current_status", "Open")
+        changes = []
+        if new_status == "Closed":
+            changes.append(f"Status changed from {current_st} to Closed (Task closed)")
+        elif new_status != current_st:
+            changes.append(f"Status changed from {current_st} to {new_status}")
+        if update_text:
+            changes.append(f"Note: {update_text}")
+        if new_est:
+            changes.append(f"Est. completion: {new_est}")
 
-            change_made = " | ".join(changes) if changes else "Task updated"
-            actor_name = user.get("name", actor or "Team Member")
-            notify_kanav_task_change(
-                task_id=ref_no,
-                task_title=task_title,
-                change_made=change_made,
-                changed_by=actor_name,
-                domain="Facilities"
-            )
+        change_made = " | ".join(changes) if changes else "Task updated"
+        actor_name = user.get("name", actor or "Team Member")
+        notify_kanav_task_change(
+            task_id=ref_no,
+            task_title=task_title,
+            change_made=change_made,
+            changed_by=actor_name,
+            domain="Facilities"
+        )
     except Exception as e:
         logger.error(f"Failed to trigger Kanav notification in confirm_update: {e}")
 

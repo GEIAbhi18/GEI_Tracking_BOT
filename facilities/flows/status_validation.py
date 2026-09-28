@@ -92,19 +92,18 @@ def confirm_reopen(sender: str, user: dict):
 
     send_text(sender, msg)
 
-    # ── Notify Kanav if this task was created by him ──
+    # ── Notify Kanav of all Facilities task changes ──
     try:
         from facilities.sheets_client import read_row
-        from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+        from notifications.kanav_notifier import notify_kanav_task_change
         task_row = read_row(ref_no)
-        if task_row and is_facilities_task_created_by_kanav(task_row):
-            notify_kanav_task_change(
-                task_id=ref_no,
-                task_title=task_row.get("issue_action", ref_no),
-                change_made="Status changed from Closed to Open (Reopened)",
-                changed_by=actor or "Team Member",
-                domain="Facilities"
-            )
+        notify_kanav_task_change(
+            task_id=ref_no,
+            task_title=task_row.get("issue_action", ref_no) if task_row else ref_no,
+            change_made="Status changed from Closed to Open (Reopened)",
+            changed_by=actor or "Team Member",
+            domain="Facilities"
+        )
     except Exception as e:
         logger.error(f"Reopen Kanav notification failed: {e}")
 

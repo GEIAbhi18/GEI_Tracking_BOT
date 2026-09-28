@@ -84,17 +84,16 @@ def handle_attachment_upload(sender: str, task_id: str, media_data: dict, user: 
         except Exception as c_err:
             logger.warning(f"Failed to record attachment comment: {c_err}")
 
-        # 3. Notify Kanav if this task was created by him
+        # 3. Notify Kanav of all Elara Home task changes
         try:
-            from notifications.kanav_notifier import is_elara_task_created_by_kanav, notify_kanav_task_change
-            if is_elara_task_created_by_kanav(task):
-                notify_kanav_task_change(
-                    task_id=task_id,
-                    task_title=task.get("title", "Task"),
-                    change_made=f"Attachment added: {file_name}",
-                    changed_by=user_name,
-                    domain="Elara Home",
-                )
+            from notifications.kanav_notifier import notify_kanav_task_change
+            notify_kanav_task_change(
+                task_id=task_id,
+                task_title=task.get("title", "Task"),
+                change_made=f"Attachment added: {file_name}",
+                changed_by=user_name,
+                domain="Elara Home",
+            )
         except Exception as notif_err:
             logger.error(f"Failed to notify Kanav for Elara attachment: {notif_err}")
 

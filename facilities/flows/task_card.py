@@ -233,20 +233,19 @@ def handle_reassign_selection(sender: str, new_owner: str, user: dict):
 
     send_text(sender, msg)
 
-    # ── Notify Kanav if this task was created by him ──
+    # ── Notify Kanav of all Facilities task changes ──
     try:
-        from notifications.kanav_notifier import is_facilities_task_created_by_kanav, notify_kanav_task_change
+        from notifications.kanav_notifier import notify_kanav_task_change
         task_row = read_row(ref_no)
-        if task_row and is_facilities_task_created_by_kanav(task_row):
-            old_owner = session.get("context_json", {}).get("old_owner") or task_row.get("owner", "—")
-            reassign_str = f"Reassigned to {new_owner}" if (not old_owner or old_owner == "—") else f"Reassigned from {old_owner} to {new_owner}"
-            notify_kanav_task_change(
-                task_id=ref_no,
-                task_title=task_row.get("issue_action", ref_no),
-                change_made=reassign_str,
-                changed_by=user.get("name", "Team Member"),
-                domain="Facilities"
-            )
+        old_owner = session.get("context_json", {}).get("old_owner") or (task_row.get("owner", "—") if task_row else "—")
+        reassign_str = f"Reassigned to {new_owner}" if (not old_owner or old_owner == "—") else f"Reassigned from {old_owner} to {new_owner}"
+        notify_kanav_task_change(
+            task_id=ref_no,
+            task_title=task_row.get("issue_action", ref_no) if task_row else ref_no,
+            change_made=reassign_str,
+            changed_by=user.get("name", "Team Member"),
+            domain="Facilities"
+        )
     except Exception as e:
         logger.error(f"Failed to trigger Kanav notification in handle_reassign_selection: {e}")
 

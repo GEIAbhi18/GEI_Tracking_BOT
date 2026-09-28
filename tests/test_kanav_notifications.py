@@ -162,8 +162,8 @@ def test_facilities_confirm_update_notifies_kanav():
         assert "Facilities" in body
 
 
-def test_facilities_confirm_update_skips_non_kanav_task():
-    """When a task NOT created by Kanav is updated, Kanav does NOT receive a notification."""
+def test_facilities_confirm_update_notifies_kanav_for_all_tasks():
+    """When ANY Facilities task is updated (regardless of creator), Kanav receives a notification."""
     from facilities.flows.update_task import confirm_update
 
     mock_row = {
@@ -190,7 +190,12 @@ def test_facilities_confirm_update_skips_non_kanav_task():
          patch("notifications.kanav_notifier.send_text") as mock_send_wa:
 
         confirm_update("918826896085", user={"name": "Anoop", "role": "Facility Head"})
-        assert not mock_send_wa.called
+        assert mock_send_wa.called
+        call_args = mock_send_wa.call_args[0]
+        to_number, body = call_args[0], call_args[1]
+        assert to_number == DEVELOPER_PHONE
+        assert "GEBB1-011" in body
+        assert "Anoop" in body
 
 
 def test_facilities_reassign_notifies_kanav():
@@ -266,8 +271,8 @@ def test_elara_status_update_notifies_kanav():
         assert "Elara Home" in body
 
 
-def test_elara_status_update_skips_non_kanav_task():
-    """When an Elara task NOT created by Kanav is updated, Kanav is NOT notified."""
+def test_elara_status_update_notifies_kanav_for_all_tasks():
+    """When ANY Elara task status is updated (regardless of creator), Kanav receives a notification."""
     from elara.flows.update_task import handle_status_selection
 
     mock_task = {
@@ -292,7 +297,12 @@ def test_elara_status_update_skips_non_kanav_task():
             user={"name": "Gaurav", "role": "Site Executive"}
         )
 
-        assert not mock_send_wa.called
+        assert mock_send_wa.called
+        call_args = mock_send_wa.call_args[0]
+        to_number, body = call_args[0], call_args[1]
+        assert to_number == DEVELOPER_PHONE
+        assert "elara-t-101" in body
+        assert "Gaurav" in body
 
 
 def test_elara_blocker_notifies_kanav():
