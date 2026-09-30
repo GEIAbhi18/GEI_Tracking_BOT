@@ -13,16 +13,82 @@ from core.utils import parse_human_date, format_date_human
 logger = logging.getLogger(__name__)
 
 
-def parse_task_intent_from_text(text: str, user: dict) -> dict:
+def is_create_task_intent(text: str) -> bool:
     """
-    Extract title, project/dept, priority, due date, and assignee from natural language.
+    Check if the text expresses an intent to create, add, or assign a task.
     Examples:
+      - "Create new task for Rizwan to close volume review for elara"
+      - "Create a task for Rizwan to check the report"
+      - "Assign Rizwan a task to close the review"
+      - "Create new task for Rizwan"
+      - "Add a task for Rizwan regarding volume review"
+      - "New task for Gaurav"
+      - "Task for Puja: speak to vendor"
+    """
+    if not text:
+        return False
+    clean = text.strip().lower()
+
+    # Exclude non-creation commands:
+    # 1. Clear query / list / update / complete commands
+    if any(clean.startswith(q) for q in (
+        "show task", "view task", "list task", "my task", "team task", "all task",
+        "update task", "task update", "complete task", "close task", "delete task",
+        "create project", "add project", "new project", "projects", "show project",
+        "view project", "all project"
+    )):
+        return False
+
+    # 2. Exact words for navigation/menus
+    if clean in ("tasks", "team tasks", "my tasks", "projects", "all projects", "all tasks"):
+        return False
+
+    # 3. Direct task creation patterns:
+    # "create [a/an] [new] task", "add [a/an] [new] task", "raise [a/an] [new] task", "make [a/an] [new] task", "give [a/an] [new] task"
+    if re.search(r'\b(?:create|add|raise|make|give)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\b', clean, re.I):
+        return True
+
+    # 4. "new task" or "new elara task"
+    if re.search(r'\bnew\s+(?:elara\s+)?task\b', clean, re.I):
+        return True
+
+    # 5. "assign" patterns:
+    # "assign [a] task to <person>", "assign <person> [a] task", "assign <person> to <action>"
+    if re.search(r'\bassign\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s+(?:to|for)\b', clean, re.I):
+        return True
+    if re.search(r'\bassign\s+[A-Za-z]+\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\b', clean, re.I):
+        return True
+    if re.search(r'\bassign\s+[A-Za-z]+\s+to\s+', clean, re.I):
+        return True
+
+    # 6. "task for <person>" or "task to <person>"
+    if re.search(r'\b(?:elara\s+)?task\s+(?:for|to)\s+[A-Za-z]+', clean, re.I):
+        return True
+
+    # 7. Action verbs at start of message
+    if any(clean.startswith(p) for p in ("check ", "coordinate ", "schedule ", "inspect ", "review ", "arrange ", "call ", "submit ", "send ")):
+        return True
+
+    return False
+
+
+def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
+    """
+    Extract intent, team, title, task, project/dept, priority, due date, and assignee from natural language.
+    Examples:
+      - "Create new task for Rizwan to close volume review for elara"
+      - "Create a task for Rizwan to check the report"
+      - "Assign Rizwan a task to close the review"
+      - "Create new task for Rizwan"
+      - "Add a task for Rizwan regarding volume review"
       - "Create task for puja to speak to Nikhil Kumar about open points"
-      - "Create task for puja to speak to Nikhil Kumar about open points due tomorrow"
-      - "Create task: inspect site 2 assigned to Gaurav due 2026-09-25 priority high"
+      - "Create task for Gaurav: inspect site 2 due 2026-09-25 priority high"
     """
     entities = {
+        "intent": "CREATE_TASK",
+        "team": "Elara Home",
         "title": None,
+        "task": None,
         "project_id": None,
         "department": None,
         "priority": "medium",
@@ -63,45 +129,105 @@ def parse_task_intent_from_text(text: str, user: dict) -> dict:
                     break
 
     # 4. Assignee & Title extraction
-    # Pattern A: "create task for <person> to <action>" or "create task for <person>: <action>"
-    m_action = re.search(
-        r'^(?:please\s+)?(?:create|add|new|raise)\s+(?:a\s+)?(?:task|elara task)\s*(?:to|for)\s+([A-Za-z]+)\s*(?:to|:)\s*(.+)$',
-        clean,
-        re.I
-    )
-    if m_action:
-        entities["assignee"] = m_action.group(1).capitalize()
-        title = m_action.group(2).strip()
-    else:
-        # Pattern B: "assigned to <person>" or "assign to <person>"
-        m_for = re.search(r'\b(?:assigned to|assign to)\s+([A-Za-z]+)\b', clean, re.I)
-        if m_for:
-            entities["assignee"] = m_for.group(1).capitalize()
-        else:
-            # Check against known team members
-            team_members = get_elara_team_members()
-            for m in team_members:
-                name = m.get("name", "")
-                if name and re.search(rf'\b(?:for|to|assign(?:ed)? to)\s+{re.escape(name)}\b', clean, re.I):
-                    entities["assignee"] = name
-                    break
-                elif name and name.lower() in clean.lower() and len(name) > 2:
-                    entities["assignee"] = name
+    title = None
 
-        title = clean
-        # Strip trigger words
-        title = re.sub(r'^(?:please\s+)?(?:create|add|new|raise)\s+(?:a\s+)?(?:task|elara task)\s*(?:to|for|called|named|:)?\s*', '', title, flags=re.I)
-        assignee_val = entities.get("assignee")
-        if assignee_val:
-            title = re.sub(r'\b(?:assigned to|assign to|for)\s+' + re.escape(assignee_val) + r'\b', '', title, flags=re.I).strip()
+    # Check known multi-word members first (e.g. "Bhagwan Dass")
+    known_multi = ["Bhagwan Dass"]
+    for km in known_multi:
+        m_km = re.search(rf'\b(?:for|to|assign(?:ed)? to)\s+({re.escape(km)})\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
+        if m_km:
+            entities["assignee"] = km
+            title = m_km.group(2).strip()
+            break
+        m_km_only = re.search(rf'\b(?:for|to|assign(?:ed)? to)\s+({re.escape(km)})\s*$', clean, re.I)
+        if m_km_only:
+            entities["assignee"] = km
+            title = None
+            break
+
+    if not entities["assignee"]:
+        # Pattern 1: "assign [a] task to <person> to/:/regarding/about <action>"
+        m1 = re.search(r'^(?:please\s+)?assign\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s+(?:to|for)\s+([A-Za-z]+)\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
+        # Pattern 2: "assign <person> [a] task to/:/regarding/about <action>"
+        m2 = re.search(r'^(?:please\s+)?assign\s+([A-Za-z]+)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
+        # Pattern 3: "assign <person> to <action>"
+        m3 = re.search(r'^(?:please\s+)?assign\s+([A-Za-z]+)\s+to\s+(.+)$', clean, re.I)
+        # Pattern 4: "create/add/new/raise task for/to <person> to/:/regarding/about <action>"
+        m4 = re.search(r'^(?:please\s+)?(?:create|add|raise|make|give)?\s*(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s*(?:to|for)\s+([A-Za-z]+)\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
+        # Pattern 5: "task for/to <person> to/:/regarding/about <action>"
+        m5 = re.search(r'^(?:please\s+)?(?:elara\s+)?task\s*(?:to|for)\s+([A-Za-z]+)\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
+
+        # Assignee only (no action / title provided)
+        # Pattern 6: "create/add/new/raise task for/to <person>"
+        m6 = re.search(r'^(?:please\s+)?(?:create|add|raise|make|give|assign)?\s*(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s*(?:to|for)\s+([A-Za-z]+)\s*$', clean, re.I)
+        # Pattern 7: "assign [a] task to <person>"
+        m7 = re.search(r'^(?:please\s+)?assign\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s+(?:to|for)\s+([A-Za-z]+)\s*$', clean, re.I)
+        # Pattern 8: "assign <person> [a task]"
+        m8 = re.search(r'^(?:please\s+)?assign\s+([A-Za-z]+)(?:\s+(?:a|an|new)?\s*(?:elara\s+)?task)?\s*$', clean, re.I)
+
+        matched_action = None
+        for m in (m1, m2, m3, m4, m5):
+            if m:
+                matched_action = m
+                break
+
+        if matched_action:
+            entities["assignee"] = matched_action.group(1).capitalize()
+            title = matched_action.group(2).strip()
+        else:
+            matched_assignee_only = None
+            for m in (m6, m7, m8):
+                if m:
+                    matched_assignee_only = m
+                    break
+            if matched_assignee_only:
+                entities["assignee"] = matched_assignee_only.group(1).capitalize()
+                title = None
+            else:
+                # Pattern B: "assigned to <person>" or "assign to <person>"
+                m_for = re.search(r'\b(?:assigned to|assign to)\s+([A-Za-z]+)\b', clean, re.I)
+                if m_for:
+                    entities["assignee"] = m_for.group(1).capitalize()
+                else:
+                    # Check against known team members
+                    team_members = []
+                    try:
+                        team_members = get_elara_team_members()
+                    except Exception:
+                        pass
+                    member_names = [m.get("name", "") for m in team_members if m.get("name")]
+                    for fallback_n in ("Rizwan", "Rachit", "Bhagwan Dass", "Gaurav", "Puja"):
+                        if fallback_n not in member_names:
+                            member_names.append(fallback_n)
+
+                    for name in member_names:
+                        if name and re.search(rf'\b(?:for|to|assign(?:ed)? to)\s+{re.escape(name)}\b', clean, re.I):
+                            entities["assignee"] = name
+                            break
+                        elif name and name.lower() in clean.lower() and len(name) > 2:
+                            entities["assignee"] = name
+                            break
+
+                title = clean
+                # Strip trigger words
+                title = re.sub(r'^(?:please\s+)?(?:create|add|new|raise|make|give|assign)\s+(?:a\s+|an\s+)?(?:new\s+)?(?:task|elara task)\s*(?:to|for|called|named|:)?\s*', '', title, flags=re.I)
+                assignee_val = entities.get("assignee")
+                if assignee_val:
+                    title = re.sub(r'\b(?:assigned to|assign to|for|to)\s+' + re.escape(assignee_val) + r'\b', '', title, flags=re.I).strip()
+                    title = re.sub(rf'\b{re.escape(assignee_val)}\b', '', title, flags=re.I).strip()
 
     # Clean trailing priority/due/dept clauses from title
-    title = re.sub(r'\s+(?:priority\s+\w+|due\s+.*|by\s+.*|deadline\s+.*|assigned\s+to\s+.*)$', '', title, flags=re.I).strip()
-    for dept in ELARA_DEPARTMENTS:
-        title = re.sub(r'\s+(?:for|in|under)\s+' + re.escape(dept), '', title, flags=re.I).strip()
-
     if title:
-        entities["title"] = title[0].upper() + title[1:] if len(title) > 1 else title.upper()
+        title = re.sub(r'\s+(?:priority\s+\w+|due\s+.*|by\s+.*|deadline\s+.*|assigned\s+to\s+.*)$', '', title, flags=re.I).strip()
+        for dept in ELARA_DEPARTMENTS:
+            title = re.sub(r'\s+(?:for|in|under)\s+' + re.escape(dept), '', title, flags=re.I).strip()
+
+        # Clean leading "to " or ": " or "regarding " if any remains
+        title = re.sub(r'^(?:to|:|regarding|about)\s+', '', title, flags=re.I).strip()
+
+        if title:
+            entities["task"] = title
+            entities["title"] = title[0].upper() + title[1:] if len(title) > 1 else title.upper()
 
     return entities
 

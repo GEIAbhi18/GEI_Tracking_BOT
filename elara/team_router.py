@@ -93,6 +93,11 @@ def is_dual_access_user(whatsapp_number: str) -> bool:
     return False
 
 
+# Known team members for team disambiguation
+KNOWN_ELARA_MEMBERS = ("rizwan", "rachit", "bhagwan dass", "bhagwan", "gaurav")
+KNOWN_FACILITIES_MEMBERS = ("anoop", "kuldeep", "vikash", "vikram", "vikramjeet", "gopal", "ritesh", "arjun", "chandan")
+
+
 def detect_team_intent_from_text(text: str) -> str | None:
     """
     Detect whether text explicitly mentions Elara Home vs Facilities.
@@ -126,6 +131,27 @@ def detect_team_intent_from_text(text: str) -> str | None:
     # Facilities ref no pattern (e.g. GEBB1-001, GETT-123)
     if re.search(r'\b(gebb1|gebb2|gett|com)-\d{1,4}\b', clean, re.I):
         return "facilities"
+
+    # 3. Known team member matching (word boundaries)
+    # Check Elara team members (dynamic + static fallback)
+    elara_names = set(KNOWN_ELARA_MEMBERS)
+    try:
+        from elara.auth import get_elara_team_members
+        for m in get_elara_team_members():
+            m_name = (m.get("name") or "").strip().lower()
+            if m_name and m_name not in ("kanav", "developer"):
+                elara_names.add(m_name)
+    except Exception:
+        pass
+
+    for name in elara_names:
+        if re.search(rf'\b{re.escape(name)}\b', clean):
+            return "elara"
+
+    # Check Facilities team members (word boundaries)
+    for name in KNOWN_FACILITIES_MEMBERS:
+        if re.search(rf'\b{re.escape(name)}\b', clean):
+            return "facilities"
 
     return None
 

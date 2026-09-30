@@ -328,14 +328,7 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
         return
 
 
-    # 3. Direct task creation matching
-    if any(clean.startswith(p) for p in ("create task", "add task", "new task", "create a task", "raise task")):
-        from elara.flows.create_task import parse_task_intent_from_text, start_create_task_flow
-        parsed = parse_task_intent_from_text(text, user)
-        start_create_task_flow(sender, user, prefill=parsed)
-        return
-
-    # Direct task update matching
+    # 3. Direct task update matching
     if any(clean.startswith(p) for p in ("update task", "task update", "update a task", "update taks")):
         from elara.flows.task_list import show_team_tasks
         send_text(sender, "🔄 *Update Task*\nPlease select a task below to update its status or add comments:")
@@ -370,9 +363,9 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
         show_projects_menu(sender, user)
         return
 
-    # 6. Fallback: Parse as a task creation intent if it looks like an action item
-    if any(clean.startswith(p) for p in ("check ", "coordinate ", "schedule ", "inspect ", "review ", "arrange ", "call ", "submit ", "send ")):
-        from elara.flows.create_task import parse_task_intent_from_text, start_create_task_flow
+    # 6. Direct task creation matching (natural language commands)
+    from elara.flows.create_task import is_create_task_intent, parse_task_intent_from_text, start_create_task_flow
+    if is_create_task_intent(text):
         parsed = parse_task_intent_from_text(text, user)
         start_create_task_flow(sender, user, prefill=parsed)
         return

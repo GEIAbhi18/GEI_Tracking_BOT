@@ -45,6 +45,7 @@ def mock_elara_supabase():
         {"id": "u3", "name": "Gaurav", "phone": "918894577707", "role": "Site Executive", "department": "Approvals & Compliance", "team": "Elara Home", "is_elara_user": True},
         {"id": "u4", "name": "Developer", "phone": DEVELOPER_PHONE, "role": "Developer", "department": "Project Administration", "team": "Elara Home", "is_elara_user": True},
         {"id": "u5", "name": "Kanav", "phone": KANAV_PHONE, "role": "Director", "department": "Project Administration", "team": "Elara Home", "is_elara_user": True},
+        {"id": "u6", "name": "Rizwan", "phone": "919717856493", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home", "is_elara_user": True},
     ]
     projects_store = [
         {"id": "elara-proj-1", "name": "Initial Elara Project", "department": "Construction & Design", "team_name": "Elara Home", "status": "Active", "created_at": "2026-09-01T00:00:00Z"}
@@ -294,6 +295,32 @@ def test_detect_team_intent_explicit():
     assert detect_team_intent_from_text("Check AC cooling in GEBB1") == "facilities"
     assert detect_team_intent_from_text("Close GETT-015") == "facilities"
     assert detect_team_intent_from_text("Create a general task for tomorrow") is None
+
+
+def test_detect_team_intent_with_team_members():
+    """Commands mentioning specific team members must detect team accurately."""
+    assert detect_team_intent_from_text("Create new task for Rizwan to close volume review for elara") == "elara"
+    assert detect_team_intent_from_text("Create a task for Rizwan to check the report") == "elara"
+    assert detect_team_intent_from_text("Assign Rizwan a task to close the review") == "elara"
+    assert detect_team_intent_from_text("Create new task for Rizwan") == "elara"
+    assert detect_team_intent_from_text("Add a task for Rizwan regarding volume review") == "elara"
+    assert detect_team_intent_from_text("Create task for Kuldeep") == "facilities"
+    assert detect_team_intent_from_text("Assign Vikash a task to check pump") == "facilities"
+
+
+@patch("elara.flows.home.show_elara_home")
+@patch("elara.flows.create_task.send_list_message")
+def test_kanav_screenshot_command_routes_to_elara_without_menu(mock_list, mock_show_home):
+    """Verify Kanav's command routes to Elara Home create task flow and does not show generic menu."""
+    clear_all_team_contexts()
+    cmd = "Create new task for Rizwan to close volume review for elara"
+    handled = route_incoming_message(KANAV_PHONE, text=cmd)
+    assert handled is True
+    assert get_active_team(KANAV_PHONE) == "elara"
+    mock_show_home.assert_not_called()
+    assert mock_list.called
+    args, kwargs = mock_list.call_args
+    assert "Create Elara Task" in args[1]
 
 
 def test_team_context_persistence():

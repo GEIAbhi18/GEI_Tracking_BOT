@@ -12,6 +12,7 @@ Verifies:
 from unittest.mock import patch, MagicMock
 import pytest
 from elara.flows.create_task import (
+    is_create_task_intent,
     parse_task_intent_from_text,
     start_create_task_flow,
     handle_task_project_selection,
@@ -42,6 +43,82 @@ def test_parse_task_intent_kanav_screenshot_case():
     assert parsed["priority"] == "medium"
     assert parsed["due_date"] is None
     assert parsed["project_id"] is None
+
+
+def test_parse_task_intent_rizwan_screenshot_case():
+    """Verify Kanav's command from screenshot detects CREATE_TASK, Elara Home, Rizwan, and close volume review for elara."""
+    user = {"name": "Kanav", "role": "Director"}
+    cmd = "Create new task for Rizwan to close volume review for elara"
+    assert is_create_task_intent(cmd) is True
+
+    parsed = parse_task_intent_from_text(cmd, user)
+    assert parsed["intent"] == "CREATE_TASK"
+    assert parsed["team"] == "Elara Home"
+    assert parsed["assignee"] == "Rizwan"
+    assert parsed["task"] == "close volume review for elara"
+    assert parsed["title"] == "Close volume review for elara"
+
+
+def test_parse_task_intent_similar_commands():
+    """Verify similar task creation commands are correctly understood."""
+    user = {"name": "Kanav", "role": "Director"}
+
+    # 1. "Create a task for Rizwan to check the report"
+    cmd1 = "Create a task for Rizwan to check the report"
+    assert is_create_task_intent(cmd1) is True
+    parsed1 = parse_task_intent_from_text(cmd1, user)
+    assert parsed1["intent"] == "CREATE_TASK"
+    assert parsed1["team"] == "Elara Home"
+    assert parsed1["assignee"] == "Rizwan"
+    assert parsed1["task"] == "check the report"
+    assert parsed1["title"] == "Check the report"
+
+    # 2. "Assign Rizwan a task to close the review"
+    cmd2 = "Assign Rizwan a task to close the review"
+    assert is_create_task_intent(cmd2) is True
+    parsed2 = parse_task_intent_from_text(cmd2, user)
+    assert parsed2["intent"] == "CREATE_TASK"
+    assert parsed2["team"] == "Elara Home"
+    assert parsed2["assignee"] == "Rizwan"
+    assert parsed2["task"] == "close the review"
+    assert parsed2["title"] == "Close the review"
+
+    # 3. "Create new task for Rizwan"
+    cmd3 = "Create new task for Rizwan"
+    assert is_create_task_intent(cmd3) is True
+    parsed3 = parse_task_intent_from_text(cmd3, user)
+    assert parsed3["intent"] == "CREATE_TASK"
+    assert parsed3["team"] == "Elara Home"
+    assert parsed3["assignee"] == "Rizwan"
+    assert parsed3["task"] is None
+    assert parsed3["title"] is None
+
+    # 4. "Add a task for Rizwan regarding volume review"
+    cmd4 = "Add a task for Rizwan regarding volume review"
+    assert is_create_task_intent(cmd4) is True
+    parsed4 = parse_task_intent_from_text(cmd4, user)
+    assert parsed4["intent"] == "CREATE_TASK"
+    assert parsed4["team"] == "Elara Home"
+    assert parsed4["assignee"] == "Rizwan"
+    assert parsed4["task"] == "volume review"
+    assert parsed4["title"] == "Volume review"
+
+
+@patch("elara.flows.home.show_elara_home")
+@patch("elara.flows.create_task.start_create_task_flow")
+def test_route_text_bypasses_generic_menu_on_task_command(mock_start_flow, mock_show_home):
+    """Ensure natural language task creation command does NOT trigger show_elara_home fallback."""
+    user = {"name": "Kanav", "role": "Director"}
+    cmd = "Create new task for Rizwan to close volume review for elara"
+    _route_text("919811867829", cmd, user, None)
+
+    mock_show_home.assert_not_called()
+    mock_start_flow.assert_called_once()
+    prefill = mock_start_flow.call_args[1]["prefill"]
+    assert prefill["intent"] == "CREATE_TASK"
+    assert prefill["team"] == "Elara Home"
+    assert prefill["assignee"] == "Rizwan"
+    assert prefill["title"] == "Close volume review for elara"
 
 
 def test_parse_task_intent_with_due_date_and_priority():
