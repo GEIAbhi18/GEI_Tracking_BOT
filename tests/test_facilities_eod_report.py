@@ -4,16 +4,14 @@ Tests for Facilities EOD Report Generation, Delivery, and WhatsApp Routing.
 """
 
 import os
-import pytest
-from datetime import date, datetime
-from unittest.mock import patch, MagicMock
+from datetime import date
+from unittest.mock import MagicMock, patch
 
 from facilities.eod_report import (
-    calculate_task_rag,
     calculate_task_progress,
+    calculate_task_rag,
     clean_pdf_text,
     generate_facilities_eod_pdf,
-    fetch_live_facilities_tasks,
     send_facilities_eod_report,
 )
 
@@ -172,7 +170,7 @@ class TestFacilitiesDeliveryAndRouting:
 
     @patch("facilities.eod_report.send_facilities_eod_report", return_value=True)
     @patch("db.supabase")
-    def test_whatsapp_daily_report_job_sends_facilities_pdf(self, mock_sb, mock_send_report):
+    def test_whatsapp_daily_report_job_skips_when_disabled(self, mock_sb, mock_send_report):
         from whatsapp.whatsapp_webhook import whatsapp_daily_report_job
 
         # Mock Kanav user lookup
@@ -181,6 +179,12 @@ class TestFacilitiesDeliveryAndRouting:
         mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = mock_user_res
         mock_sb.table.return_value.select.return_value.gte.return_value.execute.return_value = MagicMock(data=[])
 
+        # Default: disabled
         whatsapp_daily_report_job()
-        assert mock_send_report.called
-        assert mock_send_report.call_args[0][0] == "917717754421"
+        assert not mock_send_report.called
+
+        # When enabled via config patch
+        with patch("facilities.config.ENABLE_FACILITIES_EOD_REPORT", True):
+            whatsapp_daily_report_job()
+            assert mock_send_report.called
+            assert mock_send_report.call_args[0][0] == "917717754421"

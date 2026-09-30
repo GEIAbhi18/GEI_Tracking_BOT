@@ -55,6 +55,11 @@ FACILITIES_MAX_RETRIES = int(os.getenv("FACILITIES_MAX_RETRIES", "5"))
 # many seconds, it's flagged as a conflict rather than an overwrite
 CONFLICT_WINDOW_SECONDS = int(os.getenv("FACILITIES_CONFLICT_WINDOW", "60"))
 
+# ── Facilities EOD Report Delivery ───────────────────────────────────────────
+# Evening Facilities EOD report is disabled for now.
+# To re-enable, set ENABLE_FACILITIES_EOD_REPORT=true in .env
+ENABLE_FACILITIES_EOD_REPORT = os.getenv("ENABLE_FACILITIES_EOD_REPORT", "false").lower() in ("true", "1", "yes")
+
 # ── Building Tabs ────────────────────────────────────────────────────────────
 # Exact tab names on the Google Sheet (must match the sheet exactly)
 BUILDING_TABS = ["GEBB1", "GEBB2", "GETT", "Common"]

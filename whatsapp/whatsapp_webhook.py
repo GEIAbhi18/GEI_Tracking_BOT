@@ -88,19 +88,23 @@ def whatsapp_daily_report_job():
         
         kanav_wa = res.data[0]["whatsapp_number"]
         
-        # 2. Generate Facilities EOD PDF and send to Kanav
-        try:
-            from facilities.eod_report import send_facilities_eod_report
-            send_facilities_eod_report(kanav_wa, send_summary_text=False)
-            logging.info(f"WhatsApp Facilities EOD PDF report (Facilities_Report_EOD.pdf) sent to Kanav ({kanav_wa})")
-        except Exception as fac_pdf_err:
-            logging.error(f"Error generating/sending Facilities EOD PDF report on WhatsApp: {fac_pdf_err}")
-            # Fallback to general project report if facilities report generation encountered an error
+        # 2. Generate Facilities EOD PDF and send to Kanav (Disabled for now)
+        from facilities.config import ENABLE_FACILITIES_EOD_REPORT
+        if ENABLE_FACILITIES_EOD_REPORT:
             try:
-                pdf_path = generate_pdf_report()
-                _send_document_wa(kanav_wa, pdf_path)
-            except Exception as pdf_err:
-                logger.error(f"Fallback PDF generation error: {pdf_err}")
+                from facilities.eod_report import send_facilities_eod_report
+                send_facilities_eod_report(kanav_wa, send_summary_text=False)
+                logging.info(f"WhatsApp Facilities EOD PDF report (Facilities_Report_EOD.pdf) sent to Kanav ({kanav_wa})")
+            except Exception as fac_pdf_err:
+                logging.error(f"Error generating/sending Facilities EOD PDF report on WhatsApp: {fac_pdf_err}")
+                # Fallback to general project report if facilities report generation encountered an error
+                try:
+                    pdf_path = generate_pdf_report()
+                    _send_document_wa(kanav_wa, pdf_path)
+                except Exception as pdf_err:
+                    logger.error(f"Fallback PDF generation error: {pdf_err}")
+        else:
+            logging.info("Evening Facilities EOD report is disabled for now. Skipping Facilities EOD PDF delivery.")
             
         # 3. Generate multiline updates text summary and send
         try:
