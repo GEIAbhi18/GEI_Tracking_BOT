@@ -158,3 +158,4 @@ cython_debug/
 
 # macOS
 .DS_Store
+extracted_adoption_data.json

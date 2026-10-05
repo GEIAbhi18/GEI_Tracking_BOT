@@ -1,14 +1,16 @@
 from __future__ import annotations
-import re
+
 import logging
+import re
 from datetime import datetime, timedelta, timezone
-from whatsapp.ux import send_list_message, send_interactive_buttons, send_text
-from elara.config import ELARA_DEPARTMENTS, VALID_PRIORITIES
-from elara.db import get_projects, create_task, get_project_by_id
+
+from core.utils import format_date_human, parse_human_date
 from elara.auth import get_elara_team_members, is_elara_admin
-from elara.session import set_elara_session, clear_elara_session, get_elara_session
+from elara.config import ELARA_DEPARTMENTS, VALID_PRIORITIES
+from elara.db import create_task, get_project_by_id, get_projects
 from elara.flows.task_card import send_elara_task_card
-from core.utils import parse_human_date, format_date_human
+from elara.session import clear_elara_session, set_elara_session
+from whatsapp.ux import send_interactive_buttons, send_list_message, send_text
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +85,7 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
       - "Add a task for Rizwan regarding volume review"
       - "Create task for puja to speak to Nikhil Kumar about open points"
       - "Create task for Gaurav: inspect site 2 due 2026-09-25 priority high"
+      - "Create a task for Rizwan to verify Balaji Bill due date Wednesday."
     """
     entities = {
         "intent": "CREATE_TASK",
@@ -106,26 +109,65 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
     elif re.search(r'\b(medium priority|priority medium)\b', clean, re.I):
         entities["priority"] = "medium"
 
-    # 2. Department detection from 6 canonical Elara departments
+    # 2. Department and Project detection
     for dept in ELARA_DEPARTMENTS:
-        if dept.lower() in clean.lower():
+        if re.search(rf'\b{re.escape(dept)}\b', clean, re.I):
             # pyrefly: ignore [bad-assignment]
             entities["department"] = dept
             break
 
-    # 3. Date extraction (e.g., "due tomorrow", "by Friday", "due 2026-09-20")
-    date_match = re.search(r'\b(?:due(?:\s+on)?|by|deadline)\s+([a-zA-Z0-9\s\-]+?)(?:\s+(?:priority|for|under|assigned)|\s*$)', clean, re.I)
-    if date_match:
-        raw_date_str = date_match.group(1).strip()
-        parsed = parse_human_date(raw_date_str)
+    try:
+        projects = get_projects()
+        for p in projects:
+            p_name = p.get("name", "")
+            p_id = p.get("id", "")
+            if p_name and re.search(rf'\b(?:project\s+)?{re.escape(p_name)}\b', clean, re.I):
+                entities["project_id"] = p_id
+                if p.get("department"):
+                    entities["department"] = p.get("department")
+                break
+            elif p_id and re.search(rf'\b{re.escape(p_id)}\b', clean, re.I):
+                entities["project_id"] = p_id
+                if p.get("department"):
+                    entities["department"] = p.get("department")
+                break
+    except Exception:
+        pass
+
+    # 3. Date extraction
+    matched_date_phrase = None
+    # Pattern A: Explicit date prefixes (e.g. "due date Wednesday", "due Wednesday", "by Friday", "deadline is tomorrow", "target date Sep 25")
+    prefix_pat = r'\b(?:due(?:\s+date)?(?:\s+is|\s*:|\s+on|\s+by)?|deadline(?:\s+is|\s*:)?|target(?:\s+date)?(?:\s+is|\s*:)?|by|before|scheduled\s+for)\s+([a-zA-Z0-9\s\-/]+?)(?=(?:\s+(?:priority|for|under|assigned|in|with|to)\b|\s*[.,!?;:]|\s*$))'
+    for m in re.finditer(prefix_pat, clean, re.I):
+        candidate = m.group(1).strip()
+        parsed = parse_human_date(candidate)
         if parsed:
             entities["due_date"] = parsed
+            matched_date_phrase = m.group(0).strip()
+            break
+
+    # Pattern B: Standalone date entities anywhere in the message (e.g. "today", "tomorrow", "Wednesday", "next week", "in 3 days", "15th October")
     if not entities["due_date"]:
-        for dw in ("tomorrow", "in 3 days", "next monday", "next friday"):
-            if dw in clean.lower():
-                parsed = parse_human_date(dw)
+        standalone_patterns = [
+            r'\b(?:day\s+after\s+to?m+o+r+o*w|to?m+o+r+o*w|today)\b',
+            r'\b(?:in\s+)?next\s+week\b',
+            r'\b(?:in\s+a|after\s+a)\s+week\b',
+            r'\b(?:end\s+of\s+)?(?:this\s+week|the\s+week)\b',
+            r'\b(?:in\s+)?\d+\s*(?:day|week|month)s?\b',
+            r'\b(?:next\s+|this\s+)?(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+            r'\b\d{1,2}(?:st|nd|rd|th)?\s+(?:of\s+)?(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)(?:\s+\d{4})?\b',
+            r'\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|june?|july?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:\s+\d{4})?\b',
+            r'\b\d{4}[-/]\d{1,2}[-/]\d{1,2}\b',
+            r'\b\d{1,2}[-/]\d{1,2}[-/]\d{4}\b',
+        ]
+        for sp in standalone_patterns:
+            m = re.search(sp, clean, re.I)
+            if m:
+                candidate = m.group(0).strip()
+                parsed = parse_human_date(candidate)
                 if parsed:
                     entities["due_date"] = parsed
+                    matched_date_phrase = candidate
                     break
 
     # 4. Assignee & Title extraction
@@ -146,6 +188,8 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
             break
 
     if not entities["assignee"]:
+        # Pattern 0: "create task for <person> due/by <date> to <action>"
+        m0 = re.search(r'^(?:please\s+)?(?:create|add|raise|make|give|assign)?\s*(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s*(?:to|for)\s+([A-Za-z]+)\s+(?:due(?:\s+date)?(?:\s+is|\s*:|\s+on|\s+by)?|deadline(?:\s+is|\s*:)?|target(?:\s+date)?(?:\s+is|\s*:)?|by|scheduled\s+for)\s+[a-zA-Z0-9\s]+?\s+(?:to|:|regarding|about)\s+(.+)$', clean, re.I)
         # Pattern 1: "assign [a] task to <person> to/:/regarding/about <action>"
         m1 = re.search(r'^(?:please\s+)?assign\s+(?:a\s+|an\s+)?(?:new\s+)?(?:elara\s+)?task\s+(?:to|for)\s+([A-Za-z]+)\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
         # Pattern 2: "assign <person> [a] task to/:/regarding/about <action>"
@@ -166,7 +210,7 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
         m8 = re.search(r'^(?:please\s+)?assign\s+([A-Za-z]+)(?:\s+(?:a|an|new)?\s*(?:elara\s+)?task)?\s*$', clean, re.I)
 
         matched_action = None
-        for m in (m1, m2, m3, m4, m5):
+        for m in (m0, m1, m2, m3, m4, m5):
             if m:
                 matched_action = m
                 break
@@ -218,16 +262,34 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
 
     # Clean trailing priority/due/dept clauses from title
     if title:
+        if matched_date_phrase:
+            pat = rf'\b(?:due(?:\s+date)?(?:\s+is|\s*:|\s+on|\s+by)?|deadline(?:\s+is|\s*:)?|target(?:\s+date)?(?:\s+is|\s*:)?|by|on|before|scheduled\s+for)?\s*{re.escape(matched_date_phrase)}\b'
+            title = re.sub(pat, ' ', title, flags=re.I)
+            title = title.replace(matched_date_phrase, ' ')
+
         title = re.sub(r'\s+(?:priority\s+\w+|due\s+.*|by\s+.*|deadline\s+.*|assigned\s+to\s+.*)$', '', title, flags=re.I).strip()
+        title = re.sub(r'\b(?:priority\s+(?:high|medium|low)|(?:high|medium|low)\s+priority|urgent|critical)\b', ' ', title, flags=re.I)
+
         for dept in ELARA_DEPARTMENTS:
-            title = re.sub(r'\s+(?:for|in|under)\s+' + re.escape(dept), '', title, flags=re.I).strip()
+            title = re.sub(r'\s+(?:for|in|under)\s+' + re.escape(dept), ' ', title, flags=re.I).strip()
+            title = re.sub(rf'\b{re.escape(dept)}\b', ' ', title, flags=re.I).strip()
 
         # Clean leading "to " or ": " or "regarding " if any remains
-        title = re.sub(r'^(?:to|:|regarding|about)\s+', '', title, flags=re.I).strip()
+        title = re.sub(r'^(?:to|:|regarding|about)\s+', '', title.strip(), flags=re.I).strip()
+
+        assignee_val = entities.get("assignee")
+        if assignee_val:
+            title = re.sub(rf'\b(?:assigned\s+to|assign\s+to|for|to)\s+{re.escape(assignee_val)}\b', ' ', title, flags=re.I).strip()
+
+        title = re.sub(r'\s+', ' ', title).strip()
+        title = title.strip(" .,!?:;-")
 
         if title:
             entities["task"] = title
             entities["title"] = title[0].upper() + title[1:] if len(title) > 1 else title.upper()
+        else:
+            entities["task"] = None
+            entities["title"] = None
 
     return entities
 

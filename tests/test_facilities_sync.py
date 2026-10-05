@@ -6,13 +6,36 @@ Tests:
   - Building alias & fuzzy matching
   - Conflict window logic
   - Sync queue status reporting
+  - Three-recipient notification guarantee (Anoop + Kanav + Developer)
 """
 
 # pyrefly: ignore [missing-import]
 import pytest
+from unittest.mock import MagicMock
 from facilities.ref_no import parse_ref_no, get_building_from_ref_no
 from facilities.auth import fuzzy_match_building, get_fuzzy_building_suggestions
 from facilities.config import BUILDING_TABS, COLUMN_MAP, WRITABLE_FIELDS
+
+
+def _patch_all_send_text(mocker, side_effect=None):
+    """
+    Patch send_text at ALL three module-level import locations so that
+    a single unified MagicMock captures every notification call.
+
+    send_text is imported at the TOP of kanav_notifier.py and developer_notifier.py
+    via `from whatsapp.ux import send_text`, which binds to their local module
+    namespace.  Patching only `whatsapp.ux.send_text` does NOT intercept those
+    module-level bindings.  We must also patch the module-level names.
+    """
+    if side_effect is not None:
+        mock_send = MagicMock(side_effect=side_effect)
+    else:
+        mock_send = MagicMock(return_value=True)
+    mocker.patch("whatsapp.ux.send_text", mock_send)
+    mocker.patch("notifications.kanav_notifier.send_text", mock_send)
+    mocker.patch("notifications.developer_notifier.send_text", mock_send)
+    return mock_send
+
 
 
 def test_parse_ref_no():
@@ -255,11 +278,12 @@ def test_actual_completion_date_write_rejected():
         write_field("GEBB1-001", "actual_completion_date", "10-Sep-2026")
 
 
-def test_notify_external_change_exclusive_to_anoop_for_update(mocker):
-    """Verify that external sheet field update notifications are dispatched exclusively to Anoop."""
-    from facilities.sync_engine import _notify_external_change
+def test_notify_external_change_sends_to_all_three_for_update(mocker):
+    """Verify that external sheet field update notifications are sent to Anoop, Kanav, AND Developer."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
 
-    mock_send = mocker.patch("whatsapp.ux.send_text")
+    _reset_notification_tracker()
+    mock_send = _patch_all_send_text(mocker)
     mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
     mock_supabase = mocker.patch("facilities.sync_engine.supabase")
     mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
@@ -273,22 +297,34 @@ def test_notify_external_change_exclusive_to_anoop_for_update(mocker):
         details={"field": "status", "old_value": "Open", "new_value": "WIP"},
     )
 
-    mock_send.assert_called_once()
-    to_phone, msg = mock_send.call_args[0]
-    assert to_phone == "919211501013"
-    assert "GEBB1-005" in msg
-    assert "Bay 1" in msg
-    assert "Fix basement lighting" in msg
-    assert "Status" in msg
-    assert "Previous:* Open" in msg
-    assert "Updated to:* WIP" in msg
+    # Must be called 3 times: Anoop + Kanav + Developer
+    assert mock_send.call_count == 3, (
+        f"Expected 3 notifications (Anoop + Kanav + Developer), got {mock_send.call_count}"
+    )
+
+    # Collect all recipient phone numbers
+    recipients = [call[0][0] for call in mock_send.call_args_list]
+
+    # Anoop must be in the recipients
+    assert "919211501013" in recipients, "Anoop must receive a notification"
+
+    # Verify Anoop's message content
+    anoop_call = [c for c in mock_send.call_args_list if c[0][0] == "919211501013"][0]
+    anoop_msg = anoop_call[0][1]
+    assert "GEBB1-005" in anoop_msg
+    assert "Bay 1" in anoop_msg
+    assert "Fix basement lighting" in anoop_msg
+    assert "Status" in anoop_msg
+    assert "Previous:* Open" in anoop_msg
+    assert "Updated to:* WIP" in anoop_msg
 
 
-def test_notify_external_change_exclusive_to_anoop_common_sheet(mocker):
-    """Verify that external changes in Common sheet are dispatched exclusively to Anoop."""
-    from facilities.sync_engine import _notify_external_change
+def test_notify_external_change_sends_to_all_three_common_sheet(mocker):
+    """Verify that external changes in Common sheet are sent to Anoop, Kanav, AND Developer."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
 
-    mock_send = mocker.patch("whatsapp.ux.send_text")
+    _reset_notification_tracker()
+    mock_send = _patch_all_send_text(mocker)
     mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
     mock_supabase = mocker.patch("facilities.sync_engine.supabase")
     mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(data=[])
@@ -305,20 +341,26 @@ def test_notify_external_change_exclusive_to_anoop_common_sheet(mocker):
         },
     )
 
-    mock_send.assert_called_once()
-    to_phone, msg = mock_send.call_args[0]
-    assert to_phone == "919211501013"
-    assert "Common-012" in msg
-    assert "Common" in msg
-    assert "Clubhouse deep cleaning" in msg
-    assert "New Task Added" in msg
+    # Must be called 3 times: Anoop + Kanav + Developer
+    assert mock_send.call_count == 3, (
+        f"Expected 3 notifications (Anoop + Kanav + Developer), got {mock_send.call_count}"
+    )
+
+    # Verify Anoop's message contains the right content
+    anoop_call = [c for c in mock_send.call_args_list if c[0][0] == "919211501013"][0]
+    anoop_msg = anoop_call[0][1]
+    assert "Common-012" in anoop_msg
+    assert "Common" in anoop_msg
+    assert "Clubhouse deep cleaning" in anoop_msg
+    assert "New Task Added" in anoop_msg
 
 
-def test_notify_external_change_exclusive_to_anoop_for_deletion(mocker):
-    """Verify that external deletions in building/common sheets notify Anoop exclusively."""
-    from facilities.sync_engine import _notify_external_change
+def test_notify_external_change_sends_to_all_three_for_deletion(mocker):
+    """Verify that external deletions in building/common sheets notify Anoop, Kanav, AND Developer."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
 
-    mock_send = mocker.patch("whatsapp.ux.send_text")
+    _reset_notification_tracker()
+    mock_send = _patch_all_send_text(mocker)
     mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
     mock_supabase = mocker.patch("facilities.sync_engine.supabase")
     mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
@@ -332,12 +374,17 @@ def test_notify_external_change_exclusive_to_anoop_for_deletion(mocker):
         details={},
     )
 
-    mock_send.assert_called_once()
-    to_phone, msg = mock_send.call_args[0]
-    assert to_phone == "919211501013"
-    assert "GETT-033" in msg
-    assert "Trade Tower" in msg
-    assert "Task Removed from Google Sheets" in msg
+    # Must be called 3 times: Anoop + Kanav + Developer
+    assert mock_send.call_count == 3, (
+        f"Expected 3 notifications (Anoop + Kanav + Developer), got {mock_send.call_count}"
+    )
+
+    # Verify Anoop's message content
+    anoop_call = [c for c in mock_send.call_args_list if c[0][0] == "919211501013"][0]
+    anoop_msg = anoop_call[0][1]
+    assert "GETT-033" in anoop_msg
+    assert "Trade Tower" in anoop_msg
+    assert "Task Removed from Google Sheets" in anoop_msg
 
 
 def test_resolve_anoop_phone_number(mocker):
@@ -413,7 +460,7 @@ def test_notification_deduplication_suppresses_identical(mocker):
     from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
 
     _reset_notification_tracker()
-    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mock_send = _patch_all_send_text(mocker)
     mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
     mock_supabase = mocker.patch("facilities.sync_engine.supabase")
     mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
@@ -422,13 +469,13 @@ def test_notification_deduplication_suppresses_identical(mocker):
 
     details = {"field": "status", "old_value": "Open", "new_value": "WIP"}
 
-    # First call: should send
+    # First call: should send to all 3 recipients
     _notify_external_change("GEBB1-010", "GEBB1", "updated", details)
-    assert mock_send.call_count == 1
+    assert mock_send.call_count == 3
 
-    # Second call with identical payload: should be suppressed
+    # Second call with identical payload: should be suppressed entirely
     _notify_external_change("GEBB1-010", "GEBB1", "updated", details)
-    assert mock_send.call_count == 1
+    assert mock_send.call_count == 3
 
 
 def test_flap_suppression_silences_rapid_changes(mocker):
@@ -436,32 +483,33 @@ def test_flap_suppression_silences_rapid_changes(mocker):
     from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
 
     _reset_notification_tracker()
-    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mock_send = _patch_all_send_text(mocker)
     mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
     mock_supabase = mocker.patch("facilities.sync_engine.supabase")
     mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
         data=[{"issue_action": "Flapping task"}]
     )
 
+    # Each allowed change sends to 3 recipients
     # 1st change (allowed)
     _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "A", "new_value": "B"})
     # 2nd change (allowed)
     _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "B", "new_value": "C"})
     # 3rd change (allowed - limit is 3)
     _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "C", "new_value": "D"})
-    assert mock_send.call_count == 3
+    assert mock_send.call_count == 9  # 3 changes × 3 recipients each
 
     # 4th rapid change on the same task -> suppressed by flap damping!
     _notify_external_change("GEBB1-099", "GEBB1", "updated", {"field": "status", "old_value": "D", "new_value": "E"})
-    assert mock_send.call_count == 3
+    assert mock_send.call_count == 9  # No additional sends
 
 
 def test_multi_field_update_batched_notification(mocker):
-    """Verify that multiple field changes on a row generate a single consolidated WhatsApp message."""
+    """Verify that multiple field changes on a row generate a single set of notifications to all 3 recipients."""
     from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
 
     _reset_notification_tracker()
-    mock_send = mocker.patch("whatsapp.ux.send_text")
+    mock_send = _patch_all_send_text(mocker)
     mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
     mock_supabase = mocker.patch("facilities.sync_engine.supabase")
     mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
@@ -477,13 +525,186 @@ def test_multi_field_update_batched_notification(mocker):
 
     _notify_external_change("GEBB1-008", "GEBB1", "updated", details)
 
-    mock_send.assert_called_once()
-    to_phone, msg = mock_send.call_args[0]
-    assert to_phone == "919211501013"
-    assert "GEBB1-008" in msg
-    assert "Updates Made:" in msg
-    assert "Status:* Open → WIP" in msg
-    assert "Planned Date:* 15-Sep-2026 → 20-Sep-2026" in msg
+    # 3 recipients: Anoop + Kanav + Developer
+    assert mock_send.call_count == 3
+
+    # Verify Anoop's message has consolidated fields
+    anoop_call = [c for c in mock_send.call_args_list if c[0][0] == "919211501013"][0]
+    anoop_msg = anoop_call[0][1]
+    assert "GEBB1-008" in anoop_msg
+    assert "Updates Made:" in anoop_msg
+    assert "Status:* Open → WIP" in anoop_msg
+    assert "Planned Date:* 15-Sep-2026 → 20-Sep-2026" in anoop_msg
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# REGRESSION TESTS — Three-Recipient Notification Guarantee
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# These tests exist to prevent the issue where Kanav or Developer stops
+# receiving notifications after a code change or deployment.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+def test_regression_all_three_recipients_for_update(mocker):
+    """REGRESSION: Every Facilities Sheet update MUST notify Anoop + Kanav + Developer."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+    from elara.config import DEVELOPER_PHONE
+
+    _reset_notification_tracker()
+    mock_send = _patch_all_send_text(mocker)
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Plumbing repair"}]
+    )
+
+    _notify_external_change(
+        ref_no="GEBB2-020",
+        building="GEBB2",
+        change_type="updated",
+        details={"field": "latest_update", "old_value": "Pending", "new_value": "Parts ordered"},
+    )
+
+    assert mock_send.call_count == 3, (
+        f"REGRESSION FAILURE: Expected 3 notifications (Anoop + Kanav + Developer), "
+        f"got {mock_send.call_count}. All recipients must be notified."
+    )
+
+    recipients = [call[0][0] for call in mock_send.call_args_list]
+
+    # Anoop must be notified
+    assert "919211501013" in recipients, "REGRESSION: Anoop is missing from notification recipients"
+
+    # Developer must be notified
+    assert DEVELOPER_PHONE in recipients, "REGRESSION: Developer is missing from notification recipients"
+
+    # Kanav must be notified (in test mode Kanav gets rerouted to DEVELOPER_PHONE,
+    # but the call count confirms all 3 paths executed)
+    # All 3 send_text calls confirm that Anoop, Kanav, and Developer code paths executed
+
+
+def test_regression_all_three_recipients_for_create(mocker):
+    """REGRESSION: Every new Facilities Sheet row MUST notify Anoop + Kanav + Developer."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+    from elara.config import DEVELOPER_PHONE
+
+    _reset_notification_tracker()
+    mock_send = _patch_all_send_text(mocker)
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(data=[])
+
+    _notify_external_change(
+        ref_no="GETT-050",
+        building="GETT",
+        change_type="created",
+        details={"issue_action": "New elevator installation", "owner": "Facility Head"},
+    )
+
+    assert mock_send.call_count == 3, (
+        f"REGRESSION FAILURE: Expected 3 notifications for new task, got {mock_send.call_count}"
+    )
+
+
+def test_regression_all_three_recipients_for_delete(mocker):
+    """REGRESSION: Every Facilities Sheet row deletion MUST notify Anoop + Kanav + Developer."""
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+    from elara.config import DEVELOPER_PHONE
+
+    _reset_notification_tracker()
+    mock_send = _patch_all_send_text(mocker)
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Obsolete task"}]
+    )
+
+    _notify_external_change(
+        ref_no="Common-099",
+        building="Common",
+        change_type="deleted",
+        details={},
+    )
+
+    assert mock_send.call_count == 3, (
+        f"REGRESSION FAILURE: Expected 3 notifications for deletion, got {mock_send.call_count}"
+    )
+
+
+def test_regression_notifications_independent_of_actor(mocker):
+    """
+    REGRESSION: Notifications MUST be sent regardless of who made the change.
+    Anoop makes a change → Anoop + Kanav + Developer all get notified.
+    Kanav makes a change → Anoop + Kanav + Developer all get notified.
+    Developer makes a change → Anoop + Kanav + Developer all get notified.
+    """
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+
+    # We test that _notify_external_change does NOT check or filter by actor.
+    # It receives no actor parameter — changes are detected by polling, not by
+    # identifying who made them. So all changes trigger the same notification.
+    for scenario in ["Anoop edits", "Kanav edits", "Developer edits", "Unknown edits"]:
+        _reset_notification_tracker()
+        mock_send = _patch_all_send_text(mocker)
+        mocker.patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013")
+        mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+        mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+            data=[{"issue_action": f"Task for {scenario}"}]
+        )
+
+        _notify_external_change(
+            ref_no="GEBB1-100",
+            building="GEBB1",
+            change_type="updated",
+            details={"field": "status", "old_value": "Open", "new_value": "WIP"},
+        )
+
+        assert mock_send.call_count == 3, (
+            f"REGRESSION FAILURE ({scenario}): Expected 3 notifications, "
+            f"got {mock_send.call_count}. Notifications must not depend on who made the change."
+        )
+
+
+def test_regression_one_recipient_failure_does_not_block_others(mocker):
+    """
+    REGRESSION: If one recipient's notification fails, the other two must still succeed.
+    """
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+
+    _reset_notification_tracker()
+
+    call_count = {"total": 0}
+    anoop_phone = "919211501013"
+
+    def mock_send_side_effect(to, msg):
+        call_count["total"] += 1
+        if to == anoop_phone:
+            raise Exception("Simulated WhatsApp API failure for Anoop")
+        return True
+
+    _patch_all_send_text(mocker, side_effect=mock_send_side_effect)
+    mocker.patch("facilities.config.resolve_anoop_phone_number", return_value=anoop_phone)
+    mock_supabase = mocker.patch("facilities.sync_engine.supabase")
+    mock_supabase.table.return_value.select.return_value.eq.return_value.execute.return_value = mocker.MagicMock(
+        data=[{"issue_action": "Critical task"}]
+    )
+
+    # Should NOT raise even though Anoop's notification fails
+    _notify_external_change(
+        ref_no="GEBB1-200",
+        building="GEBB1",
+        change_type="updated",
+        details={"field": "status", "old_value": "Open", "new_value": "Closed"},
+    )
+
+    # Kanav and Developer notifications should still have been attempted
+    # (Anoop's call fails inside _send_external_edit_notification which catches the error)
+    # Total calls depends on implementation but Kanav + Developer must be called
+    assert call_count["total"] >= 2, (
+        f"REGRESSION FAILURE: Even when one recipient fails, the others must still be notified. "
+        f"Only {call_count['total']} send_text calls were made."
+    )
 
 
 

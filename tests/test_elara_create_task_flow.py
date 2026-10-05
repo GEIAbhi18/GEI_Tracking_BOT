@@ -142,6 +142,131 @@ def test_parse_task_intent_with_colon_and_assignee():
     assert parsed["due_date"] == "2026-09-25"
 
 
+def test_parse_task_intent_voice_message_due_date_wednesday():
+    """Verify Kanav's exact voice note from screenshot extracts due date Wednesday, assignee Rizwan, and title."""
+    from datetime import datetime, timedelta
+    today = datetime.now()
+    cur_weekday = today.weekday()
+    wed_ahead = 2 - cur_weekday
+    if wed_ahead <= 0:
+        wed_ahead += 7
+    expected_wed = (today + timedelta(days=wed_ahead)).strftime("%Y-%m-%d")
+
+    user = {"name": "Kanav", "role": "Director"}
+    voice_transcript = "Create a task for Rizwan to verify Balaji Bill due date Wednesday."
+    assert is_create_task_intent(voice_transcript) is True
+
+    parsed = parse_task_intent_from_text(voice_transcript, user)
+    assert parsed["intent"] == "CREATE_TASK"
+    assert parsed["team"] == "Elara Home"
+    assert parsed["assignee"] == "Rizwan"
+    assert parsed["title"] == "Verify Balaji Bill"
+    assert parsed["due_date"] == expected_wed
+
+
+def test_parse_task_intent_various_due_dates():
+    """Verify various due date expressions: today, tomorrow, Wednesday, Friday, next week, specific dates."""
+    from datetime import datetime, timedelta
+    today = datetime.now()
+    user = {"name": "Kanav", "role": "Director"}
+
+    # 1. today
+    p_today = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill due today.", user)
+    assert p_today["due_date"] == today.strftime("%Y-%m-%d")
+    assert p_today["title"] == "Verify Balaji Bill"
+
+    # 2. tomorrow
+    p_tom = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill due tomorrow.", user)
+    assert p_tom["due_date"] == (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    assert p_tom["title"] == "Verify Balaji Bill"
+
+    # 3. Friday
+    cur_weekday = today.weekday()
+    fri_ahead = 4 - cur_weekday
+    if fri_ahead <= 0:
+        fri_ahead += 7
+    expected_fri = (today + timedelta(days=fri_ahead)).strftime("%Y-%m-%d")
+    p_fri = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill by Friday.", user)
+    assert p_fri["due_date"] == expected_fri
+    assert p_fri["title"] == "Verify Balaji Bill"
+
+    # 4. next week
+    p_nw = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill next week.", user)
+    assert p_nw["due_date"] == (today + timedelta(days=7)).strftime("%Y-%m-%d")
+    assert p_nw["title"] == "Verify Balaji Bill"
+
+    # 5. in 3 days
+    p_3d = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill in 3 days.", user)
+    assert p_3d["due_date"] == (today + timedelta(days=3)).strftime("%Y-%m-%d")
+    assert p_3d["title"] == "Verify Balaji Bill"
+
+    # 6. specific date: 15th October
+    p_spec = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill due 15th October.", user)
+    assert p_spec["due_date"] == f"{today.year}-10-15"
+    assert p_spec["title"] == "Verify Balaji Bill"
+
+    # 7. ISO date: 2026-10-15
+    p_iso = parse_task_intent_from_text("Create a task for Rizwan to verify Balaji Bill due date is 2026-10-15.", user)
+    assert p_iso["due_date"] == "2026-10-15"
+    assert p_iso["title"] == "Verify Balaji Bill"
+
+    # 8. date before action
+    p_mid = parse_task_intent_from_text("Create a task for Rizwan due Wednesday to verify Balaji Bill", user)
+    wed_ahead = 2 - cur_weekday
+    if wed_ahead <= 0:
+        wed_ahead += 7
+    assert p_mid["due_date"] == (today + timedelta(days=wed_ahead)).strftime("%Y-%m-%d")
+    assert p_mid["title"] == "Verify Balaji Bill"
+    assert p_mid["assignee"] == "Rizwan"
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+@patch("elara.flows.create_task.send_list_message")
+@patch("elara.flows.create_task.get_projects")
+def test_voice_flow_with_extracted_wednesday_does_not_ask_due_date_again(mock_projects, mock_list, mock_buttons):
+    """
+    Simulate complete voice-to-task creation flow from the screenshot:
+    Kanav says: 'Create a task for Rizwan to verify Balaji Bill due date Wednesday.'
+    1. Intent is extracted with due_date = Wednesday.
+    2. Missing project prompts project selection.
+    3. User selects project.
+    4. The bot must NOT ask for due date again!
+    """
+    mock_projects.return_value = [{"id": "proj-admin", "name": "Project Administration Project", "department": "Project Administration"}]
+    user = {"name": "Kanav", "role": "Director", "phone": "919999999999"}
+    phone = "919999999999"
+    clear_elara_session(phone)
+
+    voice_transcript = "Create a task for Rizwan to verify Balaji Bill due date Wednesday."
+    prefill = parse_task_intent_from_text(voice_transcript, user)
+    assert prefill["due_date"] is not None
+
+    # Step 1: Start task creation flow
+    start_create_task_flow(phone, user, prefill=prefill)
+    assert mock_list.called
+    session = get_elara_session(phone)
+    assert session is not None
+    assert session["flow_state"] == "create_task_select_project"
+
+    # Step 2: User selects project -> verify the bot does NOT ask for due date!
+    mock_buttons.reset_mock()
+    handle_task_project_selection(phone, "proj-admin", user, session)
+    assert mock_buttons.called
+    btn_args = mock_buttons.call_args[0]
+    prompt_text = btn_args[1]
+
+    # Verify bot did NOT ask "When is this task due?"
+    assert "When is this task due?" not in prompt_text
+    assert "Due Date —" not in prompt_text
+
+    # Verify the due date Wednesday is preserved in the draft session
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["draft"]["due_date"] == prefill["due_date"]
+    assert updated_session["draft"]["title"] == "Verify Balaji Bill"
+    assert updated_session["draft"]["assignee"] == "Rizwan"
+
+
 # ── 2. Flow Progression & Confirmation Tests ─────────────────────────────────
 
 @patch("elara.flows.create_task.send_interactive_buttons")

@@ -1,75 +1,99 @@
-import re
+from __future__ import annotations
+
 import logging
+import re
 from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
-def parse_human_date(date_text: str) -> str:
+
+def parse_human_date(date_text: str) -> str | None:
     """
     Parses human-readable date text into YYYY-MM-DD format.
     Handles: "today", "tomorrow", "day after tomorrow", "in 3 days", "after 1 week", 
-    "next friday", "this friday", "12-05-2026", "2026-05-12", etc.
+    "next week", "this week", "Wednesday", "next friday", "this friday",
+    "due date Wednesday", "12-05-2026", "2026-05-12", "15th Oct", "15th of October", etc.
     """
     if not date_text:
         return None
         
     text = date_text.strip().lower()
-    # Remove common filler words
-    text = re.sub(r'\b(on|at|by|for|the)\b', '', text).strip()
+    # Strip trailing and leading punctuation
+    text = text.strip(" .,!?:;\"'()[]{}")
+    
+    # Remove common filler phrases / prefixes
+    text = re.sub(
+        r'\b(due\s+date\s*(?:is|:)?|due\s*(?:on|by|date)?\s*(?:is|:)?|deadline\s*(?:is|:)?|target\s+date\s*(?:is|:)?|on|at|by|for|the|of|is)\b',
+        ' ',
+        text
+    ).strip()
+    
     # Remove ordinal suffixes: 1st, 2nd, 3rd, 4th -> 1, 2, 3, 4
-    text = re.sub(r'(\d+)(st|nd|rd|th)', r'\1', text)
-    text = text.strip()
+    text = re.sub(r'(\d+)(st|nd|rd|th)\b', r'\1', text)
+    text = re.sub(r'\s+', ' ', text).strip()
     
     today = datetime.now()
     
-    # 1. Basic Constants with typo handling
-    if text in ["day after tomorrow", "day after tommorow", "day after tomorow", "next to tomorrow", "next to tommorow", "day after"]:
+    # 1. Day after tomorrow
+    if re.search(r'\bday\s+after\s+to?m+o+r+o*w\b', text) or text in ["day after tomorrow", "day after tommorow", "day after"]:
         return (today + timedelta(days=2)).strftime("%Y-%m-%d")
-    if text in ["today", "tday"]:
+        
+    # 2. Today
+    if re.search(r'\b(today|tday)\b', text):
         return today.strftime("%Y-%m-%d")
-    if text in ["tomorrow", "tommorow", "tomorow", "tomrow", "tomm", "tom"] or re.search(r'\bto?m+o+r+o+w\b', text):
+        
+    # 3. Tomorrow
+    if re.search(r'\bto?m+o+r+o*w\b', text) or text in ["tom", "tomm", "tomrow"]:
         return (today + timedelta(days=1)).strftime("%Y-%m-%d")
-    
-    # 2. Relative Days/Weeks (e.g., "in 3 days", "after 2 weeks", "3 days after")
-    # Match "3 days", "2 weeks", "in 1 month" (approx)
+        
+    # 4. Next week / this week / in a week
+    if re.search(r'\b(?:in\s+)?next\s+week\b', text) or re.search(r'\b(?:in\s+a|after\s+a)\s+week\b', text):
+        return (today + timedelta(days=7)).strftime("%Y-%m-%d")
+    if re.search(r'\b(?:end\s+of\s+)?(?:this\s+week|the\s+week)\b', text):
+        days_to_fri = (4 - today.weekday()) % 7
+        if days_to_fri == 0:
+            days_to_fri = 7
+        return (today + timedelta(days=days_to_fri)).strftime("%Y-%m-%d")
+        
+    # 5. Relative Days/Weeks (e.g., "in 3 days", "after 2 weeks", "3 days after")
     match_rel = re.search(r'(\d+)\s*(day|week|month)s?', text)
     if match_rel:
         num = int(match_rel.group(1))
         unit = match_rel.group(2)
+        delta: timedelta = timedelta(days=num)
         if unit == "day":
             delta = timedelta(days=num)
         elif unit == "week":
             delta = timedelta(weeks=num)
         elif unit == "month":
-            delta = timedelta(days=num * 30) # approximation
+            delta = timedelta(days=num * 30)  # approximation
         
-        # Check for "ago" or "before" (though usually deadlines are future)
+        # Check for "ago" or "before"
         if "ago" in text or "before" in text:
             return (today - delta).strftime("%Y-%m-%d")
         else:
             return (today + delta).strftime("%Y-%m-%d")
 
-    # 3. Specific Day of Week (e.g., "friday", "next friday", "this friday")
+    # 6. Specific Day of Week (e.g., "friday", "next friday", "this friday", "wednesday")
     days_of_week = {
         "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, 
         "friday": 4, "saturday": 5, "sunday": 6
     }
     for day_name, target_weekday in days_of_week.items():
-        if day_name in text:
+        if re.search(rf'\b{day_name}\b', text):
             current_weekday = today.weekday()
             days_ahead = target_weekday - current_weekday
             
             if "next" in text:
                 if days_ahead <= 0:
                     days_ahead += 7
-                days_ahead += 7 # "next friday" often means next week's friday
+                days_ahead += 7  # "next friday" means next week's friday
             elif days_ahead <= 0: 
-                # e.g. today is Friday, user says "friday", or today is Sat, user says "friday"
                 days_ahead += 7
                 
             return (today + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
 
-    # 4. Standard Date Formats
+    # 7. Standard Date Formats
     # YYYY-MM-DD
     match_iso = re.search(r'\b(\d{4})[-/](\d{1,2})[-/](\d{1,2})\b', text)
     if match_iso:
@@ -80,7 +104,8 @@ def parse_human_date(date_text: str) -> str:
     if match_ddmm:
         try:
             return f"{match_ddmm.group(3)}-{int(match_ddmm.group(2)):02d}-{int(match_ddmm.group(1)):02d}"
-        except: pass
+        except:
+            pass
 
     # Month Names Support
     months_map = {
@@ -90,30 +115,47 @@ def parse_human_date(date_text: str) -> str:
         "july": 7, "august": 8, "september": 9, "october": 10, "november": 11, "december": 12
     }
     
-    # DD Month (e.g. 11 Mar, 11 March)
-    match_dd_month = re.search(r'\b(\d{1,2})\s+([a-z]{3,})\b', text)
+    # DD Month [YYYY] (e.g. 11 Mar, 11 March, 15 Oct 2026)
+    match_dd_month = re.search(r'\b(\d{1,2})\s+([a-z]{3,})(?:\s+(\d{4}))?\b', text)
     if match_dd_month:
         d = int(match_dd_month.group(1))
         m_str = match_dd_month.group(2)
+        y = int(match_dd_month.group(3)) if match_dd_month.group(3) else today.year
         if m_str in months_map:
             m = months_map[m_str]
-            return f"{today.year}-{m:02d}-{d:02d}"
+            return f"{y}-{m:02d}-{d:02d}"
 
-    # Month DD (e.g. Mar 11, March 11)
-    match_month_dd = re.search(r'\b([a-z]{3,})\s+(\d{1,2})\b', text)
+    # Month DD [YYYY] (e.g. Mar 11, March 11, Oct 15 2026)
+    match_month_dd = re.search(r'\b([a-z]{3,})\s+(\d{1,2})(?:\s+(\d{4}))?\b', text)
     if match_month_dd:
         m_str = match_month_dd.group(1)
         d = int(match_month_dd.group(2))
+        y = int(match_month_dd.group(3)) if match_month_dd.group(3) else today.year
         if m_str in months_map:
             m = months_map[m_str]
-            return f"{today.year}-{m:02d}-{d:02d}"
+            return f"{y}-{m:02d}-{d:02d}"
 
     # DD-MM (assumes current year)
     match_short = re.search(r'\b(\d{1,2})[-/](\d{1,2})\b', text)
     if match_short:
         try:
             return f"{today.year}-{int(match_short.group(2)):02d}-{int(match_short.group(1)):02d}"
-        except: pass
+        except:
+            pass
+
+    # Day only: "25th" or "25"
+    match_day_only = re.search(r'^\s*(\d{1,2})\s*$', text)
+    if match_day_only:
+        d = int(match_day_only.group(1))
+        if 1 <= d <= 31:
+            month = today.month
+            year = today.year
+            if d < today.day:
+                month += 1
+                if month > 12:
+                    month = 1
+                    year += 1
+            return f"{year}-{month:02d}-{d:02d}"
 
     # Finally check if it's already YYYY-MM-DD
     try:
@@ -201,7 +243,7 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
     resolve_task_from_list.ambiguous_matches so the caller can ask the user.
     """
     # Reset ambiguous matches on every call
-    resolve_task_from_list.ambiguous_matches = []
+    setattr(resolve_task_from_list, "ambiguous_matches", [])
 
     if not query:
         return None
@@ -217,7 +259,7 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
         task_idx = int(match_xy.group(2))
         
         from core.context_manager import get_context
-        ctx = get_context(tasks[0].get('id') if tasks else None) # Dummy context fetch
+        _ctx = get_context(tasks[0].get('id') if tasks else None) # Dummy context fetch
         # Actually we need the grouped structure here. 
         # But we can simulate it if we know the project order.
         # For simplicity, we'll try to find tasks that match this project index if we have it in a shared map.
@@ -273,7 +315,7 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
             if len(filtered) == 1:
                 return filtered[0]
         # AMBIGUOUS — store for caller to handle
-        resolve_task_from_list.ambiguous_matches = starts_with
+        setattr(resolve_task_from_list, "ambiguous_matches", starts_with)
         logger.info(f"Ambiguous task match for '{query}': {[t.get('name') for t in starts_with]}")
         return None
             
@@ -287,11 +329,11 @@ def resolve_task_from_list(query, tasks, last_list_ids=None, active_project_id=N
             if len(filtered) == 1:
                 return filtered[0]
         # AMBIGUOUS — store for caller to handle
-        resolve_task_from_list.ambiguous_matches = contains
+        setattr(resolve_task_from_list, "ambiguous_matches", contains)
         logger.info(f"Ambiguous task match for '{query}': {[t.get('name') for t in contains]}")
         return None
             
     return None
 
-# Initialize the class attribute
-resolve_task_from_list.ambiguous_matches = []
+# Initialize the function attribute
+setattr(resolve_task_from_list, "ambiguous_matches", [])

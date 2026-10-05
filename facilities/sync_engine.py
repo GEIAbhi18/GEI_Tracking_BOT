@@ -419,14 +419,55 @@ def _handle_deleted_external_row(ref_no: str, building: str):
 def _notify_external_change(ref_no: str, building: str, change_type: str,
                             details: dict):
     """
-    Send a WhatsApp notification to Anoop and Kanav whenever there is any change
-    in any building sheet or common sheet in Facilities task tracker Google Sheet.
+    Send a WhatsApp notification to Anoop, Kanav, and Developer whenever
+    there is any change in any building sheet or common sheet in the
+    Facilities task tracker Google Sheet.
+
+    All three recipients are notified simultaneously, regardless of who
+    made the change.  Each recipient's notification is independent so
+    one failure does not block the others.
     """
     # 0. Suppress duplicates and rapid flapping
     if _should_suppress_notification(ref_no, change_type, details):
         return
 
-    # 1. Notify Anoop (existing behaviour — unchanged)
+    # ── Build shared context used by Kanav + Developer notifications ──
+    # Human-readable description of the change
+    if change_type == "updated" and isinstance(details, dict):
+        if "fields" in details and isinstance(details["fields"], list):
+            parts = []
+            for f_info in details["fields"]:
+                f_name = f_info.get("field", "unknown field").replace("_", " ").title()
+                o_val = f_info.get("old_value") or "—"
+                n_val = f_info.get("new_value") or "—"
+                parts.append(f"{f_name}: '{o_val}' → '{n_val}'")
+            change_desc = "; ".join(parts)
+        else:
+            field = details.get("field", "unknown field").replace("_", " ").title()
+            old_val = details.get("old_value") or "—"
+            new_val = details.get("new_value") or "—"
+            change_desc = f"{field} changed from '{old_val}' to '{new_val}'"
+    elif change_type == "created":
+        change_desc = "New task added on Google Sheet"
+    elif change_type == "deleted":
+        change_desc = "Task removed from Google Sheet"
+    else:
+        change_desc = f"External {change_type}"
+
+    # Fetch task title from cache if available
+    task_title = ref_no
+    try:
+        cache_res = supabase.table("row_cache").select("issue_action").eq("ref_no", ref_no).execute()
+        if cache_res.data and cache_res.data[0].get("issue_action"):
+            task_title = cache_res.data[0]["issue_action"]
+    except Exception:
+        pass
+
+    from facilities.config import BUILDING_NAME_MAPPING
+    bldg_display = BUILDING_NAME_MAPPING.get(building, building) if building else "Sheet"
+    changed_by = f"Google Sheet ({bldg_display})"
+
+    # 1. Notify Anoop
     try:
         from facilities.config import resolve_anoop_phone_number
         anoop_phone = resolve_anoop_phone_number()
@@ -437,45 +478,9 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
     except Exception as e:
         logger.error(f"Failed to notify Anoop about external change for {ref_no}: {e}")
 
-    # 2. Notify Kanav of the same change
+    # 2. Notify Kanav
     try:
         from notifications.kanav_notifier import notify_kanav_task_change
-
-        # Build a human-readable description of the change for Kanav
-        if change_type == "updated" and isinstance(details, dict):
-            if "fields" in details and isinstance(details["fields"], list):
-                parts = []
-                for f_info in details["fields"]:
-                    f_name = f_info.get("field", "unknown field").replace("_", " ").title()
-                    o_val = f_info.get("old_value") or "—"
-                    n_val = f_info.get("new_value") or "—"
-                    parts.append(f"{f_name}: '{o_val}' → '{n_val}'")
-                change_desc = "; ".join(parts)
-            else:
-                field = details.get("field", "unknown field").replace("_", " ").title()
-                old_val = details.get("old_value") or "—"
-                new_val = details.get("new_value") or "—"
-                change_desc = f"{field} changed from '{old_val}' to '{new_val}'"
-        elif change_type == "created":
-            change_desc = "New task added on Google Sheet"
-        elif change_type == "deleted":
-            change_desc = "Task removed from Google Sheet"
-        else:
-            change_desc = f"External {change_type}"
-
-        # Fetch task title from cache if available
-        task_title = ref_no
-        try:
-            cache_res = supabase.table("row_cache").select("issue_action").eq("ref_no", ref_no).execute()
-            if cache_res.data and cache_res.data[0].get("issue_action"):
-                task_title = cache_res.data[0]["issue_action"]
-        except Exception:
-            pass
-
-        from facilities.config import BUILDING_NAME_MAPPING
-        bldg_display = BUILDING_NAME_MAPPING.get(building, building) if building else "Sheet"
-        changed_by = f"Google Sheet ({bldg_display})"
-
         notify_kanav_task_change(
             task_id=ref_no,
             task_title=task_title,
@@ -485,6 +490,18 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
         )
     except Exception as e:
         logger.error(f"Failed to notify Kanav about external change for {ref_no}: {e}")
+
+    # 3. Notify Developer
+    try:
+        from notifications.developer_notifier import notify_developer_facilities_change
+        notify_developer_facilities_change(
+            ref_no=ref_no,
+            task_title=task_title,
+            change_desc=change_desc,
+            changed_by=changed_by,
+        )
+    except Exception as e:
+        logger.error(f"Failed to notify Developer about external change for {ref_no}: {e}")
 
 
 

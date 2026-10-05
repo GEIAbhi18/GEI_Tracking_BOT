@@ -177,9 +177,10 @@ def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
             or "pytest" in sys.modules
             or os.getenv("PYTEST_CURRENT_TEST") is not None
             or any("test" in arg.lower() for arg in sys.argv)
-            or "test" in str(task_id).lower()
-            or "test" in str(task_title).lower()
-            or "test" in str(change_made).lower()
+            # pyrefly: ignore [unnecessary-type-conversion]
+            or str(task_id).lower().startswith("test-")
+            # pyrefly: ignore [unnecessary-type-conversion]
+            or str(task_id).lower().startswith("test_")
         )
         if is_test_task:
             kanav_wa = DEVELOPER_PHONE
