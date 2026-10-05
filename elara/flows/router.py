@@ -178,16 +178,22 @@ def _route_button(sender: str, button_id: str, user: dict, session: dict | None)
         return
 
     if button_id == "elara_tassign_keep":
-        from elara.flows.create_task import show_task_draft_preview
+        from elara.flows.create_task import show_task_draft_preview, prompt_task_due_date
         draft = (session or {}).get("draft", {})
-        show_task_draft_preview(sender, draft, user)
+        if not draft.get("due_date"):
+            prompt_task_due_date(sender, draft)
+        else:
+            show_task_draft_preview(sender, draft, user)
         return
 
     if button_id == "elara_tassign_me":
-        from elara.flows.create_task import show_task_draft_preview
+        from elara.flows.create_task import show_task_draft_preview, prompt_task_due_date
         draft = (session or {}).get("draft", {})
         draft["assignee"] = user.get("name") or "Team Member"
-        show_task_draft_preview(sender, draft, user)
+        if not draft.get("due_date"):
+            prompt_task_due_date(sender, draft)
+        else:
+            show_task_draft_preview(sender, draft, user)
         return
 
     # Task Creation: Project Selection
@@ -275,6 +281,11 @@ def _route_text(sender: str, text: str, user: dict, session: dict | None):
     if state == "create_task_title":
         from elara.flows.create_task import handle_task_title_input
         handle_task_title_input(sender, text, user, session_dict)
+        return
+
+    if state == "create_task_priority":
+        from elara.flows.create_task import handle_task_priority_text_input
+        handle_task_priority_text_input(sender, text, user, session_dict)
         return
 
     if state == "create_task_due_date":

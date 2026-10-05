@@ -5,7 +5,7 @@ import re
 from datetime import datetime, timedelta, timezone
 
 from core.utils import format_date_human, parse_human_date
-from elara.auth import get_elara_team_members, is_elara_admin
+from elara.auth import get_elara_team_members, is_elara_admin, resolve_elara_assignee
 from elara.config import ELARA_DEPARTMENTS, VALID_PRIORITIES
 from elara.db import create_task, get_project_by_id, get_projects
 from elara.flows.task_card import send_elara_task_card
@@ -173,8 +173,8 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
     # 4. Assignee & Title extraction
     title = None
 
-    # Check known multi-word members first (e.g. "Bhagwan Dass")
-    known_multi = ["Bhagwan Dass"]
+    # Check known multi-word members first (e.g. "Bhagwan Dass", "Raja Nadeem", "Sayangdeep Das")
+    known_multi = ["Bhagwan Dass", "Raja Nadeem", "Sayangdeep Das"]
     for km in known_multi:
         m_km = re.search(rf'\b(?:for|to|assign(?:ed)? to)\s+({re.escape(km)})\s*(?:to|:|regarding|about)\s*(.+)$', clean, re.I)
         if m_km:
@@ -240,7 +240,7 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
                     except Exception:
                         pass
                     member_names = [m.get("name", "") for m in team_members if m.get("name")]
-                    for fallback_n in ("Rizwan", "Rachit", "Bhagwan Dass", "Gaurav", "Puja"):
+                    for fallback_n in ("Rizwan", "Rachit", "Bhagwan Dass", "Gaurav", "Raja Nadeem", "Sayangdeep Das", "Kanav", "Puja"):
                         if fallback_n not in member_names:
                             member_names.append(fallback_n)
 
@@ -294,12 +294,49 @@ def parse_task_intent_from_text(text: str, user: dict | None = None) -> dict:
     return entities
 
 
+def _format_unregistered_user_message(assignee_name: str) -> str:
+    """Format an informative error message when an assignee is not found in database / Supabase."""
+    members = get_elara_team_members()
+    member_names = [m.get("name") for m in members if m.get("name")]
+    for fallback_name in ("Rachit", "Bhagwan Dass", "Gaurav", "Rizwan", "Raja Nadeem", "Sayangdeep Das", "Kanav", "Puja"):
+        if fallback_name not in member_names:
+            member_names.append(fallback_name)
+
+    names_list = "\n".join(f"• {name}" for name in member_names)
+    return (
+        f"⚠️ User *{assignee_name}* is not found in database / Supabase.\n\n"
+        f"Registered Elara Home team members:\n"
+        f"{names_list}\n\n"
+        f"Please reply with a registered team member, or type *me* to assign to yourself."
+    )
+
+
+def prompt_unregistered_assignee(to: str, draft: dict, user: dict, invalid_name: str):
+    """Notify that the requested user is not in database / Supabase, and prompt for a registered member."""
+    draft["assignee"] = None
+    set_elara_session(to, "create_task_assignee", draft=draft)
+    body = _format_unregistered_user_message(invalid_name)
+    buttons = [
+        {"id": "elara_tassign_me", "title": "Assign to Me"},
+    ]
+    return send_interactive_buttons(to, body, buttons)
+
+
 def start_create_task_flow(to: str, user: dict, prefill: dict | None = None):
     """
     Start task creation with a guided flow matching Facilities:
     Project -> Title -> Priority (if missing) -> Due Date (if missing) -> Assignee Confirmation -> Draft Preview Card -> Confirm & Create.
     """
     draft = prefill.copy() if prefill else {}
+
+    # Check if assignee in prefill exists in Supabase
+    if draft.get("assignee"):
+        matched_assignee = resolve_elara_assignee(draft["assignee"])
+        if matched_assignee:
+            draft["assignee"] = matched_assignee.get("name")
+        else:
+            invalid_prefill_assignee = draft.pop("assignee")
+            draft["unregistered_assignee"] = invalid_prefill_assignee
 
     # If project not known, see if department is known or user belongs to a specific department
     project_id = draft.get("project_id")
@@ -344,6 +381,11 @@ def start_create_task_flow(to: str, user: dict, prefill: dict | None = None):
     if not draft.get("title"):
         return prompt_task_title(to, draft)
 
+    # If assignee was invalid from prefill, prompt unregistered assignee error
+    if draft.get("unregistered_assignee"):
+        inv_name = draft.pop("unregistered_assignee")
+        return prompt_unregistered_assignee(to, draft, user, inv_name)
+
     # 3. Due date missing -> prompt due date
     if not draft.get("due_date"):
         return prompt_task_due_date(to, draft)
@@ -378,6 +420,10 @@ def handle_task_project_selection(to: str, project_id: str, user: dict, session:
     if not draft.get("title"):
         return prompt_task_title(to, draft)
 
+    if draft.get("unregistered_assignee"):
+        inv_name = draft.pop("unregistered_assignee")
+        return prompt_unregistered_assignee(to, draft, user, inv_name)
+
     if not draft.get("due_date"):
         return prompt_task_due_date(to, draft)
 
@@ -385,13 +431,36 @@ def handle_task_project_selection(to: str, project_id: str, user: dict, session:
 
 
 def handle_task_title_input(to: str, text: str, user: dict, session: dict | None = None):
-    """Receive task title and prompt priority or due date."""
+    """Receive task title (or full voice/text task intent) and prompt priority or assignee."""
     clean_title = text.strip()
     if not clean_title:
         return send_text(to, "Please enter a valid Task Title:")
 
     draft = (session or {}).get("draft", {})
-    draft["title"] = clean_title
+
+    # If input expresses task creation intent or contains assignee/due date/priority
+    if is_create_task_intent(clean_title):
+        parsed = parse_task_intent_from_text(clean_title, user)
+        if parsed.get("title"):
+            draft["title"] = parsed["title"]
+        else:
+            draft["title"] = clean_title
+
+        if parsed.get("priority"):
+            draft["priority"] = parsed["priority"]
+        if parsed.get("due_date"):
+            draft["due_date"] = parsed["due_date"]
+
+        if parsed.get("assignee"):
+            assignee_candidate = parsed["assignee"]
+            matched = resolve_elara_assignee(assignee_candidate)
+            if matched:
+                draft["assignee"] = matched.get("name")
+            else:
+                # Unregistered user in Supabase! Send error message immediately
+                return prompt_unregistered_assignee(to, draft, user, assignee_candidate)
+    else:
+        draft["title"] = clean_title
 
     # Prompt priority
     return prompt_task_priority(to, draft)
@@ -416,6 +485,36 @@ def handle_task_priority_selection(to: str, priority: str, user: dict, session: 
     """Receive task priority and advance to due date or assignee."""
     draft = (session or {}).get("draft", {})
     draft["priority"] = priority.lower() if priority in VALID_PRIORITIES else "medium"
+
+    if draft.get("unregistered_assignee"):
+        inv_name = draft.pop("unregistered_assignee")
+        return prompt_unregistered_assignee(to, draft, user, inv_name)
+
+    if not draft.get("due_date"):
+        return prompt_task_due_date(to, draft)
+
+    return prompt_task_assignee(to, draft, user)
+
+
+def handle_task_priority_text_input(to: str, text: str, user: dict, session: dict | None = None):
+    """
+    Handle natural language or text input for priority selection
+    (e.g., 'high', 'low', 'medium', 'move to next step', 'next', 'skip').
+    """
+    draft = (session or {}).get("draft", {})
+    clean = text.strip().lower()
+
+    if any(k in clean for k in ("high", "urgent", "critical")):
+        draft["priority"] = "high"
+    elif any(k in clean for k in ("low",)):
+        draft["priority"] = "low"
+    else:
+        # Defaults to medium for 'medium', 'skip', 'next', 'move to next step', 'ok', etc.
+        draft["priority"] = "medium"
+
+    if draft.get("unregistered_assignee"):
+        inv_name = draft.pop("unregistered_assignee")
+        return prompt_unregistered_assignee(to, draft, user, inv_name)
 
     if not draft.get("due_date"):
         return prompt_task_due_date(to, draft)
@@ -444,7 +543,7 @@ def handle_task_due_date_input(to: str, text: str, user: dict, session: dict | N
     draft = (session or {}).get("draft", {})
     clean_text = text.strip().lower()
 
-    if clean_text in ("skip", "skip due date", "none", "no", "skip date", "na", "-"):
+    if any(k in clean_text for k in ("skip", "none", "no", "na", "-", "move to next step", "next", "continue", "default")):
         draft["due_date"] = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
     elif clean_text == "tomorrow":
         draft["due_date"] = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
@@ -456,6 +555,10 @@ def handle_task_due_date_input(to: str, text: str, user: dict, session: dict | N
             draft["due_date"] = parsed
         else:
             draft["due_date"] = (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()
+
+    if draft.get("unregistered_assignee"):
+        inv_name = draft.pop("unregistered_assignee")
+        return prompt_unregistered_assignee(to, draft, user, inv_name)
 
     return prompt_task_assignee(to, draft, user)
 
@@ -501,12 +604,20 @@ def handle_task_assignee_input(to: str, text: str, user: dict, session: dict | N
     clean_lower = clean.lower()
     current_assignee = draft.get("assignee")
 
-    if clean_lower in ("me", "myself", "self", "assign to me"):
+    if clean_lower in ("me", "myself", "self", "assign to me", "move to next step", "next", "skip", "continue"):
         draft["assignee"] = user.get("name") or "Team Member"
-    elif clean_lower in ("keep", "skip", "ok", "yes", "current") and current_assignee:
+    elif clean_lower in ("keep", "current") and current_assignee:
         draft["assignee"] = current_assignee
     else:
-        draft["assignee"] = clean.title()
+        matched_member = resolve_elara_assignee(clean)
+        if matched_member:
+            draft["assignee"] = matched_member.get("name") or clean.title()
+        else:
+            # User is NOT in database / Supabase!
+            return prompt_unregistered_assignee(to, draft, user, clean)
+
+    if not draft.get("due_date"):
+        return prompt_task_due_date(to, draft)
 
     return show_task_draft_preview(to, draft, user)
 
@@ -592,7 +703,11 @@ def handle_task_edit_input(to: str, text: str, user: dict, session: dict | None 
         if field in ("title", "task", "name"):
             draft["title"] = val
         elif field in ("assignee", "owner", "assigned to", "for"):
-            draft["assignee"] = val.title()
+            matched_user = resolve_elara_assignee(val)
+            if matched_user:
+                draft["assignee"] = matched_user.get("name") or val.title()
+            else:
+                return prompt_unregistered_assignee(to, draft, user, val)
         elif field in ("due", "due date", "date", "deadline"):
             parsed = parse_human_date(val)
             draft["due_date"] = parsed if parsed else val

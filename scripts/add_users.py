@@ -76,6 +76,7 @@ def add_facilities_user(
         "department": department,
         "whatsapp_number": clean_num,
         "permitted_buildings": buildings,
+        # pyrefly: ignore [deprecated]
         "last_activity_at": datetime.utcnow().isoformat(),
     }
 

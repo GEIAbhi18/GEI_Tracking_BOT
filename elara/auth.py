@@ -114,3 +114,58 @@ def get_elara_team_members(department: str | None = None) -> list:
     except Exception as e:
         logger.error(f"get_elara_team_members failed: {e}")
         return []
+
+
+def resolve_elara_assignee(name_query: str) -> dict | None:
+    """
+    Resolve an assignee name against the Elara Home database (`elara_users` and `users` table in Supabase).
+    Returns the user dict if found, or None if the user does not exist in Supabase.
+    """
+    if not name_query or not isinstance(name_query, str):
+        return None
+    clean_query = name_query.strip()
+    if not clean_query:
+        return None
+
+    clean_lower = clean_query.lower()
+    if clean_lower in ("me", "myself", "self", "assign to me", "keep", "skip", "current"):
+        return None
+
+    try:
+        # 1. Exact match (case-insensitive) on elara_users
+        res = supabase.table("elara_users").select("*").ilike("name", clean_query).execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]
+
+        # 2. Substring/prefix match on elara_users
+        res_sub = supabase.table("elara_users").select("*").ilike("name", f"%{clean_query}%").execute()
+        if res_sub.data and len(res_sub.data) > 0:
+            return res_sub.data[0]
+
+        # 3. Check against all elara_users for first name or partial match
+        all_members = get_elara_team_members()
+        for m in all_members:
+            m_name = (m.get("name") or "").lower()
+            if clean_lower == m_name or clean_lower in m_name or m_name in clean_lower:
+                return m
+            if clean_lower in m_name.split():
+                return m
+
+        # 4. Check general users table as fallback
+        res_u = supabase.table("users").select("*").ilike("name", clean_query).execute()
+        if res_u.data and len(res_u.data) > 0:
+            return res_u.data[0]
+
+        res_u_sub = supabase.table("users").select("*").ilike("name", f"%{clean_query}%").execute()
+        if res_u_sub.data and len(res_u_sub.data) > 0:
+            return res_u_sub.data[0]
+
+        # 5. Check if it matches fallback member Puja
+        if clean_lower == "puja":
+            return {"name": "Puja", "role": "Team Member", "department": "Construction & Design", "phone": ""}
+
+        return None
+    except Exception as e:
+        logger.error(f"resolve_elara_assignee failed for '{name_query}': {e}")
+        return None
+

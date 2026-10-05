@@ -451,3 +451,162 @@ def test_assignee_me_button(mock_buttons):
     assert updated_session["draft"]["assignee"] == "Kanav"
     assert updated_session["flow_state"] == "create_task_preview"
 
+
+# ── 5. Unregistered User & Priority Handling Tests ─────────────────────────
+
+def test_format_unregistered_user_message():
+    from elara.flows.create_task import _format_unregistered_user_message
+    msg = _format_unregistered_user_message("Siddharth")
+    assert "Siddharth" in msg
+    assert "database / Supabase" in msg or "Supabase" in msg
+    assert "Registered Elara Home team members:" in msg
+    assert "Rachit" in msg
+    assert "Rizwan" in msg
+    assert "Raja Nadeem" in msg
+    assert "Sayangdeep Das" in msg
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+def test_audio_unregistered_user_in_task_title(mock_buttons):
+    """
+    Kanav's screenshot case:
+    User was in create_task_title and sent voice note:
+    'Create a task for Siddharth to update drawing tracker on Google Sheet.'
+    Bot should recognize Siddharth is not in database, send error message, and set session to create_task_assignee.
+    """
+    user = {"name": "Kanav", "role": "Director"}
+    phone = "919999999999"
+    draft = {"project_id": "proj-admin"}
+    set_elara_session(phone, "create_task_title", draft=draft)
+    session = get_elara_session(phone)
+
+    voice_text = "Create a task for Siddharth to update drawing tracker on Google Sheet."
+    _route_text(phone, voice_text, user, session)
+
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["flow_state"] == "create_task_assignee"
+    assert updated_session["draft"]["title"] == "Update drawing tracker on Google Sheet"
+    assert updated_session["draft"]["assignee"] is None
+
+    assert mock_buttons.called
+    args, kwargs = mock_buttons.call_args
+    body_text = args[1]
+    assert "Siddharth" in body_text
+    assert "Supabase" in body_text
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+def test_priority_move_to_next_step_text(mock_buttons):
+    """
+    User responds 'Move to next step' when asked for priority.
+    Should not reset session; should default priority to medium and prompt due date.
+    """
+    user = {"name": "Kanav", "role": "Director"}
+    phone = "919999999999"
+    draft = {
+        "project_id": "proj-admin",
+        "title": "Update drawing tracker on Google Sheet",
+    }
+    set_elara_session(phone, "create_task_priority", draft=draft)
+    session = get_elara_session(phone)
+
+    _route_text(phone, "Move to next step", user, session)
+
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["flow_state"] == "create_task_due_date"
+    assert updated_session["draft"]["priority"] == "medium"
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+def test_handle_task_assignee_input_unregistered(mock_buttons):
+    """Typing an unknown user name prompts unregistered user error."""
+    user = {"name": "Kanav", "role": "Director"}
+    phone = "919999999999"
+    draft = {
+        "project_id": "proj-admin",
+        "title": "Update drawing tracker on Google Sheet",
+        "due_date": "2026-10-10",
+    }
+    set_elara_session(phone, "create_task_assignee", draft=draft)
+    session = get_elara_session(phone)
+
+    handle_task_assignee_input(phone, "Siddharth", user, session)
+
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["flow_state"] == "create_task_assignee"
+    assert updated_session["draft"]["assignee"] is None
+
+    assert mock_buttons.called
+    body_text = mock_buttons.call_args[0][1]
+    assert "Siddharth" in body_text
+    assert "Supabase" in body_text
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+def test_handle_task_assignee_input_registered(mock_buttons):
+    """Typing a registered user name (e.g. Raja Nadeem) sets assignee and moves to preview."""
+    user = {"name": "Kanav", "role": "Director"}
+    phone = "919999999999"
+    draft = {
+        "project_id": "proj-admin",
+        "title": "Update drawing tracker on Google Sheet",
+        "due_date": "2026-10-10",
+    }
+    set_elara_session(phone, "create_task_assignee", draft=draft)
+    session = get_elara_session(phone)
+
+    handle_task_assignee_input(phone, "Raja Nadeem", user, session)
+
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["flow_state"] == "create_task_preview"
+    assert updated_session["draft"]["assignee"] == "Raja Nadeem"
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+def test_handle_task_assignee_input_move_to_next_step(mock_buttons):
+    """Typing 'Move to next step' in assignee step assigns to current user (Kanav)."""
+    user = {"name": "Kanav", "role": "Director"}
+    phone = "919999999999"
+    draft = {
+        "project_id": "proj-admin",
+        "title": "Update drawing tracker on Google Sheet",
+        "due_date": "2026-10-10",
+    }
+    set_elara_session(phone, "create_task_assignee", draft=draft)
+    session = get_elara_session(phone)
+
+    handle_task_assignee_input(phone, "Move to next step", user, session)
+
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["flow_state"] == "create_task_preview"
+    assert updated_session["draft"]["assignee"] == "Kanav"
+
+
+@patch("elara.flows.create_task.send_interactive_buttons")
+def test_edit_assignee_unregistered_validation(mock_buttons):
+    """Editing draft to an unknown assignee prompts the unregistered error message."""
+    user = {"name": "Kanav", "role": "Director"}
+    phone = "919999999999"
+    draft = {
+        "title": "Old Title",
+        "assignee": "Puja",
+        "due_date": "2026-09-20",
+        "project_id": "proj-admin"
+    }
+    set_elara_session(phone, "create_task_edit", draft=draft)
+    session = get_elara_session(phone)
+
+    handle_task_edit_input(phone, "Assignee: Siddharth", user, session)
+    updated_session = get_elara_session(phone)
+    assert updated_session is not None
+    assert updated_session["flow_state"] == "create_task_assignee"
+    assert mock_buttons.called
+    body_text = mock_buttons.call_args[0][1]
+    assert "Siddharth" in body_text
+
+
