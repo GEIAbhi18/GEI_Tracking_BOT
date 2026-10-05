@@ -103,6 +103,19 @@ def can_access_department(user: dict | None, department: str) -> bool:
     return False
 
 
+CANONICAL_ELARA_MEMBERS = [
+    {"name": "Rachit", "phone": "919867272041", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+    {"name": "Bhagwan Dass", "phone": "919816641892", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+    {"name": "Gaurav", "phone": "918894577707", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+    {"name": "Developer", "phone": "917717754421", "role": "Developer", "department": "Project Administration", "team": "Elara Home"},
+    {"name": "Kanav", "phone": "919811867829", "role": "Director", "department": "Project Administration", "team": "Elara Home"},
+    {"name": "Rizwan", "phone": "919717856493", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+    {"name": "Raja Nadeem", "phone": "917006116371", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+    {"name": "Sayangdeep Das", "phone": "916290721639", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+    {"name": "Puja", "phone": "", "role": "Team Member", "department": "Construction & Design", "team": "Elara Home"},
+]
+
+
 def get_elara_team_members(department: str | None = None) -> list:
     """Get all Elara team members, optionally filtered by department."""
     try:
@@ -110,10 +123,15 @@ def get_elara_team_members(department: str | None = None) -> list:
         if department:
             query = query.eq("department", department)
         res = query.execute()
-        return res.data or []
+        if res and res.data and len(res.data) > 0:
+            return res.data
     except Exception as e:
         logger.error(f"get_elara_team_members failed: {e}")
-        return []
+
+    # Fallback to canonical list when database is unreachable or mock client is used
+    if department:
+        return [m for m in CANONICAL_ELARA_MEMBERS if m.get("department", "").lower() == department.strip().lower()]
+    return list(CANONICAL_ELARA_MEMBERS)
 
 
 def resolve_elara_assignee(name_query: str) -> dict | None:
@@ -160,12 +178,22 @@ def resolve_elara_assignee(name_query: str) -> dict | None:
         if res_u_sub.data and len(res_u_sub.data) > 0:
             return res_u_sub.data[0]
 
-        # 5. Check if it matches fallback member Puja
-        if clean_lower == "puja":
-            return {"name": "Puja", "role": "Team Member", "department": "Construction & Design", "phone": ""}
+        # 5. Check against canonical members fallback
+        for m in CANONICAL_ELARA_MEMBERS:
+            m_name = m["name"].lower()
+            if clean_lower == m_name or clean_lower in m_name or m_name in clean_lower:
+                return m
+            if clean_lower in m_name.split():
+                return m
 
         return None
     except Exception as e:
         logger.error(f"resolve_elara_assignee failed for '{name_query}': {e}")
+        for m in CANONICAL_ELARA_MEMBERS:
+            m_name = m["name"].lower()
+            if clean_lower == m_name or clean_lower in m_name or m_name in clean_lower:
+                return m
+            if clean_lower in m_name.split():
+                return m
         return None
 
