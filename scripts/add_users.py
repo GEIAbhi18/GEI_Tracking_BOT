@@ -216,8 +216,10 @@ def main():
         # Default batch mode for requested additions:
         print("=" * 60)
         print("Adding requested members to Database:")
-        print("1. Chandan -> Facilities (+918699197231)")
-        print("2. Rizwan  -> Elara Home  (+919717856493)")
+        print("1. Chandan        -> Facilities (+918699197231)")
+        print("2. Rizwan         -> Elara Home  (+919717856493)")
+        print("3. Raja Nadeem    -> Elara Home  (+917006116371)")
+        print("4. Sayangdeep Das -> Elara Home  (+916290721639)")
         print("=" * 60)
 
         # 1. Chandan to Facilities
@@ -243,10 +245,38 @@ def main():
             dry_run=args.dry_run,
         )
 
+        print("-" * 60)
+
+        # 3. Raja Nadeem to Elara Home
+        rn_res = add_elara_user(
+            name="Raja Nadeem",
+            phone="+917006116371",
+            role="Team Member",
+            department="Construction & Design",
+            team="Elara Home",
+            email="rajanadeem@goodearthinfra.com",
+            dry_run=args.dry_run,
+        )
+
+        print("-" * 60)
+
+        # 4. Sayangdeep Das to Elara Home
+        sd_res = add_elara_user(
+            name="Sayangdeep Das",
+            phone="+916290721639",
+            role="Team Member",
+            department="Construction & Design",
+            team="Elara Home",
+            email="sayangdeepdas@goodearthinfra.com",
+            dry_run=args.dry_run,
+        )
+
         print("=" * 60)
         print("Summary of actions:")
-        print(f"Facilities (Chandan): {'SUCCESS' if c_res else 'FAILED'} (Record: {c_res})")
-        print(f"Elara Home (Rizwan):  {'SUCCESS' if r_res else 'FAILED'} (Record: {r_res})")
+        print(f"Facilities (Chandan):       {'SUCCESS' if c_res else 'FAILED'}")
+        print(f"Elara Home (Rizwan):        {'SUCCESS' if r_res else 'FAILED'}")
+        print(f"Elara Home (Raja Nadeem):   {'SUCCESS' if rn_res else 'FAILED'}")
+        print(f"Elara Home (Sayangdeep Das): {'SUCCESS' if sd_res else 'FAILED'}")
         print("=" * 60)
 
 
