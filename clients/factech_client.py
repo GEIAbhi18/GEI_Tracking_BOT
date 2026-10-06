@@ -12,6 +12,8 @@ from clients.config import (
     FACTECH_USERNAME,
     FACTECH_PASSWORD,
     get_site_id_for_building,
+    is_chaitanya,
+    is_developer_phone,
 )
 
 logger = logging.getLogger(__name__)
@@ -140,19 +142,37 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
     req_id = _generate_request_id()
     log_prefix = f"[FACTECH_COMPLAINT][request_id={req_id}]"
 
-    building = client_context.get("building", "")
-    site_id = get_site_id_for_building(building)
+    # Identify whether client is a tester (Developer or Chaitanya)
+    phone = str(client_context.get("mobile_number") or client_context.get("mobile") or "").strip()
+    admin_name = str(client_context.get("admin_name") or "").strip()
+    is_test_user = (
+        is_chaitanya(phone)
+        or is_chaitanya(admin_name)
+        or is_developer_phone(phone)
+        or is_developer_phone(admin_name)
+    )
+
+    if is_test_user:
+        building = "Business Bay-II"
+        site_id = "593"
+        formatted_unit = "GEEBTWOTest"
+        raw_unit = "GEEBTWOTest"
+    else:
+        building = client_context.get("building", "")
+        site_id = get_site_id_for_building(building)
+        raw_unit = str(client_context.get("unit_number", "")).strip()
+        if raw_unit == "GEEBTWOTest":
+            formatted_unit = "GEEBTWOTest"
+        elif raw_unit and len(raw_unit) < 3:
+            formatted_unit = raw_unit.zfill(3) if raw_unit.isdigit() else f"Unit-{raw_unit}"
+        else:
+            formatted_unit = raw_unit or "General"
+
     url = f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaint"
 
     # pyrefly: ignore [deprecated]
     now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
     now_local = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    raw_unit = str(client_context.get("unit_number", "")).strip()
-    if raw_unit and len(raw_unit) < 3:
-        formatted_unit = raw_unit.zfill(3) if raw_unit.isdigit() else f"Unit-{raw_unit}"
-    else:
-        formatted_unit = raw_unit or "General"
 
     nature = complaint_data.get("nature") or "General Maintenance"
     sub_nature = complaint_data.get("sub_nature") or "other"
@@ -161,15 +181,33 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
     # ── Build Factech-compliant payload ──────────────────────────────────
     # Per Factech API spec, the expected fields are:
     #   complaint_no, unit_no, category, sub_category, description, created_at
-    # reference_no is optional.
     payload = {
         "complaint_no": "",
         "unit_no": formatted_unit,
         "category": nature,
         "sub_category": sub_nature,
         "description": desc,
-        "created_at": now_utc,
+        "created_at": now_local,
     }
+    if complaint_data.get("reference_no"):
+        payload["reference_no"] = str(complaint_data["reference_no"])
+
+    # ── Render Logs (FACTECH COMPLAINT REQUEST) ──────────────────────────
+    req_render_log = (
+        f"\n========================================\n"
+        f"FACTECH COMPLAINT REQUEST\n"
+        f"Site ID: {site_id}\n"
+        f"Building: {building}\n"
+        f"Unit No: {formatted_unit}\n"
+        f"Complaint Nature: {nature}\n"
+        f"Sub Nature: {sub_nature}\n"
+        f"Description: {desc}\n"
+        f"API URL: {url}\n"
+        f"Request Payload:\n{json.dumps(payload, indent=2)}\n"
+        f"========================================"
+    )
+    logger.info(req_render_log)
+    print(req_render_log, flush=True)
 
     logger.info(f"{log_prefix} Starting complaint API request")
     logger.info(f"{log_prefix} Method: POST")
@@ -215,16 +253,17 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
         # 3. Response MUST contain a real complaint ID from Factech
         is_http_ok = res.status_code in (200, 201)
         is_not_error = data.get("status") != "error"
-        has_success_flag = data.get("success") in (True, "true", "True")
+        has_success_flag = data.get("success") in (True, "true", "True") or data.get("status") == "success"
 
         complaint_id = (
             data.get("complaintId")
             or data.get("complaintNumber")
             or data.get("com_no")
             or data.get("id")
-            or (data.get("data", {}).get("complaintId") if isinstance(data.get("data"), dict) else None)
             or (data.get("data", {}).get("com_no") if isinstance(data.get("data"), dict) else None)
+            or (data.get("data", {}).get("complaintId") if isinstance(data.get("data"), dict) else None)
             or (data.get("data", {}).get("complaint_no") if isinstance(data.get("data"), dict) else None)
+            or (data.get("data", {}).get("id") if isinstance(data.get("data"), dict) else None)
         )
 
         logger.info(f"{log_prefix} HTTP OK: {is_http_ok}, Not Error Status: {is_not_error}, Success Flag: {has_success_flag}")
@@ -232,6 +271,16 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
 
         if is_http_ok and (is_not_error or has_success_flag) and complaint_id:
             # ── REAL SUCCESS: Factech confirmed complaint creation ────
+            resp_render_log = (
+                f"\n========================================\n"
+                f"FACTECH COMPLAINT RESPONSE\n"
+                f"HTTP Status: {res.status_code}\n"
+                f"Response Body:\n{json.dumps(data, indent=2) if isinstance(data, (dict, list)) else res.text}\n"
+                f"========================================"
+            )
+            logger.info(resp_render_log)
+            print(resp_render_log, flush=True)
+
             logger.info(f"{log_prefix} Complaint Creation Result: SUCCESS")
             logger.info(f"{log_prefix} Complaint Number/ID: {complaint_id}")
 
@@ -240,7 +289,7 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
                 "com_no": str(complaint_id),
                 "company": client_context.get("company_name", ""),
                 "company_name": client_context.get("company_name", ""),
-                "building": client_context.get("building", ""),
+                "building": building,
                 "unit": raw_unit,
                 "unit_number": raw_unit,
                 "unitNo": formatted_unit,
@@ -272,6 +321,17 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
         else:
             # ── FAILURE: Factech did NOT confirm complaint creation ───
             err_msg = data.get("message") or res.text[:200]
+            err_render_log = (
+                f"\n========================================\n"
+                f"FACTECH COMPLAINT API ERROR\n"
+                f"HTTP Status: {res.status_code}\n"
+                f"Response Body:\n{json.dumps(data, indent=2) if isinstance(data, (dict, list)) else res.text}\n"
+                f"Error: {err_msg}\n"
+                f"========================================"
+            )
+            logger.error(err_render_log)
+            print(err_render_log, flush=True)
+
             logger.error(f"{log_prefix} Complaint Creation Result: FAILED")
             logger.error(f"{log_prefix} Complaint API FAILED")
             logger.error(f"{log_prefix} HTTP Status: {res.status_code}")
@@ -293,7 +353,18 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
                 "raw": data,
             }
 
-    except requests.Timeout:
+    except requests.Timeout as te:
+        timeout_render_log = (
+            f"\n========================================\n"
+            f"FACTECH COMPLAINT API ERROR\n"
+            f"HTTP Status: None\n"
+            f"Response Body: None\n"
+            f"Error: Request timed out after 15 seconds\n"
+            f"========================================"
+        )
+        logger.error(timeout_render_log)
+        print(timeout_render_log, flush=True)
+
         logger.error(f"{log_prefix} Complaint API FAILED")
         logger.error(f"{log_prefix} Error: Request timed out after 15 seconds")
         logger.error(f"{log_prefix} Complaint Creation Result: FAILED (timeout)")
@@ -305,6 +376,17 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
             "raw": {},
         }
     except Exception as e:
+        exc_render_log = (
+            f"\n========================================\n"
+            f"FACTECH COMPLAINT API ERROR\n"
+            f"HTTP Status: None\n"
+            f"Response Body: None\n"
+            f"Error: {str(e)}\n"
+            f"========================================"
+        )
+        logger.error(exc_render_log)
+        print(exc_render_log, flush=True)
+
         logger.error(f"{log_prefix} Complaint API FAILED")
         logger.error(f"{log_prefix} Error: {e}")
         logger.error(f"{log_prefix} Complaint Creation Result: FAILED (exception)", exc_info=True)
@@ -329,8 +411,22 @@ def update_complaint(client_context: dict, complaint_id: str, update_data: dict)
 
     # pyrefly: ignore [unnecessary-type-conversion]
     clean_cid = str(complaint_id).lstrip("#").strip()
-    building = client_context.get("building", "")
-    site_id = get_site_id_for_building(building)
+    phone = str(client_context.get("mobile_number") or client_context.get("mobile") or "").strip()
+    admin_name = str(client_context.get("admin_name") or "").strip()
+    is_test_user = (
+        is_chaitanya(phone)
+        or is_chaitanya(admin_name)
+        or is_developer_phone(phone)
+        or is_developer_phone(admin_name)
+    )
+
+    if is_test_user:
+        building = "Business Bay-II"
+        site_id = "593"
+    else:
+        building = client_context.get("building", "")
+        site_id = get_site_id_for_building(building)
+
     url = f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaint"
 
     new_desc = update_data.get("description", "").strip()
@@ -460,8 +556,21 @@ def get_complaints(
     Filters complaints strictly by client unit number, mobile number, or company.
     Returns list of complaint dicts in reverse chronological order.
     """
-    building = client_context.get("building", "")
-    site_id = get_site_id_for_building(building)
+    phone = str(client_context.get("mobile_number") or client_context.get("mobile") or "").strip()
+    admin_name = str(client_context.get("admin_name") or "").strip()
+    is_test_user = (
+        is_chaitanya(phone)
+        or is_chaitanya(admin_name)
+        or is_developer_phone(phone)
+        or is_developer_phone(admin_name)
+    )
+
+    if is_test_user:
+        building = "Business Bay-II"
+        site_id = "593"
+    else:
+        building = client_context.get("building", "")
+        site_id = get_site_id_for_building(building)
 
     now = datetime.now()
     start_dt = now - timedelta(days=days_back)

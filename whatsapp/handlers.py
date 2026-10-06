@@ -40,6 +40,8 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         or button_id.startswith("client_sel_")
         or button_id.startswith("client_")
         or button_id.startswith("upd_cid_")
+        or button_id.startswith("c_nat_")
+        or button_id.startswith("c_sub_")
     ):
         try:
             from clients.flows import handle_client_button_reply

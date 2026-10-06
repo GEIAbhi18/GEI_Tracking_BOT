@@ -49,11 +49,32 @@ def normalize_building(building_raw: str) -> str:
         return ""
     # pyrefly: ignore [unnecessary-type-conversion]
     b = str(building_raw).strip().upper()
-    if "GEBB II" in b or "GEBB-2" in b or "BAY 2" in b or "BUISNESS BAY 2" in b or "GEBB 2" in b or b == "GEBB2":
+    if (
+        "GEBB II" in b
+        or "GEBB-2" in b
+        or "BAY 2" in b
+        or "BUISNESS BAY 2" in b
+        or "GEBB 2" in b
+        or "BUSINESS BAY-II" in b
+        or "BUSINESS BAY II" in b
+        or "BUSINESS BAY-2" in b
+        or "BUSINESS BAY 2" in b
+        or b == "GEBB2"
+    ):
         return "GEBB2"
-    if "GEBB I" in b or "GEBB-1" in b or "BAY 1" in b or "GEBB 1" in b or b == "GEBB1":
+    if (
+        "GEBB I" in b
+        or "GEBB-1" in b
+        or "BAY 1" in b
+        or "GEBB 1" in b
+        or "BUSINESS BAY-I" in b
+        or "BUSINESS BAY I" in b
+        or "BUSINESS BAY-1" in b
+        or "BUSINESS BAY 1" in b
+        or b == "GEBB1"
+    ):
         return "GEBB1"
-    if "GETT" in b or "TERRACE" in b:
+    if "GETT" in b or "TERRACE" in b or "TRADE TOWER" in b:
         return "GETT"
     return b
 

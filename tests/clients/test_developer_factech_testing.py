@@ -102,11 +102,14 @@ def test_developer_client_lookup_only_in_factech_mode():
     clients = lookup_clients_by_phone(DEVELOPER_PHONE)
     assert len(clients) == 1
     assert clients[0]["company_name"] == "Good Earth Infra (Dev Test)"
-    assert clients[0]["unit_number"] == "001"
+    assert clients[0]["building"] == "Business Bay-II"
+    assert clients[0]["unit_number"] == "GEEBTWOTest"
 
     ctx = get_active_client_context(DEVELOPER_PHONE)
     assert ctx is not None
     assert ctx["company_name"] == "Good Earth Infra (Dev Test)"
+    assert ctx["building"] == "Business Bay-II"
+    assert ctx["unit_number"] == "GEEBTWOTest"
 
 
 def test_developer_factech_mode_switch_back_to_facilities(mocker):

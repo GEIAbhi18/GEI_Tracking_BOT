@@ -144,13 +144,16 @@ def test_handle_client_button_complaint_history(mocker):
 
 
 def test_handle_client_button_log_new_complaint(mocker):
-    mock_txt = mocker.patch("clients.flows.send_text")
+    mock_list = mocker.patch("clients.flows.send_list_message", return_value=True)
     handle_client_button_reply("918826896085", "log_new_complaint")
 
-    mock_txt.assert_called_once()
-    body = mock_txt.call_args[0][1]
-    assert "describe the issue" in body.lower()
+    mock_list.assert_called_once()
+    args = mock_list.call_args[0]
+    body = args[1]
+    sections = args[3]
+    assert "complaint nature" in body.lower()
     assert "HDFC Bank" in body
+    assert len(sections[0]["rows"]) == 8
 
 
 def test_complaint_logging_does_not_send_welcome_greeting(mocker):

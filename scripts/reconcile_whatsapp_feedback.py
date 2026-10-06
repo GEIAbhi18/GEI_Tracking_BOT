@@ -236,12 +236,12 @@ def reconcile_and_push(dry_run: bool = False):
             "Sentiment": sentiment,
             "Escalation Status": esc_status,
             "Escalation Reason": esc_reason,
-            "Feedback Source": "WhatsApp",
+            "Feedback Source": "GEI_BOT",
         }
 
-        # Target 1: Building sheet
+        # Target 1: Building sheet (only if not already marked Received)
         bld_row_info = sheet_data[bld]["rows"].get(cid)
-        if bld_row_info:
+        if bld_row_info and bld_row_info["fb_status"].lower() != "received":
             row_idx = bld_row_info["row_num"]
             headers = sheet_data[bld]["headers"]
             for col_name, val in update_fields.items():
@@ -251,16 +251,51 @@ def reconcile_and_push(dry_run: bool = False):
                         gspread.Cell(row_idx, col_idx, str(val) if val is not None else "")
                     )
 
-        # Target 2: MASTER sheet
+        # Target 2: MASTER sheet (only if not already marked Received)
         master_row_info = sheet_data["MASTER"]["rows"].get(cid)
-        if master_row_info:
+        if master_row_info and master_row_info["fb_status"].lower() != "received":
             row_idx = master_row_info["row_num"]
             headers = sheet_data["MASTER"]["headers"]
-            for col_name, val in update_fields.items():
+
+            # If building sheet already had received data, use that instead of defaults
+            master_fields = dict(update_fields)
+            if bld_row_info and bld_row_info["fb_status"].lower() == "received":
+                bld_headers = sheet_data[bld]["headers"]
+                bld_vals = bld_row_info["values"]
+                for field in [
+                    "Feedback Received At",
+                    "Resolution Score",
+                    "Professionalism Score",
+                    "Overall Feedback Score",
+                    "Remarks",
+                    "Sentiment",
+                    "Escalation Status",
+                    "Escalation Reason",
+                ]:
+                    b_idx = _get_col_index(bld_headers, field)
+                    if b_idx and len(bld_vals) >= b_idx and bld_vals[b_idx - 1].strip():
+                        master_fields[field] = bld_vals[b_idx - 1].strip()
+
+            for col_name, val in master_fields.items():
                 col_idx = _get_col_index(headers, col_name)
                 if col_idx:
                     cells_by_worksheet["MASTER"].append(
                         gspread.Cell(row_idx, col_idx, str(val) if val is not None else "")
+                    )
+    # Check for any existing rows in building sheets where Feedback Source is 'WhatsApp' and fix to 'GEI_BOT'
+    for name in ["GEBB1", "GEBB2", "GETT"]:
+        headers = sheet_data[name]["headers"]
+        src_col = _get_col_index(headers, "Feedback Source")
+        if not src_col:
+            continue
+        for cid_val, row_data in sheet_data[name]["rows"].items():
+            vals = row_data["values"]
+            if len(vals) >= src_col:
+                cur_src = vals[src_col - 1].strip()
+                if cur_src.lower() in ("whatsapp", "factech"):
+                    logger.info(f"Queuing Feedback Source update for {cid_val} in {name}: '{cur_src}' -> 'GEI_BOT'")
+                    cells_by_worksheet[name].append(
+                        gspread.Cell(row_data["row_num"], src_col, "GEI_BOT")
                     )
 
     for name, cells in cells_by_worksheet.items():

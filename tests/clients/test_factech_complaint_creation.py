@@ -23,8 +23,8 @@ SAMPLE_CLIENT_CONTEXT = {
     "company_name": "Good Earth Infra",
     "floor": "Ground Floor",
     "unit_number": "1",
-    "admin_name": "Chaitanya Test",
-    "mobile_number": "919713957666",
+    "admin_name": "Normal Tenant",
+    "mobile_number": "919876543210",
     "email": "test@gei.com",
 }
 
@@ -498,7 +498,7 @@ class TestWhatsAppMessaging:
         mock_db.delete.return_value.eq.return_value.execute.return_value = MagicMock()
         mocker.patch("clients.flows.supabase.table", return_value=mock_db)
 
-        handle_client_text("919713957666", "test-new55")
+        handle_client_text(SAMPLE_CLIENT_CONTEXT["mobile_number"], "test-new55")
 
         # Find the success message call
         sent_msgs = [c[0][1] for c in mock_send_text.call_args_list]
@@ -530,7 +530,7 @@ class TestWhatsAppMessaging:
         mock_db.delete.return_value.eq.return_value.execute.return_value = MagicMock()
         mocker.patch("clients.flows.supabase.table", return_value=mock_db)
 
-        handle_client_text("919713957666", "test-new55")
+        handle_client_text(SAMPLE_CLIENT_CONTEXT["mobile_number"], "test-new55")
 
         sent_msgs = [c[0][1] for c in mock_send_text.call_args_list]
         # Must NOT contain success message
@@ -565,7 +565,7 @@ class TestWhatsAppMessaging:
         mock_db.delete.return_value.eq.return_value.execute.return_value = MagicMock()
         mocker.patch("clients.flows.supabase.table", return_value=mock_db)
 
-        handle_client_text("919713957666", "test-new55")
+        handle_client_text(SAMPLE_CLIENT_CONTEXT["mobile_number"], "test-new55")
 
         sent_msgs = [c[0][1] for c in mock_send_text.call_args_list]
         all_text = " ".join(sent_msgs)

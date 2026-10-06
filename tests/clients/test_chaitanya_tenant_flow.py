@@ -33,8 +33,8 @@ def test_lookup_clients_for_chaitanya():
     assert len(clients) == 1
     c = clients[0]
     assert c["company_name"] == "Good Earth Infra"
-    assert c["building"] == "GEBB2"
-    assert c["unit_number"] == "1"
+    assert c["building"] == "Business Bay-II"
+    assert c["unit_number"] == "GEEBTWOTest"
     assert c["admin_name"] == "Chaitanya Test"
 
     clients_alt = lookup_clients_by_phone(CHAITANYA_ALT_PHONE)
@@ -49,7 +49,8 @@ def test_get_active_client_context_defaults_to_chaitanya_record():
     ctx = get_active_client_context(CHAITANYA_PHONE)
     assert ctx is not None
     assert ctx["company_name"] == "Good Earth Infra"
-    assert ctx["unit_number"] == "1"
+    assert ctx["building"] == "Business Bay-II"
+    assert ctx["unit_number"] == "GEEBTWOTest"
 
 
 def test_auth_middleware_treats_chaitanya_as_client_only(mocker):
@@ -95,7 +96,7 @@ def test_send_main_menu_routes_chaitanya_to_factech_menu(mocker):
 
     assert target_to == CHAITANYA_PHONE
     assert "Good Earth Infra" in body
-    assert "*Unit:* 1" in body
+    assert "*Unit:* GEEBTWOTest" in body
     assert len(buttons) == 3
     button_ids = [b["id"] for b in buttons]
     assert "log_new_complaint" in button_ids
@@ -150,8 +151,8 @@ def test_send_client_welcome_menu_fallback_on_button_failure(mocker):
     client = {
         "admin_name": "Chaitanya Test",
         "company_name": "Good Earth Infra",
-        "building": "GEBB2",
-        "unit_number": "1",
+        "building": "Business Bay-II",
+        "unit_number": "GEEBTWOTest",
     }
     send_client_welcome_menu(CHAITANYA_PHONE, client)
 
@@ -162,7 +163,7 @@ def test_send_client_welcome_menu_fallback_on_button_failure(mocker):
     assert "3️⃣ *Complaint History*" in sent_content
 
 
-def test_factech_create_complaint_pads_short_unit(mocker):
+def test_factech_create_complaint_uses_geebtwotest_for_chaitanya(mocker):
     from clients.factech_client import create_complaint
 
     mock_post = mocker.patch("requests.post")
@@ -172,22 +173,26 @@ def test_factech_create_complaint_pads_short_unit(mocker):
     mock_post.return_value = mock_resp
 
     client = {
-        "admin_name": "Chaitanya",
+        "admin_name": "Chaitanya Test",
         "company_name": "Good Earth Infra",
-        "building": "GEBB2",
-        "unit_number": "1",
+        "building": "Business Bay-II",
+        "unit_number": "GEEBTWOTest",
         "mobile_number": CHAITANYA_PHONE,
         "email": "",
         "floor": "Ground",
     }
-    res = create_complaint(client, {"nature": "AC", "description": "AC not cooling"})
+    res = create_complaint(client, {"nature": "HVAC", "sub_nature": "AC not working", "description": "AC not cooling"})
 
     assert res["success"] is True
     assert res["complaint_id"] == "FT-9999"
 
-    # Verify payload had padded unit number (>= 3 chars)
+    # Verify payload had GEEBTWOTest unit number and site 593 in URL
+    called_url = mock_post.call_args[0][0]
+    assert "/v1/thirdparty/site/593/complaint" in called_url
     payload = mock_post.call_args[1]["json"]
-    assert payload["unit_no"] == "001"
+    assert payload["unit_no"] == "GEEBTWOTest"
+    assert payload["category"] == "HVAC"
+    assert payload["sub_category"] == "AC not working"
 
 
 def test_factech_create_complaint_returns_failure_on_api_error(mocker):

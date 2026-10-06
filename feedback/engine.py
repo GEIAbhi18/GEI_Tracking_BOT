@@ -319,7 +319,7 @@ def _complete_feedback(phone: str, session: dict,
         "Sentiment": sentiment,
         "Escalation Status": escalation_status,
         "Escalation Reason": escalation_reason,
-        "Feedback Source": "WhatsApp",
+        "Feedback Source": "GEI_BOT",
     }
 
     try:

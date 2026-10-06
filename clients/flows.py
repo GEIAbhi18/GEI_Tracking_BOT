@@ -10,6 +10,7 @@ from clients.service import (
     clear_client_context,
 )
 from clients.factech_client import create_complaint, get_complaints, update_complaint
+from clients.config import COMPLAINT_NATURES, SUB_NATURES_ALL, NATURE_TO_SUB_NATURES
 
 logger = logging.getLogger(__name__)
 
@@ -248,11 +249,161 @@ def handle_update_complaint_initiation(sender_phone: str, client: dict, target_c
     send_text(sender_phone, prompt_msg)
 
 
+
+
+
+def prompt_complaint_nature_selection(sender_phone: str, client: dict):
+    """
+    Step 1: Prompts the client to select Complaint Nature via a WhatsApp list message
+    (with plain text numbered fallback).
+    """
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+    bldg = client.get("building", "")
+
+    # Set state
+    payload = {
+        "whatsapp_number": sender_phone,
+        "action": "AWAITING_CLIENT_COMPLAINT_NATURE",
+        "metadata": {"client_context": client},
+    }
+    try:
+        supabase.table("wa_task_states").upsert(
+            payload, on_conflict="whatsapp_number"
+        ).execute()
+    except Exception as err:
+        logger.error(f"Error setting WA state: {err}")
+
+    body = (
+        f"📝 *Log New Complaint*\n\n"
+        f"🏢 *{company}* (Unit {unit})\n"
+        f"📍 *Building:* {bldg}\n\n"
+        f"Please select the *Complaint Nature* from the list below:"
+    )
+
+    rows = []
+    for idx, nat in enumerate(COMPLAINT_NATURES):
+        rows.append({
+            "id": f"c_nat_{idx}",
+            "title": nat[:24],
+        })
+    sections = [{"title": "Complaint Nature", "rows": rows}]
+
+    sent = send_list_message(sender_phone, body, "Select Nature", sections)
+    if not sent:
+        options_text = "\n".join(
+            f"{i+1}️⃣ *{nat}*" for i, nat in enumerate(COMPLAINT_NATURES)
+        )
+        fallback = (
+            f"{body}\n\n"
+            f"{options_text}\n\n"
+            f"_Reply with the number (1-{len(COMPLAINT_NATURES)}) or option name._\n"
+            f"_(Reply 'cancel' to exit)_"
+        )
+        send_text(sender_phone, fallback)
+
+
+def prompt_complaint_sub_nature_selection(sender_phone: str, client: dict, nature: str):
+    """
+    Step 2: Prompts the client to select Sub Nature based on selected Complaint Nature.
+    """
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+
+    # Set state
+    payload = {
+        "whatsapp_number": sender_phone,
+        "action": "AWAITING_CLIENT_COMPLAINT_SUB_NATURE",
+        "metadata": {
+            "client_context": client,
+            "nature": nature,
+        },
+    }
+    try:
+        supabase.table("wa_task_states").upsert(
+            payload, on_conflict="whatsapp_number"
+        ).execute()
+    except Exception as err:
+        logger.error(f"Error setting WA state: {err}")
+
+    body = (
+        f"📝 *Log New Complaint*\n\n"
+        f"🏢 *{company}* (Unit {unit})\n"
+        f"🏷️ Nature: *{nature}*\n\n"
+        f"Please select the *Sub Nature* from the list below:"
+    )
+
+    options = NATURE_TO_SUB_NATURES.get(nature) or [
+        "Other",
+        "Others",
+    ]
+
+    rows = []
+    for opt in options:
+        opt_idx = SUB_NATURES_ALL.index(opt) if opt in SUB_NATURES_ALL else 0
+        rows.append({
+            "id": f"c_sub_{opt_idx}",
+            "title": opt[:24],
+        })
+
+    sections = [{"title": f"{nature} Issues"[:24], "rows": rows[:10]}]
+
+    sent = send_list_message(sender_phone, body, "Select Issue", sections)
+    if not sent:
+        options_text = "\n".join(
+            f"{i+1}️⃣ *{opt}*" for i, opt in enumerate(options)
+        )
+        fallback = (
+            f"{body}\n\n"
+            f"{options_text}\n\n"
+            f"_Reply with the number or type your specific issue directly._\n"
+            f"_(Reply 'cancel' to exit)_"
+        )
+        send_text(sender_phone, fallback)
+
+
+def prompt_complaint_description(sender_phone: str, client: dict, nature: str, sub_nature: str):
+    """
+    Step 3: Prompts the client for complaint details / description after Nature and Sub Nature are chosen.
+    """
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+
+    payload = {
+        "whatsapp_number": sender_phone,
+        "action": "AWAITING_CLIENT_COMPLAINT_DESC",
+        "metadata": {
+            "client_context": client,
+            "nature": nature,
+            "sub_nature": sub_nature,
+        },
+    }
+    try:
+        supabase.table("wa_task_states").upsert(
+            payload, on_conflict="whatsapp_number"
+        ).execute()
+    except Exception as err:
+        logger.error(f"Error setting WA state: {err}")
+
+    prompt_msg = (
+        f"📝 *Log New Complaint*\n\n"
+        f"🏢 *{company}* (Unit {unit})\n"
+        f"🏷️ Nature: *{nature}*\n"
+        f"🔖 Sub Nature: *{sub_nature}*\n\n"
+        f"Please describe the issue or complaint in detail:\n"
+        f"_(Reply with details, or reply 'skip' to submit with selected issue)_\n"
+        f"_(Reply 'cancel' to exit)_"
+    )
+    send_text(sender_phone, prompt_msg)
+
+
 def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | None = None):
     """
     Handles interactive button / list actions for clients:
       - client_sel_{idx}
       - log_new_complaint
+      - c_nat_{idx}
+      - c_sub_{idx}
       - check_complaint_status
       - complaint_history
       - update_complaint
@@ -289,30 +440,45 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
         send_client_welcome_menu(sender_phone, client)
         return
 
-    # 3. Log New Complaint
+    # 3. Log New Complaint -> Step 1: Prompt Complaint Nature
     if button_id == "log_new_complaint":
-        company = client.get("company_name", "")
-        unit = client.get("unit_number", "")
-        try:
-            payload = {
-                "whatsapp_number": sender_phone,
-                "action": "AWAITING_CLIENT_COMPLAINT_DESC",
-                "metadata": {"client_context": client},
-            }
-            supabase.table("wa_task_states").upsert(
-                payload, on_conflict="whatsapp_number"
-            ).execute()
-        except Exception as err:
-            logger.error(f"Error setting WA state: {err}")
-
-        prompt_msg = (
-            f"📝 *Log New Complaint*\n\n"
-            f"Logging for: *{company}* (Unit {unit})\n\n"
-            f"Please describe the issue or complaint in detail:\n"
-            f"_(e.g., AC not cooling on 3rd floor, water leakage near washroom, power outage)_"
-        )
-        send_text(sender_phone, prompt_msg)
+        prompt_complaint_nature_selection(sender_phone, client)
         return
+
+    # Complaint Nature List Reply
+    elif button_id.startswith("c_nat_"):
+        try:
+            idx = int(button_id.replace("c_nat_", ""))
+            if 0 <= idx < len(COMPLAINT_NATURES):
+                selected_nature = COMPLAINT_NATURES[idx]
+                prompt_complaint_sub_nature_selection(sender_phone, client, selected_nature)
+                return
+        except Exception as e:
+            logger.error(f"Error handling nature button reply: {e}")
+
+    # Complaint Sub Nature List Reply
+    elif button_id.startswith("c_sub_"):
+        try:
+            idx = int(button_id.replace("c_sub_", ""))
+            if 0 <= idx < len(SUB_NATURES_ALL):
+                selected_sub_nature = SUB_NATURES_ALL[idx]
+                nature = "General"
+                try:
+                    res = (
+                        supabase.table("wa_task_states")
+                        .select("metadata")
+                        .eq("whatsapp_number", sender_phone)
+                        .execute()
+                    )
+                    if res.data:
+                        meta = res.data[0].get("metadata") or {}
+                        nature = meta.get("nature") or "General"
+                except Exception:
+                    pass
+                prompt_complaint_description(sender_phone, client, nature, selected_sub_nature)
+                return
+        except Exception as e:
+            logger.error(f"Error handling sub-nature button reply: {e}")
 
     # 4. Check Complaint Status
     elif button_id == "check_complaint_status":
@@ -426,6 +592,8 @@ def has_active_client_flow(sender_phone: str) -> bool:
         if res.data:
             action = res.data[0].get("action")
             return action in (
+                "AWAITING_CLIENT_COMPLAINT_NATURE",
+                "AWAITING_CLIENT_COMPLAINT_SUB_NATURE",
                 "AWAITING_CLIENT_COMPLAINT_DESC",
                 "AWAITING_CLIENT_COMPLAINT_UPDATE",
                 "AWAITING_CLIENT_COMPLAINT_SELECT",
@@ -452,6 +620,8 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
 
         action = res.data[0].get("action")
         if action not in (
+            "AWAITING_CLIENT_COMPLAINT_NATURE",
+            "AWAITING_CLIENT_COMPLAINT_SUB_NATURE",
             "AWAITING_CLIENT_COMPLAINT_DESC",
             "AWAITING_CLIENT_COMPLAINT_UPDATE",
             "AWAITING_CLIENT_COMPLAINT_SELECT",
@@ -479,8 +649,76 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             send_post_complaint_options(sender_phone, client)
             return True
 
-        # Flow 1: New Complaint Creation
+        # Flow 0a: Complaint Nature Selection
+        if action == "AWAITING_CLIENT_COMPLAINT_NATURE":
+            selected_nature = None
+            if clean_text.isdigit():
+                idx = int(clean_text) - 1
+                if 0 <= idx < len(COMPLAINT_NATURES):
+                    selected_nature = COMPLAINT_NATURES[idx]
+
+            if not selected_nature:
+                for nat in COMPLAINT_NATURES:
+                    if clean_text.lower() == nat.lower() or nat.lower() in clean_text.lower():
+                        selected_nature = nat
+                        break
+
+            if not selected_nature:
+                options_text = "\n".join(f"{i+1}️⃣ {nat}" for i, nat in enumerate(COMPLAINT_NATURES))
+                send_text(
+                    sender_phone,
+                    f"⚠️ Please choose a valid Complaint Nature:\n\n{options_text}\n\n_Reply with the number (1-{len(COMPLAINT_NATURES)}) or option name (or 'cancel')._",
+                )
+                return True
+
+            prompt_complaint_sub_nature_selection(sender_phone, client, selected_nature)
+            return True
+
+        # Flow 0b: Complaint Sub Nature Selection
+        if action == "AWAITING_CLIENT_COMPLAINT_SUB_NATURE":
+            nature = meta.get("nature") or "General"
+            options = NATURE_TO_SUB_NATURES.get(nature) or SUB_NATURES_ALL[:10]
+            selected_sub_nature = None
+
+            if clean_text.isdigit():
+                idx = int(clean_text) - 1
+                if 0 <= idx < len(options):
+                    selected_sub_nature = options[idx]
+                elif 0 <= idx < len(SUB_NATURES_ALL):
+                    selected_sub_nature = SUB_NATURES_ALL[idx]
+
+            if not selected_sub_nature:
+                for opt in options:
+                    if clean_text.lower() == opt.lower():
+                        selected_sub_nature = opt
+                        break
+
+            if not selected_sub_nature:
+                for opt in SUB_NATURES_ALL:
+                    if clean_text.lower() == opt.lower():
+                        selected_sub_nature = opt
+                        break
+
+            if not selected_sub_nature:
+                for opt in SUB_NATURES_ALL:
+                    if opt.lower() in clean_text.lower() or clean_text.lower() in opt.lower():
+                        selected_sub_nature = opt
+                        break
+
+            if not selected_sub_nature:
+                if "other" in clean_text.lower():
+                    selected_sub_nature = "Others" if "others" in clean_text.lower() else "Other"
+                else:
+                    selected_sub_nature = "Others"
+
+            prompt_complaint_description(sender_phone, client, nature, selected_sub_nature)
+            return True
+
+        # Flow 1: New Complaint Creation (Description entered)
         if action == "AWAITING_CLIENT_COMPLAINT_DESC":
+            nature = meta.get("nature") or "General Maintenance"
+            sub_nature = meta.get("sub_nature") or "Other"
+
             try:
                 supabase.table("wa_task_states").delete().eq(
                     "whatsapp_number", sender_phone
@@ -488,25 +726,38 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             except Exception:
                 pass
 
+            desc = clean_text
+            if desc.lower() in ("skip", "same", "none", "-"):
+                desc = f"{nature} - {sub_nature}"
+
             send_text(sender_phone, "⏳ Registering your complaint with Factech...")
             result = create_complaint(client, {
-                "nature": "General Maintenance",
-                "sub_nature": "",
-                "description": clean_text,
+                "nature": nature,
+                "sub_nature": sub_nature,
+                "description": desc,
             })
 
             if result.get("success"):
                 cid = result.get("complaint_id", "FT-Recorded")
                 company = client.get("company_name", "")
-                unit = client.get("unit_number", "")
-                building = client.get("building", "")
+                from clients.config import is_chaitanya, is_developer_phone
+                phone = str(client.get("mobile_number") or sender_phone).strip()
+                admin_name = str(client.get("admin_name") or "").strip()
+                if is_chaitanya(phone) or is_chaitanya(admin_name) or is_developer_phone(phone) or is_developer_phone(admin_name):
+                    unit = "GEEBTWOTest"
+                    building = "Business Bay-II"
+                else:
+                    unit = client.get("unit_number", "")
+                    building = client.get("building", "")
 
                 confirmation = (
                     f"✅ *Complaint Logged Successfully!*\n\n"
                     f"🎫 *Complaint ID:* #{cid}\n"
                     f"🏢 *Company:* {company}\n"
                     f"📍 *Building:* {building} | *Unit:* {unit}\n"
-                    f"📝 *Description:* {clean_text}\n\n"
+                    f"🏷️ *Nature:* {nature}\n"
+                    f"🔖 *Sub Nature:* {sub_nature}\n"
+                    f"📝 *Description:* {desc}\n\n"
                     f"Our facility team has received your ticket and is working on it."
                 )
                 send_text(sender_phone, confirmation)
