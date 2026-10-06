@@ -190,7 +190,7 @@ def test_factech_create_complaint_pads_short_unit(mocker):
     assert payload["unit_no"] == "001"
 
 
-def test_factech_create_complaint_resilient_fallback_on_api_error(mocker):
+def test_factech_create_complaint_returns_failure_on_api_error(mocker):
     from clients.factech_client import create_complaint
 
     # Simulate Factech returning site error: unit not found
@@ -199,6 +199,7 @@ def test_factech_create_complaint_resilient_fallback_on_api_error(mocker):
     mock_resp.status_code = 400
     mock_resp.text = "Unit not found in site"
     mock_resp.json.return_value = {"status": "error", "message": "Unit not found in site"}
+    mock_resp.headers = {}
     mock_post.return_value = mock_resp
 
     mock_insert = MagicMock()
@@ -216,9 +217,9 @@ def test_factech_create_complaint_resilient_fallback_on_api_error(mocker):
     }
     res = create_complaint(client, {"nature": "AC", "description": "AC not cooling"})
 
-    assert res["success"] is True
-    assert res["fallback"] is True
-    assert res["complaint_id"].startswith("GEI-")
+    # After the fix: API error must NOT return success=True
+    assert res["success"] is False
+    assert res["complaint_id"] is None
 
 
 def test_get_complaints_strict_unit_matching_prevents_leakage(mocker):

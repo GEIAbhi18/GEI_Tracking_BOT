@@ -512,11 +512,18 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                 send_text(sender_phone, confirmation)
                 send_post_complaint_options(sender_phone, client, complaint_id=cid)
             else:
-                api_msg = result.get("message", "")
-                logger.warning(f"Factech complaint creation failed: {api_msg}")
+                api_msg = result.get("message", "Unknown error")
+                logger.error(f"Factech complaint creation FAILED for {sender_phone}: {api_msg}")
+                logger.error(f"Factech raw response: {result.get('raw', {})}")
                 send_text(
                     sender_phone,
-                    f"Sorry, we're unable to submit your complaint right now.\n⚠️ _Reason: {api_msg}_\n\nPlease try again shortly.",
+                    (
+                        "❌ *Unable to register your complaint at this time.*\n\n"
+                        "Our system could not confirm the complaint with our facility management platform.\n\n"
+                        f"📝 Your complaint details have been noted:\n_{clean_text[:200]}_\n\n"
+                        "Please try again in a few minutes, or contact the facility team directly.\n"
+                        f"⚠️ _Technical details: {api_msg[:150]}_"
+                    ),
                 )
                 send_post_complaint_options(sender_phone, client)
             return True
