@@ -27,6 +27,14 @@ def handle_client_hi(sender_phone: str):
     Renders personalized greeting and interactive options.
     If multiple units exist for the sender, shows a selection menu.
     """
+    # Clear any previous pending flow state so greeting gives a clean slate
+    try:
+        supabase.table("wa_task_states").delete().eq(
+            "whatsapp_number", sender_phone
+        ).execute()
+    except Exception as err:
+        logger.debug(f"Failed to clear wa_task_states on greeting for {sender_phone}: {err}")
+
     clients = lookup_clients_by_phone(sender_phone)
     if not clients:
         send_unregistered_client_message(sender_phone)
