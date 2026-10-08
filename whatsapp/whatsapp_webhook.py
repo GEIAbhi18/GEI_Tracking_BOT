@@ -478,6 +478,10 @@ def handle_whatsapp_message():
                                     clean_greeting == g or clean_greeting.startswith(f"{g} ")
                                     for g in greeting_words
                                 )
+                                from clients.flows import has_active_client_flow
+                                if has_active_client_flow(sender_num):
+                                    is_greeting = False
+
                                 if is_greeting:
                                     # 1. Check if sender is a registered Factech / tenant client (or Chaitanya)
                                     try:
@@ -738,6 +742,19 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
                 return
             elif clean_cmd in ("4", "update complaint", "update", "edit complaint", "modify complaint"):
                 handle_client_button_reply(sender, "update_complaint")
+                return
+            elif clean_cmd in (
+                "5",
+                "feedback",
+                "give feedback",
+                "feedback on closed",
+                "feedback on closed complaints",
+                "give feedback on closed complaints",
+                "closed complaints feedback",
+                "closed feedback",
+                "closed complaints",
+            ):
+                handle_client_button_reply(sender, "feedback_closed_complaints")
                 return
             elif any(clean_cmd == g or clean_cmd.startswith(f"{g} ") for g in ("menu", "main menu", "hi", "hello", "hey", "help", "factech", "support")):
                 handle_client_hi(sender)

@@ -82,6 +82,27 @@ def initiate_feedback(complaint_data: dict) -> dict:
 
     # Check if there's already an active session for this phone
     if has_active_session(phone):
+        existing_session = get_session(phone)
+        if existing_session and existing_session.get("complaintId") == complaint_id:
+            # Re-initiating for the same complaint — re-send Flow template message directly
+            print(f"[FEEDBACK] Re-initiating active session for {complaint_id} → re-sending Flow template", flush=True)
+            try:
+                from feedback.flow_sender import send_flow_template
+                send_flow_template(
+                    phone=phone,
+                    client_name=existing_session.get("clientName", ""),
+                    complaint_id=complaint_id,
+                    complaint_nature=existing_session.get("complaintNature", ""),
+                    unit_no=existing_session.get("unitNo", ""),
+                    complaint_details=existing_session.get("complaintDetails", ""),
+                )
+            except Exception as re_err:
+                logger.error(f"Error re-sending flow template for {complaint_id}: {re_err}")
+            return {
+                "status": "ok",
+                "message": f"Feedback template re-sent for {complaint_id}"
+            }
+
         enqueue_complaint(phone, complaint_data)
         print(f"[FEEDBACK] Session already active for {phone} — complaint {complaint_id} queued", flush=True)
         return {

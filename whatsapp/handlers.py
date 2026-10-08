@@ -36,10 +36,19 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
 
     # ── Factech Client Automation Routing ───────────────────────────────────
     if (
-        button_id in ("log_new_complaint", "check_complaint_status", "complaint_history", "update_complaint", "client_main_menu")
+        button_id in (
+            "log_new_complaint",
+            "check_complaint_status",
+            "complaint_history",
+            "update_complaint",
+            "client_main_menu",
+            "feedback_closed_complaints",
+            "give_feedback_closed",
+        )
         or button_id.startswith("client_sel_")
         or button_id.startswith("client_")
         or button_id.startswith("upd_cid_")
+        or button_id.startswith("fb_cid_")
         or button_id.startswith("c_nat_")
         or button_id.startswith("c_sub_")
     ):

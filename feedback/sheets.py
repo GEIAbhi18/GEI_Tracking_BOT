@@ -10,30 +10,34 @@ All read/write operations to Google Sheets:
 Uses gspread with service account credentials from environment variables.
 """
 
+from __future__ import annotations
+
 import logging
+import threading
+import time
+
 # pyrefly: ignore [missing-import]
 import gspread
+
+# pyrefly: ignore [missing-import]
+import gspread.exceptions
+
 # pyrefly: ignore [missing-import]
 from google.oauth2.service_account import Credentials
-from datetime import datetime
 
 from feedback.config import (
-    GOOGLE_SERVICE_ACCOUNT_EMAIL,
-    GOOGLE_PRIVATE_KEY,
-    FEEDBACK_SHEET_ID,
-    MASTER_SHEET_NAME,
-    ESCALATIONS_SHEET_NAME,
-    PENDING_FEEDBACK_SHEET_NAME,
     BUILDING_SHEETS,
+    ESCALATIONS_SHEET_NAME,
+    FEEDBACK_SHEET_ID,
+    GOOGLE_PRIVATE_KEY,
+    GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    MASTER_SHEET_NAME,
+    PENDING_FEEDBACK_SHEET_NAME,
 )
 
 logger = logging.getLogger(__name__)
 
 # ── Google Sheets Auth ───────────────────────────────────────────────────────
-import time
-import threading
-# pyrefly: ignore [missing-import]
-import gspread.exceptions
 
 _gc = None  # Cached gspread client
 _ss = None  # Cached Spreadsheet
@@ -120,7 +124,6 @@ def _get_spreadsheet():
 
 def _get_worksheet(sheet_name: str, auto_create: bool = False):
     """Get a specific worksheet by name, caching it to avoid API calls."""
-    global _worksheets
     if sheet_name in _worksheets:
         return _worksheets[sheet_name]
 
@@ -146,7 +149,7 @@ def _get_worksheet(sheet_name: str, auto_create: bool = False):
 
 # ── MASTER Sheet Operations ─────────────────────────────────────────────────
 
-def find_complaint_row(complaint_id: str, sheet_name: str = None) -> tuple:
+def find_complaint_row(complaint_id: str, sheet_name: str | None = None) -> tuple:
     """
     Find the row number for a given complaint ID in the MASTER sheet.
     Returns (worksheet, row_number, header_row) or (None, None, None) if not found.
@@ -176,9 +179,128 @@ def find_complaint_row(complaint_id: str, sheet_name: str = None) -> tuple:
         logger.warning(f"Complaint ID '{complaint_id}' not found in {target_sheet}")
         return None, None, None
         
-    except Exception as e:
-        logger.error(f"Error finding complaint row: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error finding complaint row")
         return None, None, None
+
+
+_master_records_cache = None
+_master_records_cache_time = 0.0
+_master_cache_lock = threading.Lock()
+
+
+def get_closed_complaints_for_client(
+    phone: str,
+    unit_no: str = "",
+    company_name: str = "",
+    building: str = "",
+    limit: int = 10,
+) -> list:
+    """
+    Fetches closed complaints for a given client from the MASTER sheet.
+    Matches primarily by client phone (last 10 digits), with fallback to unit_no and company.
+    Returns list of dicts with complaint details in reverse chronological order.
+    """
+    global _master_records_cache, _master_records_cache_time
+    now_t = time.time()
+    records = None
+    with _master_cache_lock:
+        if _master_records_cache is not None and (now_t - _master_records_cache_time) < 30:
+            records = _master_records_cache
+
+    if records is None:
+        try:
+            ws = _get_worksheet(MASTER_SHEET_NAME)
+            records = _retry_on_429(ws.get_all_records)
+            with _master_cache_lock:
+                _master_records_cache = records
+                _master_records_cache_time = now_t
+        except Exception:
+            logger.exception("Error fetching MASTER sheet records for closed complaints")
+            return []
+
+    if not records:
+        return []
+
+    target_digits = "".join(c for c in str(phone or "") if c.isdigit())
+    target_last10 = target_digits[-10:] if len(target_digits) >= 10 else ""
+    target_unit = str(unit_no or "").strip().upper()
+    target_comp = str(company_name or "").strip().lower()
+    target_bldg = str(building or "").strip().upper()
+
+    matched = []
+    seen_cids = set()
+
+    for idx, row in enumerate(records, start=2):
+        if not isinstance(row, dict):
+            continue
+
+        status = str(row.get("Status") or "").strip().lower()
+        if status not in ("closed", "resolved", "completed"):
+            continue
+
+        cid = str(row.get("Complaint ID") or row.get("complaint_id") or "").strip()
+        if not cid or cid in seen_cids:
+            continue
+
+        # Phone matching
+        row_phone_raw = str(row.get("Client Phone") or "").strip()
+        row_digits = "".join(c for c in row_phone_raw if c.isdigit())
+        phone_match = bool(target_last10 and len(row_digits) >= 10 and row_digits[-10:] == target_last10)
+
+        # Unit matching
+        row_unit_raw = str(row.get("Unit No") or "").strip().upper()
+        unit_match = bool(
+            target_unit
+            and row_unit_raw
+            and (
+                target_unit == row_unit_raw
+                or (target_unit.isdigit() and row_unit_raw.isdigit() and int(target_unit) == int(row_unit_raw))
+                or (target_unit.lstrip("0") and row_unit_raw.lstrip("0") and target_unit.lstrip("0") == row_unit_raw.lstrip("0"))
+            )
+        )
+
+        # Company matching
+        row_client_name = str(row.get("Client Name / User") or "").strip().lower()
+        row_logged_by = str(row.get("Logged By") or "").strip().lower()
+        comp_match = False
+        if target_comp:
+            comp_match = bool(
+                target_comp in row_client_name
+                or target_comp in row_logged_by
+                or row_client_name in target_comp
+            )
+
+        # Building matching
+        row_bldg = str(row.get("Building") or "").strip().upper()
+        bldg_match = True
+        if target_bldg and row_bldg:
+            bldg_match = bool(target_bldg in row_bldg or row_bldg in target_bldg)
+
+        # Ownership validation:
+        # Must match phone, or unit alongside company/building
+        is_owner = bool(phone_match or (unit_match and (comp_match or bldg_match)))
+
+        if not is_owner:
+            continue
+
+        seen_cids.add(cid)
+        matched.append({
+            "complaintId": cid,
+            "clientPhone": row_phone_raw or phone,
+            "clientName": str(row.get("Client Name / User") or "").strip(),
+            "unitNo": row_unit_raw or unit_no,
+            "complaintNature": str(row.get("Complaint Nature") or "General").strip(),
+            "complaintDetails": str(row.get("Complaint Details") or row.get("Sub Nature") or "").strip(),
+            "closedAt": str(row.get("Closed At") or row.get("Updated At") or "").strip(),
+            "building": row_bldg or building,
+            "feedbackStatus": str(row.get("Feedback Status") or "").strip(),
+            "rowIndex": idx,
+        })
+
+    logger.info(f"Found {len(matched)} closed complaints in MASTER sheet for phone={phone}, unit={unit_no}")
+    return matched[:limit]
+
 
 
 def _get_col_index(headers, col_name):
@@ -230,8 +352,8 @@ def update_master_feedback(complaint_id: str, feedback_data: dict) -> bool:
         
         return False
         
-    except Exception as e:
-        logger.error(f"Error updating MASTER feedback for {complaint_id}: {e}", exc_info=True)
+    except Exception:
+        logger.exception(f"Error updating MASTER feedback for {complaint_id}")
         return False
 
 
@@ -294,8 +416,8 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
         
         return False
         
-    except Exception as e:
-        logger.error(f"Error updating {building} sheet for {complaint_id}: {e}", exc_info=True)
+    except Exception:
+        logger.exception(f"Error updating {building} sheet for {complaint_id}")
         return False
 
 
@@ -353,8 +475,8 @@ def append_escalation(escalation_data: dict) -> bool:
         logger.info(f"Escalation appended for complaint {escalation_data.get('Complaint ID')}")
         return True
         
-    except Exception as e:
-        logger.error(f"Error appending escalation: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error appending escalation")
         return False
 
 
@@ -421,8 +543,8 @@ def save_session_to_sheet(session: dict) -> bool:
         logger.info(f"Session saved to Pending Feedback sheet for {complaint_id}")
         return True
         
-    except Exception as e:
-        logger.error(f"Error saving session to sheet: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error saving session to sheet")
         return False
 
 
@@ -445,8 +567,8 @@ def remove_session_from_sheet(complaint_id: str) -> bool:
         
         return False
         
-    except Exception as e:
-        logger.error(f"Error removing session from sheet: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error removing session from sheet")
         return False
 
 
@@ -488,8 +610,8 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
         
         return True
         
-    except Exception as e:
-        logger.error(f"Error updating reminder count for {phone}: {e}", exc_info=True)
+    except Exception:
+        logger.exception(f"Error updating reminder count for {phone}")
         return False
 
 
@@ -555,6 +677,6 @@ def load_pending_sessions() -> list:
         logger.info(f"Loaded {len(sessions)} pending sessions from sheet")
         return sessions
         
-    except Exception as e:
-        logger.error(f"Error loading pending sessions: {e}", exc_info=True)
+    except Exception:
+        logger.exception("Error loading pending sessions")
         return []

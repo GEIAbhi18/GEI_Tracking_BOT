@@ -123,17 +123,18 @@ def send_post_complaint_options(sender_phone: str, client: dict, complaint_id: s
     buttons = [
         {"id": "check_complaint_status", "title": "Check Status"},
         {"id": "update_complaint", "title": "Update Complaint"},
-        {"id": "log_new_complaint", "title": "Log New Complaint"},
+        {"id": "feedback_closed_complaints", "title": "Feedback on Closed"},
     ]
 
     ok = send_interactive_buttons(sender_phone, body, buttons)
     if not ok:
         fallback = (
             f"{body}\n\n"
-            f"1️⃣ *Check Status* (Reply 'status' or '2')\n"
-            f"2️⃣ *Update Complaint* (Reply 'update' or '4')\n"
-            f"3️⃣ *Log New Complaint* (Reply 'log' or '1')\n"
-            f"4️⃣ *Main Menu* (Reply 'menu')\n"
+            f"1️⃣ *Check Status* (Reply 'status' or '1')\n"
+            f"2️⃣ *Update Complaint* (Reply 'update' or '2')\n"
+            f"3️⃣ *Log New Complaint* (Reply 'log' or '3')\n"
+            f"4️⃣ *Give Feedback on Closed Complaints* (Reply 'feedback' or '4')\n"
+            f"5️⃣ *Main Menu* (Reply 'menu' or '5')\n"
         )
         send_text(sender_phone, fallback)
 
@@ -531,9 +532,19 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
         buttons = [
             {"id": "update_complaint", "title": "Update Complaint"},
             {"id": "log_new_complaint", "title": "Log New Complaint"},
-            {"id": "complaint_history", "title": "Complaint History"},
+            {"id": "feedback_closed_complaints", "title": "Feedback on Closed"},
         ]
-        send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
+        ok = send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
+        if not ok:
+            fallback = (
+                "What would you like to do next?\n\n"
+                "1️⃣ *Update Complaint* (Reply 'update' or '1')\n"
+                "2️⃣ *Log New Complaint* (Reply 'log' or '2')\n"
+                "3️⃣ *Give Feedback on Closed Complaints* (Reply 'feedback' or '3')\n"
+                "4️⃣ *Complaint History* (Reply 'history' or '4')\n"
+                "5️⃣ *Main Menu* (Reply 'menu' or '5')\n"
+            )
+            send_text(sender_phone, fallback)
         return
 
     # 5. Complaint History
@@ -571,7 +582,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
 
         buttons = [
             {"id": "check_complaint_status", "title": "Check Status"},
-            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "feedback_closed_complaints", "title": "Feedback on Closed"},
             {"id": "client_main_menu", "title": "Main Menu"},
         ]
         send_interactive_buttons(sender_phone, "Options:", buttons)
@@ -585,6 +596,16 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
     elif button_id.startswith("upd_cid_"):
         target_cid = button_id.replace("upd_cid_", "").strip()
         handle_update_complaint_initiation(sender_phone, client, target_cid=target_cid)
+        return
+
+    # 7. Give Feedback on Closed Complaints
+    elif button_id in ("feedback_closed_complaints", "give_feedback_closed"):
+        handle_feedback_closed_complaints_initiation(sender_phone, client)
+        return
+
+    elif button_id.startswith("fb_cid_"):
+        target_cid = button_id.replace("fb_cid_", "").strip()
+        handle_feedback_closed_complaints_initiation(sender_phone, client, target_cid=target_cid)
         return
 
 
@@ -605,6 +626,7 @@ def has_active_client_flow(sender_phone: str) -> bool:
                 "AWAITING_CLIENT_COMPLAINT_DESC",
                 "AWAITING_CLIENT_COMPLAINT_UPDATE",
                 "AWAITING_CLIENT_COMPLAINT_SELECT",
+                "AWAITING_CLIENT_FEEDBACK_COMPLAINT_SELECT",
             )
     except Exception:
         pass
@@ -633,6 +655,7 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             "AWAITING_CLIENT_COMPLAINT_DESC",
             "AWAITING_CLIENT_COMPLAINT_UPDATE",
             "AWAITING_CLIENT_COMPLAINT_SELECT",
+            "AWAITING_CLIENT_FEEDBACK_COMPLAINT_SELECT",
         ):
             return False
 
@@ -850,6 +873,244 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             send_post_complaint_options(sender_phone, client, complaint_id=target_cid)
             return True
 
+        # Flow 4: Complaint Selection for Feedback on Closed Complaints
+        if action == "AWAITING_CLIENT_FEEDBACK_COMPLAINT_SELECT":
+            closed_list = meta.get("closed_complaints") or []
+            selected = None
+
+            if clean_text.isdigit():
+                sel_idx = int(clean_text) - 1
+                if 0 <= sel_idx < len(closed_list):
+                    selected = closed_list[sel_idx]
+
+            if not selected:
+                target_str = clean_text.lstrip("#").strip().lower()
+                for c in closed_list:
+                    cid_str = str(c.get("complaintId") or c.get("com_no") or "").lstrip("#").strip().lower()
+                    if target_str == cid_str:
+                        selected = c
+                        break
+
+            if selected:
+                try:
+                    supabase.table("wa_task_states").delete().eq(
+                        "whatsapp_number", sender_phone
+                    ).execute()
+                except Exception:
+                    pass
+
+                _trigger_existing_feedback_flow(sender_phone, client, selected)
+                return True
+            else:
+                send_text(
+                    sender_phone,
+                    f"⚠️ Please enter a valid complaint number from the list above (1 to {len(closed_list)}), or type 'cancel' to exit:",
+                )
+                return True
+
     except Exception as e:
         logger.error(f"Error handling client text input: {e}", exc_info=True)
         return False
+
+
+def handle_feedback_closed_complaints_initiation(
+    sender_phone: str, client: dict, target_cid: str | None = None
+):
+    """
+    Initiates manual feedback collection for closed complaints:
+    1. Fetches closed complaints for the tenant from the MASTER sheet.
+    2. Fallback to Factech closed complaints if none found in MASTER sheet.
+    3. If none found, informs user and returns to menu.
+    4. If target_cid provided or single complaint, directly triggers feedback flow.
+    5. If multiple complaints, lists them number-wise (e.g. 1. Complaint #B2-00123)
+       and asks: "Please enter the number of the complaint for which you would like to give feedback."
+    """
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+    building = client.get("building", "")
+
+    # 1. Fetch closed complaints from existing feedback Google Sheet
+    from feedback.sheets import get_closed_complaints_for_client
+    closed_complaints = get_closed_complaints_for_client(
+        phone=sender_phone,
+        unit_no=unit,
+        company_name=company,
+        building=building,
+        limit=10,
+    )
+
+    # 2. Fallback to Factech closed complaints if Google Sheet had none or failed
+    if not closed_complaints:
+        try:
+            factech_all = get_complaints(client, days_back=365, active_only=False)
+            for c in factech_all:
+                status = str(c.get("status") or "").strip().lower()
+                if status in ("closed", "resolved", "completed"):
+                    cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").strip()
+                    cat = c.get("complaint_category") or {}
+                    nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "General"
+                    desc = c.get("description") or c.get("details") or ""
+                    closed_complaints.append({
+                        "complaintId": cid,
+                        "clientPhone": sender_phone,
+                        "clientName": c.get("company") or client.get("admin_name") or company or "Valued Client",
+                        "unitNo": c.get("unitNo") or unit,
+                        "complaintNature": nature,
+                        "complaintDetails": desc,
+                        "closedAt": c.get("closed_at") or c.get("created_at") or "",
+                        "building": c.get("building") or building,
+                        "feedbackStatus": "",
+                        "rowIndex": "",
+                    })
+        except Exception as e:
+            logger.debug(f"Factech closed complaints fallback error: {e}")
+
+    # Case: No closed complaints
+    if not closed_complaints:
+        msg = (
+            f"ℹ️ You currently have no closed complaints on record for *{company}* (Unit {unit}).\n\n"
+            f"Feedback can only be provided for complaints that have been resolved and closed by our facilities team."
+        )
+        buttons = [
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "check_complaint_status", "title": "Check Status"},
+            {"id": "client_main_menu", "title": "Main Menu"},
+        ]
+        if not send_interactive_buttons(sender_phone, msg, buttons):
+            send_text(sender_phone, f"{msg}\n\n1️⃣ Log New Complaint\n2️⃣ Check Status\n3️⃣ Main Menu")
+        return
+
+    # If target_cid is already specified, select it directly
+    selected = None
+    if target_cid:
+        # pyrefly: ignore [unnecessary-type-conversion]
+        clean_target = str(target_cid).lstrip("#").strip().lower()
+        for c in closed_complaints:
+            cid = str(c.get("complaintId") or c.get("com_no") or "").lstrip("#").strip().lower()
+            if clean_target == cid:
+                selected = c
+                break
+
+    # If target selected, trigger feedback directly
+    if selected:
+        _trigger_existing_feedback_flow(sender_phone, client, selected)
+        return
+
+    # If single closed complaint, trigger feedback directly
+    if len(closed_complaints) == 1:
+        selected = closed_complaints[0]
+        cid = str(selected.get("complaintId") or selected.get("com_no") or "").lstrip("#")
+        send_text(
+            sender_phone,
+            f"📋 Found closed Complaint *#{cid}* for *{company}* (Unit {unit}). Initiating feedback request...",
+        )
+        _trigger_existing_feedback_flow(sender_phone, client, selected)
+        return
+
+    # Multiple closed complaints — show number-wise list and ask user to select
+    lines = []
+    buttons = []
+    for idx, c in enumerate(closed_complaints[:10], start=1):
+        cid = str(c.get("complaintId") or c.get("com_no") or "").lstrip("#")
+        cat = c.get("complaintNature") or c.get("nature") or ""
+        cat_text = f" ({cat})" if cat and cat.lower() not in ("general", "issue") else ""
+        lines.append(f"  {idx}. Complaint #{cid}{cat_text}")
+        if idx <= 3:
+            btn_title = f"#{cid} {cat}"[:20] if cat else f"#{cid}"[:20]
+            buttons.append({"id": f"fb_cid_{cid}", "title": btn_title})
+
+    complaints_list = "\n".join(lines)
+    prompt_text = (
+        f"📋 *Your Closed Complaints:*\n\n"
+        f"{complaints_list}\n\n"
+        f"Please enter the number of the complaint for which you would like to give feedback.\n"
+        f"_(Reply with the number e.g. 1, or reply 'cancel' to exit)_"
+    )
+
+    # Save conversational state
+    payload = {
+        "whatsapp_number": sender_phone,
+        "action": "AWAITING_CLIENT_FEEDBACK_COMPLAINT_SELECT",
+        "metadata": {
+            "client_context": client,
+            "closed_complaints": closed_complaints[:10],
+        },
+    }
+    try:
+        supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
+    except Exception as e:
+        logger.error(f"Error setting WA state for feedback complaint selection: {e}")
+
+    # Send interactive buttons if <= 3, otherwise text
+    buttons_sent = False
+    if len(closed_complaints) <= 3:
+        buttons_sent = send_interactive_buttons(sender_phone, prompt_text, buttons)
+
+    if not buttons_sent:
+        send_text(sender_phone, prompt_text)
+
+
+def _trigger_existing_feedback_flow(sender_phone: str, client: dict, complaint: dict):
+    """
+    Triggers the exact existing closed-complaint feedback flow:
+    - Normalizes complaint data
+    - Calls feedback.engine.initiate_feedback
+    - Reuses existing gei_feedback_request Flow template, questions, and storage
+    """
+    cid = str(complaint.get("complaintId") or complaint.get("com_no") or "").strip()
+    building = str(complaint.get("building") or client.get("building") or "").strip()
+    if not building or building not in ("GEBB1", "GEBB2", "GETT"):
+        prefix = cid.split("-")[0].upper() if "-" in cid else ""
+        if prefix == "B1":
+            building = "GEBB1"
+        elif prefix == "B2":
+            building = "GEBB2"
+        elif prefix in ("TT", "T1"):
+            building = "GETT"
+        else:
+            building = client.get("building", "")
+
+    complaint_data = {
+        "complaintId": cid,
+        "clientPhone": sender_phone,
+        "clientName": complaint.get("clientName") or client.get("admin_name") or client.get("company_name") or "Valued Client",
+        "unitNo": str(complaint.get("unitNo") or client.get("unit_number") or ""),
+        "complaintNature": complaint.get("complaintNature") or complaint.get("nature") or "General",
+        "complaintDetails": complaint.get("complaintDetails") or complaint.get("details") or "",
+        "closedAt": complaint.get("closedAt") or complaint.get("closed_at") or "",
+        "building": building,
+        "rowIndex": complaint.get("rowIndex") or "",
+    }
+
+    try:
+        from feedback.engine import initiate_feedback
+        result = initiate_feedback(complaint_data)
+        status = result.get("status")
+
+        if status == "ok":
+            send_text(
+                sender_phone,
+                f"✅ We have sent the feedback form for Complaint *#{cid.lstrip('#')}*.\n\n"
+                f"Please tap the *Give Feedback* button in the message above to share your feedback with us! ⭐",
+            )
+        elif status == "queued":
+            send_text(
+                sender_phone,
+                f"ℹ️ You already have an active feedback session in progress. Complaint *#{cid.lstrip('#')}* has been queued and will be sent shortly.",
+            )
+        else:
+            err_msg = result.get("message", "Unknown error")
+            logger.error(f"Feedback initiation returned error: {err_msg}")
+            send_text(
+                sender_phone,
+                f"❌ We could not initiate the feedback request at this moment.\n"
+                f"⚠️ _Details: {err_msg[:120]}_\n\nPlease try again shortly.",
+            )
+            send_post_complaint_options(sender_phone, client)
+    except Exception as e:
+        logger.error(f"Error triggering feedback flow for {cid}: {e}", exc_info=True)
+        send_text(
+            sender_phone,
+            f"❌ Unable to trigger feedback flow right now. Please try again in a few moments.",
+        )
+        send_post_complaint_options(sender_phone, client)
