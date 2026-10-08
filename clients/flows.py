@@ -507,7 +507,15 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
                 {"id": "complaint_history", "title": "Complaint History"},
                 {"id": "client_main_menu", "title": "Main Menu"},
             ]
-            send_interactive_buttons(sender_phone, "Options:", buttons)
+            ok = send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
+            if not ok:
+                send_text(
+                    sender_phone,
+                    "What would you like to do next?\n\n"
+                    "1️⃣ *Log New Complaint*\n"
+                    "2️⃣ *Complaint History*\n"
+                    "3️⃣ *Main Menu*",
+                )
             return
 
         msg = f"📋 *Your Active Complaints:*\n\n"
@@ -562,7 +570,15 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
                 {"id": "check_complaint_status", "title": "Check Status"},
                 {"id": "client_main_menu", "title": "Main Menu"},
             ]
-            send_interactive_buttons(sender_phone, "Options:", buttons)
+            ok = send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
+            if not ok:
+                send_text(
+                    sender_phone,
+                    "What would you like to do next?\n\n"
+                    "1️⃣ *Log New Complaint*\n"
+                    "2️⃣ *Check Status*\n"
+                    "3️⃣ *Main Menu*",
+                )
             return
 
         msg = f"📜 *Your Complaint History:*\n\n"
@@ -585,7 +601,15 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             {"id": "feedback_closed_complaints", "title": "Feedback on Closed"},
             {"id": "client_main_menu", "title": "Main Menu"},
         ]
-        send_interactive_buttons(sender_phone, "Options:", buttons)
+        ok = send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
+        if not ok:
+            send_text(
+                sender_phone,
+                "What would you like to do next?\n\n"
+                "1️⃣ *Check Status*\n"
+                "2️⃣ *Feedback on Closed Complaints*\n"
+                "3️⃣ *Main Menu*",
+            )
         return
 
     # 6. Update Complaint

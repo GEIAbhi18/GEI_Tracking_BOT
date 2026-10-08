@@ -133,11 +133,13 @@ def _get_worksheet(sheet_name: str, auto_create: bool = False):
 
     def fetch_ws():
         try:
+            # pyrefly: ignore [missing-attribute]
             return _get_spreadsheet().worksheet(sheet_name)
         except gspread.exceptions.WorksheetNotFound:
             if auto_create:
                 logger.info(f"Worksheet '{sheet_name}' not found — creating it")
                 ss = _get_spreadsheet()
+                assert ss is not None
                 return ss.add_worksheet(title=sheet_name, rows=1000, cols=26)
             logger.error(f"Worksheet '{sheet_name}' not found in spreadsheet")
             raise
@@ -157,10 +159,12 @@ def find_complaint_row(complaint_id: str, sheet_name: str | None = None) -> tupl
     target_sheet = sheet_name or MASTER_SHEET_NAME
     try:
         ws = _get_worksheet(target_sheet)
+        assert ws is not None
         headers = _retry_on_429(ws.row_values, 1)
         
         # Find the Complaint ID column
         complaint_col = None
+        # pyrefly: ignore [not-iterable]
         for i, h in enumerate(headers, 1):
             if h.strip().lower() in ("complaint id", "complaintid", "complaint_id"):
                 complaint_col = i
@@ -172,6 +176,7 @@ def find_complaint_row(complaint_id: str, sheet_name: str | None = None) -> tupl
         
         # Find the row with this complaint ID
         col_values = _retry_on_429(ws.col_values, complaint_col)
+        # pyrefly: ignore [not-iterable]
         for row_idx, val in enumerate(col_values, 1):
             if val.strip().lower() == complaint_id.strip().lower():
                 return ws, row_idx, headers
@@ -211,6 +216,7 @@ def get_closed_complaints_for_client(
     if records is None:
         try:
             ws = _get_worksheet(MASTER_SHEET_NAME)
+            assert ws is not None
             records = _retry_on_429(ws.get_all_records)
             with _master_cache_lock:
                 _master_records_cache = records
@@ -222,10 +228,14 @@ def get_closed_complaints_for_client(
     if not records:
         return []
 
+    # pyrefly: ignore [unnecessary-type-conversion]
     target_digits = "".join(c for c in str(phone or "") if c.isdigit())
     target_last10 = target_digits[-10:] if len(target_digits) >= 10 else ""
+    # pyrefly: ignore [unnecessary-type-conversion]
     target_unit = str(unit_no or "").strip().upper()
+    # pyrefly: ignore [unnecessary-type-conversion]
     target_comp = str(company_name or "").strip().lower()
+    # pyrefly: ignore [unnecessary-type-conversion]
     target_bldg = str(building or "").strip().upper()
 
     matched = []
@@ -265,6 +275,7 @@ def get_closed_complaints_for_client(
         row_logged_by = str(row.get("Logged By") or "").strip().lower()
         comp_match = False
         if target_comp:
+            # pyrefly: ignore [unnecessary-type-conversion]
             comp_match = bool(
                 target_comp in row_client_name
                 or target_comp in row_logged_by
@@ -275,10 +286,12 @@ def get_closed_complaints_for_client(
         row_bldg = str(row.get("Building") or "").strip().upper()
         bldg_match = True
         if target_bldg and row_bldg:
+            # pyrefly: ignore [unnecessary-type-conversion]
             bldg_match = bool(target_bldg in row_bldg or row_bldg in target_bldg)
 
         # Ownership validation:
         # Must match phone, or unit alongside company/building
+        # pyrefly: ignore [unnecessary-type-conversion]
         is_owner = bool(phone_match or (unit_match and (comp_match or bldg_match)))
 
         if not is_owner:
@@ -341,6 +354,7 @@ def update_master_feedback(complaint_id: str, feedback_data: dict) -> bool:
             col_idx = _get_col_index(headers, col_name)
             if col_idx:
                 cell_val = value if isinstance(value, (int, float)) else (str(value) if value is not None else "")
+                # pyrefly: ignore [bad-argument-type]
                 cells_to_update.append(gspread.Cell(row, col_idx, cell_val))
             else:
                 logger.warning(f"Column '{col_name}' not found in MASTER headers")
@@ -364,7 +378,9 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
     """
     
     # --- FIX SWAPPED ARGUMENTS (Safeguard for lingering bad sessions) ---
+    # pyrefly: ignore [unnecessary-type-conversion]
     c_id_raw = str(complaint_id)
+    # pyrefly: ignore [unnecessary-type-conversion]
     bld_raw = str(building)
     if c_id_raw.isdigit() and len(c_id_raw) >= 10 and ('-' in bld_raw):
         logger.debug(f"update_building_sheet_feedback: auto-correcting swapped arguments. complaint_id={c_id_raw}, building={bld_raw}")
@@ -384,6 +400,7 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
     
     if not sheet_name:
         # Fallback: Infer building from complaint_id prefix if the building parameter is invalid
+        # pyrefly: ignore [unnecessary-type-conversion]
         prefix = str(complaint_id).split('-')[0].upper()
         if prefix == 'B1':
             sheet_name = BUILDING_SHEETS.get('GEBB1')
@@ -407,6 +424,7 @@ def update_building_sheet_feedback(complaint_id: str, building: str, feedback_da
             col_idx = _get_col_index(headers, col_name)
             if col_idx:
                 cell_val = value if isinstance(value, (int, float)) else (str(value) if value is not None else "")
+                # pyrefly: ignore [bad-argument-type]
                 cells_to_update.append(gspread.Cell(row, col_idx, cell_val))
         
         if cells_to_update:
@@ -445,6 +463,7 @@ def append_escalation(escalation_data: dict) -> bool:
     """
     try:
         ws = _get_worksheet(ESCALATIONS_SHEET_NAME, auto_create=True)
+        assert ws is not None
         headers = _retry_on_429(ws.row_values, 1)
         
         if not headers:
@@ -497,6 +516,7 @@ def save_session_to_sheet(session: dict) -> bool:
     """
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
+        assert ws is not None
         headers = _retry_on_429(ws.row_values, 1)
         
         if not headers:
@@ -511,6 +531,7 @@ def save_session_to_sheet(session: dict) -> bool:
         existing_row = None
         if phone_col:
             col_values = _retry_on_429(ws.col_values, phone_col)
+            # pyrefly: ignore [not-iterable]
             for row_idx, val in enumerate(col_values, 1):
                 if val.strip() == phone.strip():
                     existing_row = row_idx
@@ -552,6 +573,7 @@ def remove_session_from_sheet(complaint_id: str) -> bool:
     """Remove a completed session from the Pending Feedback sheet."""
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
+        assert ws is not None
         headers = _retry_on_429(ws.row_values, 1)
         complaint_col = _get_col_index(headers, "Complaint ID")
         
@@ -559,6 +581,7 @@ def remove_session_from_sheet(complaint_id: str) -> bool:
             return False
         
         col_values = _retry_on_429(ws.col_values, complaint_col)
+        # pyrefly: ignore [not-iterable]
         for row_idx, val in enumerate(col_values, 1):
             if val.strip() == complaint_id.strip():
                 _retry_on_429(ws.delete_rows, row_idx)
@@ -576,6 +599,7 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
     """Update reminder count and last reminder timestamp in Pending Feedback sheet."""
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
+        assert ws is not None
         headers = _retry_on_429(ws.row_values, 1)
         
         phone_col = _get_col_index(headers, "Phone")
@@ -584,6 +608,7 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
         
         col_values = _retry_on_429(ws.col_values, phone_col)
         target_row = None
+        # pyrefly: ignore [not-iterable]
         for row_idx, val in enumerate(col_values, 1):
             if val.strip() == phone.strip():
                 target_row = row_idx
@@ -598,6 +623,7 @@ def update_pending_reminder_count(phone: str, count: int, last_reminder_at: str)
         
         reminder_col = _get_col_index(headers, "Reminder Count")
         if reminder_col:
+            # pyrefly: ignore [bad-argument-type]
             cells_to_update.append(gspread.Cell(target_row, reminder_col, count if isinstance(count, (int, float)) else str(count)))
         
         last_reminder_col = _get_col_index(headers, "Last Reminder At")
@@ -623,9 +649,11 @@ def load_pending_sessions() -> list:
     """
     try:
         ws = _get_worksheet(PENDING_FEEDBACK_SHEET_NAME, auto_create=True)
+        assert ws is not None
         records = _retry_on_429(ws.get_all_records)
         
         sessions = []
+        # pyrefly: ignore [not-iterable]
         for rec in records:
             phone = str(rec.get("Phone", "") or rec.get("Client Phone", "")).strip()
             complaint_id = str(rec.get("Complaint ID", "")).strip()
