@@ -375,3 +375,66 @@ def test_cancel_feedback_selection_returns_to_menu(mocker):
     assert handled is True
     mock_db.delete.assert_called_once()
     mock_post_opts.assert_called_once()
+
+
+# ── 8. Main Menu List Message & Routing ───────────────────────────────────────
+
+def test_welcome_menu_sends_list_message_with_feedback(mocker):
+    """Verifies that send_client_welcome_menu sends an interactive list message with all 4 options including feedback."""
+    from clients.flows import send_client_welcome_menu
+
+    mock_list = mocker.patch("clients.flows.send_list_message", return_value=True)
+    client = {
+        "admin_name": "Abhijeet",
+        "company_name": "Good Earth Infra (Dev Test)",
+        "building": "Business Bay-II",
+        "unit_number": "GEEBTWOTest",
+    }
+
+    send_client_welcome_menu("917717754421", client)
+
+    mock_list.assert_called_once()
+    args = mock_list.call_args[0]
+    to_num, body, btn_text, sections = args
+    assert to_num == "917717754421"
+    assert "Good Earth Infra (Dev Test)" in body
+    assert btn_text == "Open Menu"
+
+    # Verify rows inside section
+    assert len(sections) == 1
+    rows = sections[0]["rows"]
+    row_ids = [r["id"] for r in rows]
+    assert row_ids == [
+        "log_new_complaint",
+        "check_complaint_status",
+        "complaint_history",
+        "feedback_closed_complaints",
+    ]
+    fb_row = next(r for r in rows if r["id"] == "feedback_closed_complaints")
+    assert "Feedback" in fb_row["title"]
+    assert "closed complaints" in fb_row["description"].lower()
+
+
+def test_welcome_menu_fallback_includes_feedback(mocker):
+    """Verifies that send_client_welcome_menu text fallback includes option 4 for feedback."""
+    from clients.flows import send_client_welcome_menu
+
+    mocker.patch("clients.flows.send_list_message", return_value=False)
+    mock_text = mocker.patch("clients.flows.send_text", return_value=True)
+
+    client = {
+        "admin_name": "Abhijeet",
+        "company_name": "Good Earth Infra",
+        "building": "Business Bay-II",
+        "unit_number": "GEEBTWOTest",
+    }
+
+    send_client_welcome_menu("917717754421", client)
+
+    mock_text.assert_called_once()
+    text = mock_text.call_args[0][1]
+    assert "1️⃣ *Log New Complaint*" in text
+    assert "2️⃣ *Check Status*" in text
+    assert "3️⃣ *Complaint History*" in text
+    assert "4️⃣ *Give Feedback on Closed Complaints*" in text
+

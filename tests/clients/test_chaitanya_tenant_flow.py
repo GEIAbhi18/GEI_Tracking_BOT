@@ -80,28 +80,28 @@ def test_auth_middleware_treats_chaitanya_as_client_only(mocker):
 
 
 def test_send_main_menu_routes_chaitanya_to_factech_menu(mocker):
-    mock_buttons = mocker.patch("clients.flows.send_interactive_buttons", return_value=True)
-    mock_list = mocker.patch("whatsapp.ux.send_list_message", return_value=True)
+    mock_list = mocker.patch("clients.flows.send_list_message", return_value=True)
 
     user = {"role": "Client", "name": "Chaitanya", "whatsapp_number": CHAITANYA_PHONE}
     send_main_menu(CHAITANYA_PHONE, user)
 
-    # Must NOT send the team tasks list menu
-    mock_list.assert_not_called()
-
-    # Must send Factech 3-button welcome card
-    mock_buttons.assert_called_once()
-    args, kwargs = mock_buttons.call_args
-    target_to, body, buttons = args[0], args[1], args[2]
+    # Must send Factech interactive list welcome menu (not staff task menu)
+    mock_list.assert_called_once()
+    args, kwargs = mock_list.call_args
+    target_to, body, btn_text, sections = args[0], args[1], args[2], args[3]
 
     assert target_to == CHAITANYA_PHONE
     assert "Good Earth Infra" in body
     assert "*Unit:* GEEBTWOTest" in body
-    assert len(buttons) == 3
-    button_ids = [b["id"] for b in buttons]
-    assert "log_new_complaint" in button_ids
-    assert "check_complaint_status" in button_ids
-    assert "complaint_history" in button_ids
+    assert btn_text == "Open Menu"
+    assert len(sections) == 1
+    rows = sections[0]["rows"]
+    assert len(rows) == 4
+    row_ids = [r["id"] for r in rows]
+    assert "log_new_complaint" in row_ids
+    assert "check_complaint_status" in row_ids
+    assert "complaint_history" in row_ids
+    assert "feedback_closed_complaints" in row_ids
 
 
 def test_team_task_assignment_excludes_chaitanya(mocker):
@@ -144,8 +144,8 @@ def test_elara_team_router_bypasses_chaitanya():
 def test_send_client_welcome_menu_fallback_on_button_failure(mocker):
     from clients.flows import send_client_welcome_menu
 
-    # Simulate interactive buttons failing (e.g. Meta limitation or network error)
-    mocker.patch("clients.flows.send_interactive_buttons", return_value=False)
+    # Simulate list message failing (e.g. Meta limitation or network error)
+    mocker.patch("clients.flows.send_list_message", return_value=False)
     mock_text = mocker.patch("clients.flows.send_text", return_value=True)
 
     client = {
@@ -161,6 +161,7 @@ def test_send_client_welcome_menu_fallback_on_button_failure(mocker):
     assert "1️⃣ *Log New Complaint*" in sent_content
     assert "2️⃣ *Check Status*" in sent_content
     assert "3️⃣ *Complaint History*" in sent_content
+    assert "4️⃣ *Give Feedback on Closed Complaints*" in sent_content
 
 
 def test_factech_create_complaint_uses_geebtwotest_for_chaitanya(mocker):
@@ -278,8 +279,12 @@ def test_webhook_client_text_routing(mocker):
     _handle_text(CHAITANYA_PHONE, "3")
     mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "complaint_history")
 
-    # 4 -> update_complaint
+    # 4 -> feedback_closed_complaints
     _handle_text(CHAITANYA_PHONE, "4")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "feedback_closed_complaints")
+
+    # update -> update_complaint
+    _handle_text(CHAITANYA_PHONE, "update")
     mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "update_complaint")
 
     # greeting with punctuation e.g. "Hello!"

@@ -79,7 +79,7 @@ def handle_client_hi(sender_phone: str):
 
 
 def send_client_welcome_menu(sender_phone: str, client: dict):
-    """Sends the 3 primary interactive options to the client with plain text fallback."""
+    """Sends the primary interactive menu options to the client via list message with plain text fallback."""
     admin_name = client.get("admin_name") or "there"
     company = client.get("company_name", "N/A")
     building = client.get("building", "N/A")
@@ -94,22 +94,43 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
         f"How can I help you today?"
     )
 
-    # 3 Interactive WhatsApp Buttons (Meta strictly enforces max 3 buttons, <= 20 chars each)
-    buttons = [
-        {"id": "log_new_complaint", "title": "Log New Complaint"},
-        {"id": "check_complaint_status", "title": "Check Status"},
-        {"id": "complaint_history", "title": "Complaint History"},
+    sections = [
+        {
+            "title": "GEI Support",
+            "rows": [
+                {
+                    "id": "log_new_complaint",
+                    "title": "Log New Complaint",
+                    "description": "Register a new service issue",
+                },
+                {
+                    "id": "check_complaint_status",
+                    "title": "Check Status",
+                    "description": "View active complaints",
+                },
+                {
+                    "id": "complaint_history",
+                    "title": "Complaint History",
+                    "description": "View past resolved tickets",
+                },
+                {
+                    "id": "feedback_closed_complaints",
+                    "title": "Feedback on Closed",
+                    "description": "Give feedback on closed complaints",
+                },
+            ],
+        }
     ]
 
-    ok = send_interactive_buttons(sender_phone, body, buttons)
+    ok = send_list_message(sender_phone, body, "Open Menu", sections)
     if not ok:
         text_menu = (
             f"{body}\n\n"
             f"1️⃣ *Log New Complaint*\n"
             f"2️⃣ *Check Status*\n"
             f"3️⃣ *Complaint History*\n"
-            f"4️⃣ *Update Complaint*\n\n"
-            f"_Reply with 1, 2, 3, or 4, or type your complaint description directly._"
+            f"4️⃣ *Give Feedback on Closed Complaints*\n\n"
+            f"_Reply with 1, 2, 3, or 4 (or 'feedback'), or type your complaint description directly._"
         )
         send_text(sender_phone, text_menu)
 

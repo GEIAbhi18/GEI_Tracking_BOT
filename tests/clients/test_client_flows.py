@@ -65,27 +65,33 @@ def setup_test_clients(mocker):
 
 
 def test_handle_client_hi_single_account(mocker):
-    mock_btn = mocker.patch("clients.flows.send_interactive_buttons")
+    mock_list = mocker.patch("clients.flows.send_list_message")
     handle_client_hi("918826896085")
 
-    mock_btn.assert_called_once()
-    args, kwargs = mock_btn.call_args
+    mock_list.assert_called_once()
+    args, kwargs = mock_list.call_args
     recipient = args[0]
     body = args[1]
-    buttons = args[2]
+    btn_text = args[2]
+    sections = args[3]
 
     assert recipient == "918826896085"
     assert "HDFC Bank" in body
     assert "GEBB1" in body
     assert "R1/R2" in body
-    assert len(buttons) == 3
-    button_ids = [b["id"] for b in buttons]
-    assert "log_new_complaint" in button_ids
-    assert "check_complaint_status" in button_ids
-    assert "complaint_history" in button_ids
+    assert btn_text == "Open Menu"
+    assert len(sections) == 1
+    rows = sections[0]["rows"]
+    assert len(rows) == 4
+    row_ids = [r["id"] for r in rows]
+    assert "log_new_complaint" in row_ids
+    assert "check_complaint_status" in row_ids
+    assert "complaint_history" in row_ids
+    assert "feedback_closed_complaints" in row_ids
 
-    # Check button labels
-    assert any(b["title"] == "Check Status" for b in buttons)
+    # Check labels
+    assert any(r["title"] == "Check Status" for r in rows)
+    assert any("Feedback" in r["title"] for r in rows)
 
 
 def test_handle_client_hi_multi_account(mocker):
