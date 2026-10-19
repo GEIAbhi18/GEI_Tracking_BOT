@@ -426,10 +426,20 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
     All three recipients are notified simultaneously, regardless of who
     made the change.  Each recipient's notification is independent so
     one failure does not block the others.
+
+    A UUID-based event_id is generated once per sheet-change and propagated
+    to every notifier so all Render log lines for this event share the same ID.
     """
+    import uuid
+    from datetime import datetime, timezone
+
     # 0. Suppress duplicates and rapid flapping
     if _should_suppress_notification(ref_no, change_type, details):
         return
+
+    # ── Generate a stable correlation ID for this event ──────────────────
+    event_id = f"fac_evt_{uuid.uuid4().hex[:12]}"
+    now_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     # ── Build shared context used by Kanav + Developer notifications ──
     # Human-readable description of the change
@@ -467,41 +477,81 @@ def _notify_external_change(ref_no: str, building: str, change_type: str,
     bldg_display = BUILDING_NAME_MAPPING.get(building, building) if building else "Sheet"
     changed_by = f"Google Sheet ({bldg_display})"
 
+    # ── Structured entry log ──────────────────────────────────────────────
+    logger.info(
+        f"[FacilitiesSheet] event_id={event_id} | timestamp={now_utc} | "
+        f"task_id={ref_no} | building={building} | action={change_type.upper()} | "
+        f"change_detected=true"
+    )
+    logger.info(
+        f"[NotificationRouter] event_id={event_id} | task_id={ref_no} | "
+        f"recipients_resolved=3 | recipients=[anoop, kanav, developer]"
+    )
+
+    # ── Track per-recipient outcomes for the summary log ─────────────────
+    kanav_status = "NOT_ATTEMPTED"
+    developer_status = "NOT_ATTEMPTED"
+
     # 1. Notify Anoop
     try:
         from facilities.config import resolve_anoop_phone_number
         anoop_phone = resolve_anoop_phone_number()
         if not anoop_phone:
-            logger.warning(f"Could not resolve Anoop's phone number for external change on {ref_no}.")
+            logger.warning(
+                f"[NotificationRouter] event_id={event_id} | task_id={ref_no} | "
+                f"recipient_role=anoop | status=SKIP_NO_PHONE"
+            )
         else:
             _send_external_edit_notification(anoop_phone, ref_no, building, change_type, details)
     except Exception as e:
-        logger.error(f"Failed to notify Anoop about external change for {ref_no}: {e}")
+        logger.error(
+            f"[NotificationRouter] event_id={event_id} | task_id={ref_no} | "
+            f"recipient_role=anoop | status=ERROR | error={e}"
+        )
 
     # 2. Notify Kanav
     try:
         from notifications.kanav_notifier import notify_kanav_task_change
-        notify_kanav_task_change(
+        kanav_ok = notify_kanav_task_change(
             task_id=ref_no,
             task_title=task_title,
             change_made=change_desc,
             changed_by=changed_by,
             domain="Facilities",
+            event_id=event_id,
         )
+        kanav_status = "API_ACCEPTED" if kanav_ok else "SEND_FAILED"
     except Exception as e:
-        logger.error(f"Failed to notify Kanav about external change for {ref_no}: {e}")
+        kanav_status = "ERROR"
+        logger.error(
+            f"[NotificationRouter] event_id={event_id} | task_id={ref_no} | "
+            f"recipient_role=kanav | status=ERROR | error={e}"
+        )
 
     # 3. Notify Developer
     try:
         from notifications.developer_notifier import notify_developer_facilities_change
-        notify_developer_facilities_change(
+        dev_ok = notify_developer_facilities_change(
             ref_no=ref_no,
             task_title=task_title,
             change_desc=change_desc,
             changed_by=changed_by,
+            event_id=event_id,
         )
+        developer_status = "API_ACCEPTED" if dev_ok else "SEND_FAILED"
     except Exception as e:
-        logger.error(f"Failed to notify Developer about external change for {ref_no}: {e}")
+        developer_status = "ERROR"
+        logger.error(
+            f"[NotificationRouter] event_id={event_id} | task_id={ref_no} | "
+            f"recipient_role=developer | status=ERROR | error={e}"
+        )
+
+    # ── Summary log ───────────────────────────────────────────────────────
+    logger.info(
+        f"[NotificationSummary] event_id={event_id} | task_id={ref_no} | "
+        f"kanav={kanav_status} | developer={developer_status} | "
+        f"note=delivery_confirmation_requires_webhook"
+    )
 
 
 

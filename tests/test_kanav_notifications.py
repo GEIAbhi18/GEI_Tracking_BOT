@@ -371,3 +371,215 @@ def test_elara_comment_notifies_kanav():
         assert "elara-t-103" in body
         assert "Revised drawing submitted to client for approval" in body
         assert "Rachit" in body
+
+
+# ── 6. Production-Safety & Regression Tests ──────────────────────────────────
+
+def test_facilities_sheet_change_by_anoop_notifies_kanav():
+    """
+    CRITICAL: A Facilities Sheet change made by Anoop (not Kanav) must still
+    trigger a notification to Kanav.  This was the primary production failure mode.
+    """
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+    from unittest.mock import MagicMock
+
+    _reset_notification_tracker()
+    kanav_calls = []
+
+    def capture_send(to, body, **kwargs):
+        kanav_calls.append({"to": to, "body": body})
+        return True
+
+    with patch("notifications.kanav_notifier.send_text", side_effect=capture_send), \
+         patch("notifications.developer_notifier.send_text", return_value=True), \
+         patch("whatsapp.ux.send_text", return_value=True), \
+         patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013"), \
+         patch("facilities.sync_engine.supabase") as mock_sb:
+
+        mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = \
+            MagicMock(data=[{"issue_action": "Fix HVAC Unit"}])
+
+        _notify_external_change(
+            ref_no="GEBB1-042",
+            building="GEBB1",
+            change_type="updated",
+            details={"field": "status", "old_value": "Open", "new_value": "WIP"},
+        )
+
+    assert len(kanav_calls) >= 1, (
+        "REGRESSION: Kanav was NOT notified of a Facilities Sheet change made by Anoop"
+    )
+    to_number = kanav_calls[0]["to"]
+    assert to_number == DEVELOPER_PHONE, (
+        f"In test mode, Kanav notification must go to Developer ({DEVELOPER_PHONE}), got {to_number}"
+    )
+    assert "GEBB1-042" in kanav_calls[0]["body"]
+
+
+def test_facilities_sheet_change_notifies_both_developer_and_kanav():
+    """
+    A single Facilities Sheet change must produce one notification to Developer
+    and one to Kanav.
+    """
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+    from unittest.mock import MagicMock
+
+    _reset_notification_tracker()
+    all_calls = []
+
+    def capture(to, body, **kwargs):
+        all_calls.append({"to": to, "body": body})
+        return True
+
+    with patch("notifications.kanav_notifier.send_text", side_effect=capture), \
+         patch("notifications.developer_notifier.send_text", side_effect=capture), \
+         patch("whatsapp.ux.send_text", side_effect=capture), \
+         patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013"), \
+         patch("facilities.sync_engine.supabase") as mock_sb:
+
+        mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = \
+            MagicMock(data=[{"issue_action": "Paint lobby walls"}])
+
+        _notify_external_change(
+            ref_no="GEBB2-007",
+            building="GEBB2",
+            change_type="updated",
+            details={"field": "owner", "old_value": "Vikash", "new_value": "Kuldeep"},
+        )
+
+    recipients = [c["to"] for c in all_calls]
+    assert DEVELOPER_PHONE in recipients, \
+        f"Developer ({DEVELOPER_PHONE}) was NOT notified. Recipients: {recipients}"
+    assert len(all_calls) >= 2, \
+        f"Expected at least 2 WA calls (Kanav + Developer), got {len(all_calls)}"
+
+
+def test_notify_kanav_missing_phone_logs_error(caplog):
+    """
+    If Kanav's WhatsApp number cannot be resolved, an explicit diagnostic
+    log must appear — not a silent failure.
+    """
+    import logging
+    with patch("db.supabase.table") as mock_table, \
+         patch("notifications.kanav_notifier.send_text", return_value=False):
+        mock_table.return_value.select.return_value.ilike.return_value.execute.side_effect = \
+            Exception("DB timeout")
+
+        with caplog.at_level(logging.INFO, logger="notifications.kanav_notifier"):
+            notify_kanav_task_change(
+                task_id="GEBB1-099",
+                task_title="Repair Pump",
+                change_made="Status changed",
+                changed_by="Anoop",
+                domain="Facilities",
+            )
+
+    log_text = " ".join(r.message for r in caplog.records)
+    assert "KanavNotifier" in log_text or "kanav" in log_text.lower(), \
+        "Expected a KanavNotifier log entry but found none"
+
+
+def test_single_event_no_duplicate_kanav_notification():
+    """
+    A single Facilities Sheet change event must NOT produce more than one
+    notification to Kanav (deduplication must work).
+    """
+    from facilities.sync_engine import _notify_external_change, _reset_notification_tracker
+    from unittest.mock import MagicMock
+
+    _reset_notification_tracker()
+    kanav_calls = []
+
+    def capture(to, body, **kwargs):
+        kanav_calls.append(to)
+        return True
+
+    with patch("notifications.kanav_notifier.send_text", side_effect=capture), \
+         patch("notifications.developer_notifier.send_text", return_value=True), \
+         patch("whatsapp.ux.send_text", return_value=True), \
+         patch("facilities.config.resolve_anoop_phone_number", return_value="919211501013"), \
+         patch("facilities.sync_engine.supabase") as mock_sb:
+
+        mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = \
+            MagicMock(data=[{"issue_action": "Fix elevator"}])
+
+        details = {"field": "status", "old_value": "Open", "new_value": "WIP"}
+        _notify_external_change("GEBB1-055", "GEBB1", "updated", details)
+        _notify_external_change("GEBB1-055", "GEBB1", "updated", details)  # duplicate
+
+    assert len(kanav_calls) == 1, \
+        f"Expected exactly 1 Kanav notification, got {len(kanav_calls)} (dedup failure)"
+
+
+def test_send_failure_logged_not_silently_swallowed(caplog):
+    """
+    If send_text returns False, notify_kanav_task_change must log SEND_FAILED.
+    """
+    import logging
+    with patch("notifications.kanav_notifier.send_text", return_value=False):
+        with caplog.at_level(logging.ERROR, logger="notifications.kanav_notifier"):
+            result = notify_kanav_task_change(
+                task_id="GEBB1-010",
+                task_title="Chiller Failure",
+                change_made="Status: Open -> WIP",
+                changed_by="Anoop",
+                domain="Facilities",
+            )
+
+    assert result is False, "notify_kanav_task_change must return False when send_text fails"
+    assert any("SEND_FAILED" in r.message for r in caplog.records), \
+        "Expected a SEND_FAILED log entry when send_text returns False"
+
+
+def test_event_id_propagated_through_pipeline(caplog):
+    """
+    When event_id is provided to notify_kanav_task_change, it must appear
+    in the log output for Render correlation.
+    """
+    import logging
+    custom_event_id = "fac_evt_testcorrelation"
+
+    with patch("notifications.kanav_notifier.send_text", return_value=True):
+        with caplog.at_level(logging.INFO, logger="notifications.kanav_notifier"):
+            notify_kanav_task_change(
+                task_id="GEBB1-020",
+                task_title="Lift Maintenance",
+                change_made="Status changed from WIP to Closed",
+                changed_by="Vikash",
+                domain="Facilities",
+                event_id=custom_event_id,
+            )
+
+    combined = " ".join(r.message for r in caplog.records)
+    assert custom_event_id in combined, \
+        f"Expected event_id '{custom_event_id}' in log output but got: {combined[:300]}"
+
+
+def test_elara_notifications_unaffected_by_facilities_changes():
+    """
+    Elara Home notification flows must remain unaffected by Facilities changes.
+    """
+    from elara.flows.update_task import handle_status_selection
+
+    mock_task = {
+        "id": "elara-unreg-01",
+        "title": "Elara Site Inspection",
+        "status": "pending",
+        "created_by": "Kanav",
+    }
+
+    with patch("elara.flows.update_task.get_task_by_id", return_value=mock_task), \
+         patch("elara.flows.update_task.update_task", return_value=mock_task), \
+         patch("elara.flows.update_task.send_text"), \
+         patch("elara.flows.update_task.send_elara_task_card"), \
+         patch("elara.flows.update_task.send_interactive_buttons"), \
+         patch("notifications.kanav_notifier.send_text") as mock_send_wa:
+
+        handle_status_selection(
+            to="919867272041",
+            task_id="elara-unreg-01",
+            new_status="completed",
+            user={"name": "Rachit", "role": "Site Executive"}
+        )
+
+    assert mock_send_wa.called, "Elara Home notification to Kanav must still work"

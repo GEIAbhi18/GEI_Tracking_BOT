@@ -11,6 +11,15 @@ WHATSAPP_ACCESS_TOKEN = os.getenv("META_ACCESS_TOKEN", "")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "")
 WA_API_BASE = f"https://graph.facebook.com/v19.0/{PHONE_NUMBER_ID}" if PHONE_NUMBER_ID else ""
 
+
+def _mask_phone(phone: str) -> str:
+    """Return a masked phone for safe logging (shows last 4 digits only)."""
+    # pyrefly: ignore[unnecessary-type-conversion]
+    digits = "".join(c for c in str(phone or "") if c.isdigit())
+    if len(digits) >= 6:
+        return "*" * (len(digits) - 4) + digits[-4:]
+    return "****"
+
 def clean_phone_number(phone) -> str:
     """
     Cleans phone numbers for WhatsApp API.
@@ -34,11 +43,22 @@ def is_testing_env() -> bool:
         or os.getenv("PYTEST_CURRENT_TEST") is not None
     )
 
-def _post_wa(payload: dict) -> bool:
+def _post_wa(payload: dict, _recipient_role: str = "", _event_id: str = "") -> bool:
+    """
+    Post a WhatsApp message via the Meta Graph API.
+
+    Args:
+        payload:         The WhatsApp API payload dict.
+        _recipient_role: Human-readable role label for structured logs (e.g. 'kanav', 'developer').
+        _event_id:       Correlation ID tying all log lines for a single sheet-change event together.
+    """
     token = os.getenv("META_ACCESS_TOKEN") or WHATSAPP_ACCESS_TOKEN
     phone_id = os.getenv("PHONE_NUMBER_ID") or PHONE_NUMBER_ID
     if not token or not phone_id:
-        logger.error("WA UX: Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID")
+        logger.error(
+            "[WhatsAppNotification] CONFIGURATION_ERROR | "
+            "Missing META_ACCESS_TOKEN or PHONE_NUMBER_ID"
+        )
         return False
 
     if "to" in payload:
@@ -53,13 +73,28 @@ def _post_wa(payload: dict) -> bool:
 
     if is_testing_env():
         if clean_to != DEVELOPER_PHONE:
-            logger.info(f"[TEST SAFETY] Rerouting test message from {clean_to} to developer ({DEVELOPER_PHONE})")
+            logger.info(
+                f"[TEST SAFETY] Rerouting test message from {_mask_phone(clean_to)} "
+                f"to developer ({_mask_phone(DEVELOPER_PHONE)})"
+            )
             payload["to"] = DEVELOPER_PHONE
     elif clean_to == kanav_clean:
         payload_str = str(payload).lower()
         if any(marker in payload_str for marker in ("test", "demo", "dummy", "simulation", "mock")):
-            logger.warning(f"[TEST SAFETY] Blocked test message to Kanav ({KANAV_PHONE}). Rerouting to developer ({DEVELOPER_PHONE})")
+            logger.warning(
+                f"[TEST SAFETY] Blocked test-marker message to Kanav ({_mask_phone(KANAV_PHONE)}). "
+                f"Rerouting to developer ({_mask_phone(DEVELOPER_PHONE)})"
+            )
             payload["to"] = DEVELOPER_PHONE
+
+    final_to = payload.get("to", "")
+    role_tag = f" | recipient_role={_recipient_role}" if _recipient_role else ""
+    event_tag = f" | event_id={_event_id}" if _event_id else ""
+
+    logger.info(
+        f"[WhatsAppNotification]{event_tag}{role_tag} | "
+        f"phone={_mask_phone(final_to)} | status=SEND_ATTEMPT"
+    )
 
     api_base = f"https://graph.facebook.com/v19.0/{phone_id}"
     url = f"{api_base}/messages"
@@ -69,21 +104,55 @@ def _post_wa(payload: dict) -> bool:
     }
     try:
         r = requests.post(url, headers=headers, json=payload, timeout=10)
-        logger.info(f"WA API {r.status_code} [to={payload.get('to')} type={payload.get('type')}]: {r.text[:200]}")
+
+        # Extract Meta message ID for delivery tracking
+        message_id = ""
+        try:
+            resp_json = r.json()
+            messages = resp_json.get("messages", [])
+            if messages and isinstance(messages, list):
+                message_id = messages[0].get("id", "")
+        except Exception:
+            pass
+
+        if r.status_code == 200:
+            logger.info(
+                f"[WhatsAppNotification]{event_tag}{role_tag} | "
+                f"phone={_mask_phone(final_to)} | "
+                f"http_status={r.status_code} | "
+                f"message_id={message_id or 'n/a'} | "
+                f"status=API_ACCEPTED"
+            )
+        else:
+            logger.error(
+                f"[WhatsAppNotification]{event_tag}{role_tag} | "
+                f"phone={_mask_phone(final_to)} | "
+                f"http_status={r.status_code} | "
+                f"response={r.text[:300]} | "
+                f"status=API_REJECTED"
+            )
+
         r.raise_for_status()
         return True
+    except requests.exceptions.HTTPError as e:
+        # raise_for_status() already logged above — just signal failure
+        return False
     except Exception as e:
-        logger.error(f"WA API error [to={payload.get('to')}]: {e}")
+        logger.error(
+            f"[WhatsAppNotification]{event_tag}{role_tag} | "
+            f"phone={_mask_phone(final_to)} | "
+            f"error={e} | status=SEND_ERROR"
+        )
         return False
 
-def send_text(to: str, body: str) -> bool:
+def send_text(to: str, body: str, _recipient_role: str = "", _event_id: str = "") -> bool:
     payload = {
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
         "text": {"body": body},
     }
-    return _post_wa(payload)
+    return _post_wa(payload, _recipient_role=_recipient_role, _event_id=_event_id)
 
 def send_interactive_buttons(to: str, body: str, buttons: list) -> bool:
     """

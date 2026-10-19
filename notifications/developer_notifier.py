@@ -32,14 +32,25 @@ def notify_developer_facilities_change(
     change_desc: str,
     changed_by: str,
     timestamp: datetime | str | None = None,
+    event_id: str = "",
 ) -> bool:
     """
     Send the Developer a WhatsApp message regarding a Facilities
     Google Sheet change.
 
     Never raises exceptions, ensuring calling flows are unaffected.
+
+    Args:
+        ref_no:      Task reference number.
+        task_title:  Human-readable task title.
+        change_desc: Description of the change.
+        changed_by:  Name/label of who triggered the change.
+        timestamp:   Optional datetime or formatted string; defaults to now.
+        event_id:    Correlation ID so all log lines for one sheet-change
+                     event can be traced together in Render logs.
     """
     try:
+        from whatsapp.ux import _mask_phone
         developer_wa = get_developer_phone()
 
         ts = timestamp or get_formatted_timestamp()
@@ -52,17 +63,37 @@ def notify_developer_facilities_change(
             domain="Facilities",
         )
 
-        sent = send_text(developer_wa, message)
-        logger.info(
-            f"Facilities change notification sent to Developer ({developer_wa}) "
-            f"for {ref_no}: {change_desc}"
-        )
-        print(
-            f"[DEVELOPER_NOTIFICATION] Sent to {developer_wa} | "
-            f"Task: {ref_no} ({task_title}) | "
-            f"Change: {change_desc} | By: {changed_by} | Domain: Facilities",
-            flush=True,
-        )
+        sent = send_text(developer_wa, message,
+                         _recipient_role="developer",
+                         _event_id=event_id)
+
+        if sent:
+            logger.info(
+                f"[DeveloperNotifier] event_id={event_id or 'n/a'} | "
+                f"task_id={ref_no} | recipient_role=developer | "
+                f"phone={_mask_phone(developer_wa)} | status=QUEUED_OK"
+            )
+            print(
+                f"[DEVELOPER_NOTIFICATION] event_id={event_id or 'n/a'} | "
+                f"Sent to {_mask_phone(developer_wa)} | "
+                f"Task: {ref_no} ({task_title}) | "
+                f"Change: {change_desc} | By: {changed_by} | Domain: Facilities | "
+                f"status=API_ACCEPTED",
+                flush=True,
+            )
+        else:
+            logger.error(
+                f"[DeveloperNotifier] event_id={event_id or 'n/a'} | "
+                f"task_id={ref_no} | recipient_role=developer | "
+                f"phone={_mask_phone(developer_wa)} | status=SEND_FAILED"
+            )
+            print(
+                f"[DEVELOPER_NOTIFICATION] event_id={event_id or 'n/a'} | "
+                f"FAILED for {_mask_phone(developer_wa)} | Task: {ref_no} | "
+                f"status=SEND_FAILED",
+                flush=True,
+            )
+
         # pyrefly: ignore [unnecessary-type-conversion]
         return bool(sent)
     except Exception as e:

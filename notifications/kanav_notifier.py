@@ -6,6 +6,7 @@ Supports both Facilities and Elara Home tasks.
 from __future__ import annotations
 import os
 import logging
+import uuid
 from datetime import datetime, timezone, timedelta
 from whatsapp.ux import send_text
 
@@ -164,14 +165,30 @@ def is_elara_task_created_by_kanav(task: dict) -> bool:
 
 def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
                              changed_by: str, domain: str = "Facilities",
-                             timestamp: datetime | None = None) -> bool:
+                             timestamp: datetime | None = None,
+                             event_id: str = "") -> bool:
     """
     Send Kanav a WhatsApp message regarding a task change.
     Never raises exceptions, ensuring calling flows are unaffected.
+
+    Args:
+        task_id:    Task reference number / Elara task ID.
+        task_title: Human-readable task title.
+        change_made: Description of what changed.
+        changed_by: Name of the user who made the change.
+        domain:     'Facilities' or 'Elara Home'.
+        timestamp:  Optional datetime; defaults to current IST time.
+        event_id:   Correlation ID from the triggering event (e.g. from
+                    _notify_external_change).  A new UUID is generated if
+                    not provided, so all log lines for this send are linked.
     """
     try:
         from elara.config import DEVELOPER_PHONE, KANAV_PHONE
         import sys
+
+        # Generate a stable correlation ID for this notification attempt
+        evt = event_id or f"kanav_notif_{uuid.uuid4().hex[:12]}"
+
         is_test_task = (
             os.getenv("TESTING") in ("1", "true", "True")
             or "pytest" in sys.modules
@@ -184,8 +201,17 @@ def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
         )
         if is_test_task:
             kanav_wa = DEVELOPER_PHONE
+            resolved_role = "developer (test-reroute)"
         else:
             kanav_wa = get_kanav_phone()
+            resolved_role = "kanav"
+
+        from whatsapp.ux import _mask_phone
+        logger.info(
+            f"[KanavNotifier] event_id={evt} | task_id={task_id} | "
+            f"domain={domain} | recipient_role={resolved_role} | "
+            f"phone={_mask_phone(kanav_wa)} | change={change_made!r}"
+        )
 
         ts = timestamp or get_formatted_timestamp()
         message = format_task_change_message(
@@ -197,9 +223,33 @@ def notify_kanav_task_change(task_id: str, task_title: str, change_made: str,
             domain=domain
         )
 
-        sent = send_text(kanav_wa, message)
-        logger.info(f"Task change notification sent to {kanav_wa} for {domain} task '{task_id}': {change_made}")
-        print(f"[KANAV_NOTIFICATION] Sent to {kanav_wa} | Task: {task_id} ({task_title}) | Change: {change_made} | By: {changed_by} | Domain: {domain}", flush=True)
+        sent = send_text(kanav_wa, message,
+                         _recipient_role=resolved_role,
+                         _event_id=evt)
+
+        if sent:
+            logger.info(
+                f"[KanavNotifier] event_id={evt} | task_id={task_id} | "
+                f"recipient_role={resolved_role} | status=QUEUED_OK"
+            )
+            print(
+                f"[KANAV_NOTIFICATION] event_id={evt} | Sent to {_mask_phone(kanav_wa)} | "
+                f"Task: {task_id} ({task_title}) | Change: {change_made} | "
+                f"By: {changed_by} | Domain: {domain} | status=API_ACCEPTED",
+                flush=True,
+            )
+        else:
+            logger.error(
+                f"[KanavNotifier] event_id={evt} | task_id={task_id} | "
+                f"recipient_role={resolved_role} | phone={_mask_phone(kanav_wa)} | "
+                f"status=SEND_FAILED — send_text returned False (see WhatsAppNotification log above)"
+            )
+            print(
+                f"[KANAV_NOTIFICATION] event_id={evt} | FAILED for {_mask_phone(kanav_wa)} | "
+                f"Task: {task_id} | status=SEND_FAILED",
+                flush=True,
+            )
+
         # pyrefly: ignore [unnecessary-type-conversion]
         return bool(sent)
     except Exception as e:

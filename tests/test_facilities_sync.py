@@ -26,6 +26,10 @@ def _patch_all_send_text(mocker, side_effect=None):
     via `from whatsapp.ux import send_text`, which binds to their local module
     namespace.  Patching only `whatsapp.ux.send_text` does NOT intercept those
     module-level bindings.  We must also patch the module-level names.
+
+    The side_effect callable, if provided, should accept (to, body, **kwargs)
+    so it remains compatible with the optional _recipient_role and _event_id
+    parameters.
     """
     if side_effect is not None:
         mock_send = MagicMock(side_effect=side_effect)
@@ -677,7 +681,8 @@ def test_regression_one_recipient_failure_does_not_block_others(mocker):
     call_count = {"total": 0}
     anoop_phone = "919211501013"
 
-    def mock_send_side_effect(to, msg):
+    def mock_send_side_effect(to, msg, **kwargs):
+        """Accept optional keyword args (_recipient_role, _event_id) added to send_text."""
         call_count["total"] += 1
         if to == anoop_phone:
             raise Exception("Simulated WhatsApp API failure for Anoop")
