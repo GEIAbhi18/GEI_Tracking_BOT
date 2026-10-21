@@ -171,7 +171,8 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
     url = f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaint"
 
     # pyrefly: ignore [deprecated]
-    now_utc = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    # Factech server runs in UTC and strictly rejects any created_at date in the future (even micro-drifts)
+    now_utc_buffered = (datetime.utcnow() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
     now_local = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     nature = complaint_data.get("nature") or "General Maintenance"
@@ -187,7 +188,7 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
         "category": nature,
         "sub_category": sub_nature,
         "description": desc,
-        "created_at": now_local,
+        "created_at": now_utc_buffered,
     }
     if complaint_data.get("reference_no"):
         payload["reference_no"] = str(complaint_data["reference_no"])
@@ -431,23 +432,62 @@ def update_complaint(client_context: dict, complaint_id: str, update_data: dict)
 
     new_desc = update_data.get("description", "").strip()
     remarks = update_data.get("remarks") or new_desc
+    new_status = update_data.get("status")
 
-    payload = {
-        "complaint_no": clean_cid,
-        "description": new_desc,
-        "remarks": remarks,
-        "status": update_data.get("status", "In Progress"),
-    }
+    # Factech third-party PUT is a bulk event array endpoint.
+    # Supported events: 'description', 'remarks', 'status' (Open|WIP|Hold|Closed|Cancel|Reopen), 'rating'.
+    # pyrefly: ignore[deprecated]
+    now_utc_buffered = (datetime.utcnow() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
+
+    payload = [
+        {
+            "complaint_no": clean_cid,
+            "event": "description",
+            "value": new_desc,
+            "updated_at": now_utc_buffered,
+        }
+    ]
+    if remarks and remarks != new_desc:
+        payload.append({
+            "complaint_no": clean_cid,
+            "event": "remarks",
+            "value": remarks,
+            "updated_at": now_utc_buffered,
+        })
+    if new_status and new_status in ("Open", "WIP", "Hold", "Closed", "Cancel", "Reopen"):
+        payload.append({
+            "complaint_no": clean_cid,
+            "event": "status",
+            "value": new_status,
+            "updated_at": now_utc_buffered,
+        })
+
+    # ── Render Logs (FACTECH COMPLAINT UPDATE REQUEST) ───────────────────
+    req_render_log = (
+        f"\n========================================\n"
+        f"FACTECH COMPLAINT UPDATE REQUEST\n"
+        f"Site ID: {site_id}\n"
+        f"Building: {building}\n"
+        f"Complaint ID: {clean_cid}\n"
+        f"Description: {new_desc}\n"
+        f"API URL: {url}\n"
+        f"Request Payload:\n{json.dumps(payload, indent=2)}\n"
+        f"========================================"
+    )
+    logger.info(req_render_log)
+    print(req_render_log, flush=True)
 
     logger.info(f"{log_prefix} Starting complaint UPDATE request")
     logger.info(f"{log_prefix} Method: PUT")
     logger.info(f"{log_prefix} URL: {url}")
     logger.info(f"{log_prefix} Complaint ID: {clean_cid}")
     logger.info(f"{log_prefix} Payload: {json.dumps(payload)}")
+    logger.info(f"{log_prefix} Headers (masked): {json.dumps(_mask_sensitive_headers(_get_headers()))}")
 
     # 1. Attempt Factech PUT endpoint
     api_success = False
     api_resp_data = {}
+    err_msg = ""
     try:
         auth = None
         if FACTECH_USERNAME and FACTECH_PASSWORD:
@@ -463,12 +503,45 @@ def update_complaint(client_context: dict, complaint_id: str, update_data: dict)
             api_resp_data = {"text": res.text}
             logger.info(f"{log_prefix} Response Body (text): {res.text[:500]}")
 
-        if res.status_code in (200, 201) and (api_resp_data.get("status") != "error" or api_resp_data.get("success")):
-            api_success = True
+        # Factech bulk PUT returns: {"status": "success", "data": [{"status": "success", ...}], "message": "bulk response"}
+        # Or in error: {"status": "error", "message": "..."}
+        if res.status_code in (200, 201) and api_resp_data.get("status") == "success":
+            data_items = api_resp_data.get("data")
+            if isinstance(data_items, list) and data_items:
+                all_ok = all(item.get("status") == "success" for item in data_items if isinstance(item, dict))
+                api_success = all_ok
+                if not all_ok:
+                    err_msg = "; ".join(item.get("message", "Item update failed") for item in data_items if isinstance(item, dict) and item.get("status") != "success")
+            else:
+                api_success = True
+        else:
+            err_msg = api_resp_data.get("message") or (res.text[:200] if hasattr(res, "text") else "Unknown error")
+
+        if api_success:
+            resp_render_log = (
+                f"\n========================================\n"
+                f"FACTECH COMPLAINT UPDATE RESPONSE\n"
+                f"HTTP Status: {res.status_code}\n"
+                f"Response Body:\n{json.dumps(api_resp_data, indent=2) if isinstance(api_resp_data, (dict, list)) else res.text}\n"
+                f"========================================"
+            )
+            logger.info(resp_render_log)
+            print(resp_render_log, flush=True)
             logger.info(f"{log_prefix} Complaint Update Result: SUCCESS")
         else:
-            logger.warning(f"{log_prefix} Complaint Update Result: FAILED - {api_resp_data}")
+            err_render_log = (
+                f"\n========================================\n"
+                f"FACTECH COMPLAINT UPDATE API ERROR\n"
+                f"HTTP Status: {res.status_code}\n"
+                f"Response Body:\n{json.dumps(api_resp_data, indent=2) if isinstance(api_resp_data, (dict, list)) else res.text}\n"
+                f"Error: {err_msg}\n"
+                f"========================================"
+            )
+            logger.error(err_render_log)
+            print(err_render_log, flush=True)
+            logger.error(f"{log_prefix} Complaint Update Result: FAILED - {err_msg}")
     except Exception as e:
+        err_msg = str(e)
         logger.warning(f"{log_prefix} Factech PUT update complaint error: {e}")
 
     # 2. Resilient local update in cache & disk store
@@ -530,12 +603,20 @@ def update_complaint(client_context: dict, complaint_id: str, update_data: dict)
     except Exception as err:
         logger.warning(f"Could not write complaint update to facilities_audit_log: {err}")
 
-    return {
-        "success": True,
-        "complaint_id": clean_cid,
-        "message": "Complaint updated successfully",
-        "raw": api_resp_data,
-    }
+    if api_success:
+        return {
+            "success": True,
+            "complaint_id": clean_cid,
+            "message": "Complaint updated successfully",
+            "raw": api_resp_data,
+        }
+    else:
+        return {
+            "success": False,
+            "complaint_id": clean_cid,
+            "message": f"Factech API error: {err_msg}" if err_msg else "Could not update complaint on Factech",
+            "raw": api_resp_data,
+        }
 
 
 def get_complaints(
@@ -667,11 +748,18 @@ def get_complaints(
             continue
 
         # Extract unit accurately
-        c_unit_raw = c.get("reference_unit_no") or c.get("unitNo") or c.get("unit") or c.get("flatNo") or ""
-        if isinstance(c_unit_raw, dict):
-            c_unit = str(c_unit_raw.get("flat_no") or c_unit_raw.get("display_unit_no") or c_unit_raw.get("name") or "").strip().upper()
-        else:
-            c_unit = str(c_unit_raw).strip().upper()
+        # Extract unit candidates accurately across all possible Factech structures
+        c_units = []
+        for u_raw in (c.get("unit"), c.get("user"), c.get("unitNo"), c.get("reference_unit_no"), c.get("flatNo")):
+            if not u_raw:
+                continue
+            if isinstance(u_raw, dict):
+                for k in ("flat_no", "display_unit_no", "name"):
+                    val = u_raw.get(k)
+                    if val:
+                        c_units.append(str(val).strip().upper())
+            else:
+                c_units.append(str(u_raw).strip().upper())
 
         # Extract mobile
         created_by = c.get("created_by") or {}
@@ -683,17 +771,23 @@ def get_complaints(
 
         # Strict matching
         unit_match = False
-        if target_unit and c_unit:
-            if target_unit == c_unit:
-                unit_match = True
-            elif target_unit.isdigit() and c_unit.isdigit() and int(target_unit) == int(c_unit):
-                unit_match = True
-            elif target_unit.lstrip("0") and c_unit.lstrip("0") and target_unit.lstrip("0") == c_unit.lstrip("0"):
-                unit_match = True
-            elif len(target_unit) >= 3 and re.search(rf'\b{re.escape(target_unit)}\b', c_unit, re.IGNORECASE):
-                unit_match = True
-            elif c_unit.startswith(f"{target_unit} ") or c_unit.endswith(f" {target_unit}") or f" {target_unit} " in c_unit:
-                unit_match = True
+        if target_unit and c_units:
+            for c_unit in c_units:
+                if target_unit == c_unit:
+                    unit_match = True
+                    break
+                elif target_unit.isdigit() and c_unit.isdigit() and int(target_unit) == int(c_unit):
+                    unit_match = True
+                    break
+                elif target_unit.lstrip("0") and c_unit.lstrip("0") and target_unit.lstrip("0") == c_unit.lstrip("0"):
+                    unit_match = True
+                    break
+                elif len(target_unit) >= 3 and re.search(rf'\b{re.escape(target_unit)}\b', c_unit, re.IGNORECASE):
+                    unit_match = True
+                    break
+                elif c_unit.startswith(f"{target_unit} ") or c_unit.endswith(f" {target_unit}") or f" {target_unit} " in c_unit:
+                    unit_match = True
+                    break
 
         mobile_match = bool(
             target_mobile_digits

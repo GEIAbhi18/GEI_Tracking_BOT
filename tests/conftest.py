@@ -78,7 +78,7 @@ def prevent_whatsapp_messages_leak(monkeypatch):
 
     orig_post = ux._post_wa
 
-    def safe_post_wa(payload: dict) -> bool:
+    def safe_post_wa(payload: dict, *args, **kwargs) -> bool:
         to_phone = ux.clean_phone_number(payload.get("to"))
         # Strictly ensure Kanav never gets test messages
         if to_phone == ux.clean_phone_number(KANAV_PHONE):

@@ -151,11 +151,12 @@ def send_post_complaint_options(sender_phone: str, client: dict, complaint_id: s
     if not ok:
         fallback = (
             f"{body}\n\n"
-            f"1️⃣ *Check Status* (Reply 'status' or '1')\n"
-            f"2️⃣ *Update Complaint* (Reply 'update' or '2')\n"
-            f"3️⃣ *Log New Complaint* (Reply 'log' or '3')\n"
+            f"1️⃣ *Log New Complaint* (Reply 'log' or '1')\n"
+            f"2️⃣ *Check Status* (Reply 'status' or '2')\n"
+            f"3️⃣ *Complaint History* (Reply 'history' or '3')\n"
             f"4️⃣ *Give Feedback on Closed Complaints* (Reply 'feedback' or '4')\n"
-            f"5️⃣ *Main Menu* (Reply 'menu' or '5')\n"
+            f"5️⃣ *Main Menu* (Reply 'menu' or '5')\n\n"
+            f"_(Or reply 'update' to add notes to an active complaint)_"
         )
         send_text(sender_phone, fallback)
 
@@ -900,22 +901,37 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                 pass
 
             send_text(sender_phone, f"⏳ Updating complaint #{target_cid}...")
-            update_complaint(client, target_cid, {"description": clean_text})
+            result = update_complaint(client, target_cid, {"description": clean_text})
 
             company = client.get("company_name", "")
             unit = client.get("unit_number", "")
             building = client.get("building", "")
 
-            confirmation = (
-                f"✅ *Complaint Updated Successfully!*\n\n"
-                f"🎫 *Complaint ID:* #{target_cid}\n"
-                f"🏢 *Company:* {company}\n"
-                f"📍 *Building:* {building} | *Unit:* {unit}\n"
-                f"📝 *Updated Details:* {clean_text}\n\n"
-                f"Our facility team has received your update."
-            )
-            send_text(sender_phone, confirmation)
-            send_post_complaint_options(sender_phone, client, complaint_id=target_cid)
+            if result.get("success"):
+                confirmation = (
+                    f"✅ *Complaint Updated Successfully!*\n\n"
+                    f"🎫 *Complaint ID:* #{target_cid}\n"
+                    f"🏢 *Company:* {company}\n"
+                    f"📍 *Building:* {building} | *Unit:* {unit}\n"
+                    f"📝 *Updated Details:* {clean_text}\n\n"
+                    f"Our facility team has received your update."
+                )
+                send_text(sender_phone, confirmation)
+                send_post_complaint_options(sender_phone, client, complaint_id=target_cid)
+            else:
+                api_msg = result.get("message", "Unable to update complaint on facility platform")
+                logger.error(f"Factech complaint update FAILED for {sender_phone}: {api_msg}")
+                send_text(
+                    sender_phone,
+                    (
+                        f"❌ *Unable to update Complaint #{target_cid} at this time.*\n\n"
+                        f"Our facility management platform did not confirm the update.\n\n"
+                        f"📝 Your update note: _{clean_text[:200]}_\n\n"
+                        f"Please try again in a few moments, or contact the facility team directly.\n"
+                        f"⚠️ _Details: {api_msg[:120]}_"
+                    ),
+                )
+                send_post_complaint_options(sender_phone, client, complaint_id=target_cid)
             return True
 
         # Flow 4: Complaint Selection for Feedback on Closed Complaints

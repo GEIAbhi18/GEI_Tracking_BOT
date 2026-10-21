@@ -83,6 +83,10 @@ def mock_elara_supabase():
             self._update_data = data
             return self
 
+        def delete(self):
+            self._is_delete = True
+            return self
+
         def execute(self):
             res = MagicMock()
             if self.table_name == "elara_users":

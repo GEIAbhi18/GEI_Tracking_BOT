@@ -296,6 +296,143 @@ def test_factech_update_complaint_api_call(mocker):
     call_args = mock_put.call_args
     assert "593" in call_args[0][0]  # Site ID for GEBB2
     payload = call_args[1]["json"]
-    assert payload["complaint_no"] == "GEI-14808"
-    assert payload["description"] == "Pantry tap still leaking"
+    if isinstance(payload, list):
+        assert payload[0]["complaint_no"] == "GEI-14808"
+        assert payload[0]["event"] == "description"
+        assert payload[0]["value"] == "Pantry tap still leaking"
+    else:
+        assert payload["complaint_no"] == "GEI-14808"
+        assert payload["description"] == "Pantry tap still leaking"
+
+
+def test_update_complaint_returns_failure_on_api_error(mocker):
+    """Verifies update_complaint returns success=False when Factech PUT returns error status or fails."""
+    from clients.factech_client import update_complaint
+
+    mock_put = mocker.patch("requests.put")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"status": "error", "message": "Missing parameter"}
+    mock_put.return_value = mock_resp
+
+    mock_db = MagicMock()
+    mock_db.insert.return_value.execute.return_value = MagicMock()
+    mocker.patch("db.supabase.table", return_value=mock_db)
+
+    client = {
+        "building": "GEBB2",
+        "company_name": "Good Earth Infra (Dev Test)",
+        "unit_number": "001",
+        "mobile_number": "917717754421",
+    }
+
+    res = update_complaint(client, "GEI-14808", {"description": "Pantry tap still leaking"})
+    assert res["success"] is False
+    assert "Missing parameter" in res["message"]
+
+
+def test_update_complaint_flow_notifies_user_on_failure(mocker):
+    """Verifies that when Factech PUT fails, the bot notifies the user of the error and never sends false success."""
+    from clients.flows import handle_client_text
+
+    mock_update = mocker.patch("clients.flows.update_complaint", return_value={
+        "success": False,
+        "complaint_id": "B2-00455",
+        "message": "Factech API error: Service Unavailable",
+    })
+    mock_send = mocker.patch("clients.flows.send_text")
+    mocker.patch("clients.flows.send_post_complaint_options")
+
+    mock_table = MagicMock()
+    mock_table.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[
+        {
+            "action": "AWAITING_CLIENT_COMPLAINT_UPDATE",
+            "metadata": {
+                "client_context": {"company_name": "Good Earth Infra", "unit_number": "GEEBTWOTest", "building": "Business Bay-II"},
+                "target_complaint_id": "B2-00455",
+            },
+        }
+    ])
+    mock_table.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    mocker.patch("clients.flows.supabase.table", return_value=mock_table)
+
+    handled = handle_client_text("917717754421", "Updated note")
+    assert handled is True
+    mock_update.assert_called_once()
+
+    # Verify error notification was sent and success message was NOT sent
+    sent_messages = [call_args[0][1] for call_args in mock_send.call_args_list]
+    assert any("❌ *Unable to update Complaint #B2-00455 at this time.*" in m for m in sent_messages)
+    assert not any("✅ *Complaint Updated Successfully!*" in m for m in sent_messages)
+
+
+def test_create_complaint_uses_utc_buffered_timestamp(mocker):
+    """Verifies created_at is sent in UTC with safety buffer preventing future date error from Factech."""
+    from datetime import datetime
+    from clients.factech_client import create_complaint
+
+    mock_post = mocker.patch("requests.post")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"status": "success", "data": {"com_no": "B2-9999"}}
+    mock_post.return_value = mock_resp
+
+    mock_db = MagicMock()
+    mock_db.insert.return_value.execute.return_value = MagicMock()
+    mocker.patch("db.supabase.table", return_value=mock_db)
+
+    client = {
+        "building": "Business Bay-II",
+        "company_name": "Good Earth Infra (Dev Test)",
+        "unit_number": "GEEBTWOTest",
+        "mobile_number": "917717754421",
+    }
+    res = create_complaint(client, {"nature": "Civil", "description": "Tile broken"})
+    assert res["success"] is True
+
+    payload = mock_post.call_args[1]["json"]
+    created_at = payload["created_at"]
+    # Parse created_at and verify it's within 2 minutes of UTC now
+    dt = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S")
+    # pyrefly: ignore[deprecated]
+    now_utc = datetime.utcnow()
+    diff = abs((now_utc - dt).total_seconds())
+    assert diff < 120, f"created_at timestamp {created_at} is too far from UTC now {now_utc}"
+
+
+def test_get_complaints_matches_nested_unit_structures(mocker):
+    """Verifies get_complaints matches when unit information is in nested unit or user objects."""
+    from clients.factech_client import get_complaints
+
+    raw_api_complaints = [
+        {
+            "com_no": "B2-00483",
+            "unit": {"flat_no": "GEEBTWOTest", "name": "Test"},
+            "reference_unit_no": "TEST-AUTO-UTC",
+            "status": "Closed",
+        },
+        {
+            "com_no": "B2-00999",
+            "unit": {"flat_no": "505"},
+            "reference_unit_no": "None",
+            "status": "Open",
+        },
+    ]
+    mock_get = mocker.patch("requests.get")
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"objects": raw_api_complaints}
+    mock_get.return_value = mock_resp
+
+    mock_db = MagicMock()
+    mock_db.select.return_value.eq.return_value.order.return_value.limit.return_value.execute.return_value = MagicMock(data=[])
+    mocker.patch("db.supabase.table", return_value=mock_db)
+
+    client = {"building": "Business Bay-II", "unit_number": "GEEBTWOTest", "mobile_number": "917717754421"}
+    complaints = get_complaints(client, days_back=30)
+    matched_ids = [c["com_no"] for c in complaints]
+
+    assert "B2-00483" in matched_ids
+    assert "B2-00999" not in matched_ids
+
 

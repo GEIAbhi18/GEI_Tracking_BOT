@@ -78,6 +78,7 @@ def get_whatsapp_bot_responses(ws_pending) -> dict:
                 bld = "GETT"
 
         sent_at = r[7].strip() if len(r) > 7 else ""
+        comment = r[12].strip() if len(r) > 12 else ""
 
         if cid not in received_by_cid:
             received_by_cid[cid] = {
@@ -88,6 +89,7 @@ def get_whatsapp_bot_responses(ws_pending) -> dict:
                 "unit_no": r[4] if len(r) > 4 else "",
                 "nature": r[5] if len(r) > 5 else "",
                 "timestamp": sent_at,
+                "comment": comment,
                 "rows": [idx],
             }
         else:
@@ -115,7 +117,7 @@ def get_escalation_records(ws_esc) -> dict:
             esc_map[cid] = {
                 "score": score,
                 "sentiment": sent or "Unhappy",
-                "remarks": comm or "Low Feedback Score",
+                "remarks": comm,
                 "escalation_reason": reason or "Low Feedback Score",
             }
     return esc_map
@@ -199,10 +201,6 @@ def reconcile_and_push(dry_run: bool = False):
     if not_in_sheet_records:
         logger.warning(f"  Could not locate {len(not_in_sheet_records)} IDs in sheets: {not_in_sheet_records}")
 
-    if not missing_records:
-        logger.info("All WhatsApp responses are already aligned! No sync needed.")
-        return 0
-
     # 5. Build cell updates for missing responses
     cells_by_worksheet = {name: [] for name in worksheets.keys()}
 
@@ -212,17 +210,18 @@ def reconcile_and_push(dry_run: bool = False):
         rec_time = info["timestamp"] or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         # Determine scores, remarks, sentiment, escalation
+        user_comment = info.get("comment", "")
         if cid in esc_map:
             esc_data = esc_map[cid]
             score = esc_data["score"]
             sentiment = esc_data["sentiment"]
-            remarks = esc_data["remarks"]
+            remarks = esc_data["remarks"] or user_comment
             esc_status = "Open"
             esc_reason = esc_data["escalation_reason"]
         else:
             score = 5
             sentiment = "Happy"
-            remarks = "Feedback received via WhatsApp"
+            remarks = user_comment
             esc_status = "No"
             esc_reason = ""
 
@@ -282,28 +281,50 @@ def reconcile_and_push(dry_run: bool = False):
                     cells_by_worksheet["MASTER"].append(
                         gspread.Cell(row_idx, col_idx, str(val) if val is not None else "")
                     )
-    # Check for any existing rows in building sheets where Feedback Source is 'WhatsApp' and fix to 'GEI_BOT'
-    for name in ["GEBB1", "GEBB2", "GETT"]:
+    # Check for any existing rows in sheets where Feedback Source is 'WhatsApp'/'Factech' and fix to 'GEI_BOT'
+    for name in ["GEBB1", "GEBB2", "GETT", "MASTER"]:
         headers = sheet_data[name]["headers"]
         src_col = _get_col_index(headers, "Feedback Source")
-        if not src_col:
-            continue
-        for cid_val, row_data in sheet_data[name]["rows"].items():
-            vals = row_data["values"]
-            if len(vals) >= src_col:
-                cur_src = vals[src_col - 1].strip()
-                if cur_src.lower() in ("whatsapp", "factech"):
-                    logger.info(f"Queuing Feedback Source update for {cid_val} in {name}: '{cur_src}' -> 'GEI_BOT'")
-                    cells_by_worksheet[name].append(
-                        gspread.Cell(row_data["row_num"], src_col, "GEI_BOT")
-                    )
+        if src_col:
+            for cid_val, row_data in sheet_data[name]["rows"].items():
+                vals = row_data["values"]
+                if len(vals) >= src_col:
+                    cur_src = vals[src_col - 1].strip()
+                    if cur_src.lower() in ("whatsapp", "factech"):
+                        logger.info(f"Queuing Feedback Source update for {cid_val} in {name}: '{cur_src}' -> 'GEI_BOT'")
+                        cells_by_worksheet[name].append(
+                            gspread.Cell(row_data["row_num"], src_col, "GEI_BOT")
+                        )
 
+        # Clean up erroneous remarks ('Feedback received via WhatsApp' or 'Low Feedback Score')
+        rem_col = _get_col_index(headers, "Remarks")
+        if rem_col:
+            for cid_val, row_data in sheet_data[name]["rows"].items():
+                vals = row_data["values"]
+                if len(vals) >= rem_col:
+                    cur_rem = vals[rem_col - 1].strip()
+                    if cur_rem.lower() in (
+                        "feedback received via whatsapp",
+                        "feedback rceived via whatsapp",
+                        "low feedback score",
+                    ):
+                        user_comm = esc_map.get(cid_val, {}).get("remarks") or bot_responses.get(cid_val, {}).get("comment") or ""
+                        logger.info(f"Queuing Remarks cleanup for {cid_val} in {name}: '{cur_rem}' -> '{user_comm}'")
+                        cells_by_worksheet[name].append(
+                            gspread.Cell(row_data["row_num"], rem_col, user_comm)
+                        )
+
+    total_queued = sum(len(cells) for cells in cells_by_worksheet.values())
     for name, cells in cells_by_worksheet.items():
         logger.info(f"Worksheet {name}: {len(cells)} cells queued for update.")
 
+    if not missing_records and total_queued == 0:
+        logger.info("All WhatsApp responses are already aligned and sheets clean! No sync needed.")
+        return 0
+
     if dry_run:
-        logger.info("DRY RUN: No modifications made to sheets.")
-        return len(missing_records)
+        logger.info(f"DRY RUN: {total_queued} cell modifications queued across sheets. No modifications made.")
+        return total_queued
 
     # 6. Apply batch updates
     for name, cells in cells_by_worksheet.items():
