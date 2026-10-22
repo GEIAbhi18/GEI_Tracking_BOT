@@ -1,10 +1,11 @@
+from __future__ import annotations
 import logging
 import os
 import json
 import re
 import uuid
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from clients.config import (
     FACTECH_BASE_URL,
@@ -17,6 +18,58 @@ from clients.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Indian Standard Time (IST, UTC+5:30)
+IST_TZ = timezone(timedelta(hours=5, minutes=30))
+
+
+def get_now_ist() -> datetime:
+    """Returns current datetime in Indian Standard Time (IST, UTC+5:30)."""
+    return datetime.now(IST_TZ)
+
+
+def get_now_ist_str() -> str:
+    """Returns current timestamp string in Indian Standard Time (YYYY-MM-DD HH:MM:SS)."""
+    return datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def format_to_ist(dt_input: str | datetime | None) -> str:
+    """
+    Normalizes and formats a date/time string or object to IST (UTC+5:30) string:
+    'YYYY-MM-DD HH:MM:SS'.
+    Handles ISO timestamps with Z or offset, and preserves already formatted IST strings.
+    """
+    if not dt_input:
+        return datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+    if isinstance(dt_input, datetime):
+        if dt_input.tzinfo is None:
+            dt_input = dt_input.replace(tzinfo=timezone.utc)
+        return dt_input.astimezone(IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+    # pyrefly: ignore[unnecessary-type-conversion]
+    dt_str = str(dt_input).strip()
+    if not dt_str:
+        return datetime.now(IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+
+    if "T" in dt_str or "Z" in dt_str or ("+" in dt_str and len(dt_str) > 10):
+        try:
+            clean_iso = dt_str.replace("Z", "+00:00")
+            dt_parsed = datetime.fromisoformat(clean_iso)
+            if dt_parsed.tzinfo is None:
+                dt_parsed = dt_parsed.replace(tzinfo=timezone.utc)
+            return dt_parsed.astimezone(IST_TZ).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d-%m-%Y %H:%M:%S"):
+        try:
+            dt_parsed = datetime.strptime(dt_str, fmt)
+            return dt_parsed.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            continue
+
+    return dt_str
 
 COMPLAINTS_CACHE_FILE = os.path.join(
     os.path.dirname(os.path.dirname(__file__)), "data", "client_complaints.json"
@@ -81,11 +134,18 @@ def _save_local_complaint_record(record: dict):
       1. In-memory cache
       2. Disk JSON file (data/client_complaints.json)
       3. Supabase facilities_audit_log (source="gei_bot")
+    Preserves existing Closed status and specific Nature to prevent accidental regressions.
     """
     global _LOGGED_COMPLAINTS_CACHE
     cid = record.get("complaint_id") or record.get("com_no")
     if not cid:
         return
+
+    # Normalize timestamps to IST
+    if record.get("updated_at"):
+        record["updated_at"] = format_to_ist(record["updated_at"])
+    if record.get("created_at"):
+        record["created_at"] = format_to_ist(record["created_at"])
 
     # 1. Update in-memory
     existing_idx = next(
@@ -93,6 +153,13 @@ def _save_local_complaint_record(record: dict):
         None,
     )
     if existing_idx is not None:
+        old = _LOGGED_COMPLAINTS_CACHE[existing_idx]
+        if old.get("status") in ("Closed", "Resolved", "Completed") and record.get("status") == "In Progress":
+            record["status"] = old["status"]
+        if old.get("nature") and record.get("nature") in ("General Maintenance", "General", "Facility Maintenance", None):
+            record["nature"] = old["nature"]
+            if isinstance(record.get("complaint_category"), dict):
+                record["complaint_category"]["name"] = old["nature"]
         _LOGGED_COMPLAINTS_CACHE[existing_idx] = record
     else:
         _LOGGED_COMPLAINTS_CACHE.insert(0, record)
@@ -104,6 +171,13 @@ def _save_local_complaint_record(record: dict):
         None,
     )
     if d_idx is not None:
+        old_disk = disk_records[d_idx]
+        if old_disk.get("status") in ("Closed", "Resolved", "Completed") and record.get("status") == "In Progress":
+            record["status"] = old_disk["status"]
+        if old_disk.get("nature") and record.get("nature") in ("General Maintenance", "General", "Facility Maintenance", None):
+            record["nature"] = old_disk["nature"]
+            if isinstance(record.get("complaint_category"), dict):
+                record["complaint_category"]["name"] = old_disk["nature"]
         disk_records[d_idx] = record
     else:
         disk_records.insert(0, record)
@@ -173,7 +247,7 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
     # pyrefly: ignore [deprecated]
     # Factech server runs in UTC and strictly rejects any created_at date in the future (even micro-drifts)
     now_utc_buffered = (datetime.utcnow() - timedelta(seconds=30)).strftime("%Y-%m-%d %H:%M:%S")
-    now_local = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_local = get_now_ist_str()
 
     nature = complaint_data.get("nature") or "General Maintenance"
     sub_nature = complaint_data.get("sub_nature") or "other"
@@ -400,12 +474,18 @@ def create_complaint(client_context: dict, complaint_data: dict) -> dict:
         }
 
 
-def update_complaint(client_context: dict, complaint_id: str, update_data: dict) -> dict:
+def update_complaint(
+    client_context: dict,
+    complaint_id: str,
+    update_data: dict,
+    existing_complaint: dict | None = None,
+) -> dict:
     """
     Updates an existing complaint in Factech via:
     PUT /v1/thirdparty/site/{siteId}/complaint
 
     And updates the persistent local complaint store & Supabase facilities_audit_log.
+    Preserves original complaint nature and status to prevent overwriting with defaults.
     """
     req_id = _generate_request_id()
     log_prefix = f"[FACTECH_COMPLAINT][request_id={req_id}]"
@@ -545,41 +625,103 @@ def update_complaint(client_context: dict, complaint_id: str, update_data: dict)
         logger.warning(f"{log_prefix} Factech PUT update complaint error: {e}")
 
     # 2. Resilient local update in cache & disk store
-    now_local = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    now_local = get_now_ist_str()
     updated_record = None
+
+    # Retrieve existing complaint metadata to preserve Nature, Category, Status, Created At
+    orig_record = dict(existing_complaint) if existing_complaint else {}
 
     # Check in-memory & disk
     all_local = _LOGGED_COMPLAINTS_CACHE + _load_persisted_complaints()
     for rec in all_local:
         rcid = str(rec.get("complaint_id") or rec.get("com_no") or "").lstrip("#")
         if rcid == clean_cid:
-            if new_desc:
-                old_desc = rec.get("description") or rec.get("details") or ""
-                rec["description"] = f"{old_desc} | Update: {new_desc}" if old_desc else new_desc
-                rec["details"] = rec["description"]
-            rec["updated_at"] = now_local
+            if not orig_record:
+                orig_record = rec
             updated_record = rec
             break
 
-    if not updated_record:
-        # Create record entry if not previously cached locally
-        raw_unit = str(client_context.get("unit_number", "")).strip()
+    # If not found locally, query live Factech to preserve original nature & status
+    if not orig_record:
+        try:
+            live_list = get_complaints(client_context, days_back=365, active_only=False)
+            for m in live_list:
+                mcid = str(m.get("complaint_id") or m.get("com_no") or m.get("id") or "").lstrip("#")
+                if mcid == clean_cid:
+                    orig_record = m
+                    break
+        except Exception as e:
+            logger.debug(f"Could not retrieve live complaint record for {clean_cid}: {e}")
+
+    orig_cat = orig_record.get("complaint_category") or {}
+    orig_nature = (
+        (orig_cat.get("name") if isinstance(orig_cat, dict) else None)
+        or orig_record.get("nature")
+        or orig_record.get("category")
+        or orig_record.get("Complaint Nature")
+        or client_context.get("nature")
+        or "General"
+    )
+    orig_sub_nature = (
+        orig_record.get("sub_nature")
+        or orig_record.get("sub_category")
+        or orig_record.get("Sub Nature")
+        or "other"
+    )
+    orig_status = new_status or orig_record.get("status") or orig_record.get("Status") or "In Progress"
+    orig_created_at = (
+        orig_record.get("created_at")
+        or orig_record.get("createdAt")
+        or orig_record.get("Logged At")
+        or now_local
+    )
+    orig_desc = (
+        orig_record.get("description")
+        or orig_record.get("details")
+        or orig_record.get("Complaint Details")
+        or ""
+    )
+
+    combined_desc = (
+        f"{orig_desc} | Update: {new_desc}"
+        if (orig_desc and new_desc and new_desc not in orig_desc)
+        else (new_desc or orig_desc)
+    )
+
+    if updated_record:
+        updated_record["description"] = combined_desc
+        updated_record["details"] = combined_desc
+        updated_record["updated_at"] = now_local
+        # Ensure we don't accidentally overwrite nature or status with generic defaults
+        if orig_nature and orig_nature not in ("General Maintenance", "General", "Facility Maintenance"):
+            updated_record["nature"] = orig_nature
+            updated_record["category"] = orig_nature
+            updated_record["complaint_category"] = {"name": orig_nature}
+        if orig_status:
+            updated_record["status"] = orig_status
+    else:
+        # Create record entry preserving original nature and status!
+        raw_unit = str(client_context.get("unit_number", "")).strip() or str(orig_record.get("unit", ""))
         updated_record = {
             "complaint_id": clean_cid,
             "com_no": clean_cid,
-            "company": client_context.get("company_name", ""),
-            "building": client_context.get("building", ""),
+            "company": client_context.get("company_name", "") or orig_record.get("company", ""),
+            "building": client_context.get("building", "") or orig_record.get("building", ""),
             "unit": raw_unit,
             "unitNo": raw_unit,
-            "admin_name": client_context.get("admin_name", ""),
-            "mobile": client_context.get("mobile_number", ""),
-            "nature": "General Maintenance",
-            "complaint_category": {"name": "General Maintenance"},
-            "description": new_desc,
-            "details": new_desc,
-            "status": "In Progress",
-            "created_at": now_local,
+            "admin_name": client_context.get("admin_name", "") or orig_record.get("admin_name", ""),
+            "mobile": client_context.get("mobile_number", "") or orig_record.get("mobile", ""),
+            "mobile_number": client_context.get("mobile_number", "") or orig_record.get("mobile", ""),
+            "nature": orig_nature,
+            "category": orig_nature,
+            "complaint_category": {"name": orig_nature},
+            "sub_nature": orig_sub_nature,
+            "description": combined_desc,
+            "details": combined_desc,
+            "status": orig_status,
+            "created_at": format_to_ist(orig_created_at),
             "updated_at": now_local,
+            "closed_at": orig_record.get("closed_at") or orig_record.get("Closed At"),
             "fallback": not api_success,
         }
 
@@ -621,9 +763,9 @@ def update_complaint(client_context: dict, complaint_id: str, update_data: dict)
 
 def get_complaints(
     client_context: dict,
-    days_back: int = 60,
+    days_back: int = 180,
     page_no: int = 1,
-    per_page: int = 20,
+    per_page: int = 50,
     active_only: bool = False,
 ) -> list:
     """
@@ -712,16 +854,23 @@ def get_complaints(
                 if "complaint" in action.lower():
                     meta = json.loads(row.get("new_value") or "{}")
                     if meta.get("complaint_id") or meta.get("com_no"):
+                        cid_meta = meta.get("complaint_id") or meta.get("com_no") or row.get("ref_no")
+                        nat_meta = meta.get("nature") or meta.get("category")
+                        cat_obj = meta.get("complaint_category")
+                        if isinstance(cat_obj, dict) and cat_obj.get("name"):
+                            nat_meta = cat_obj.get("name")
+                        if not nat_meta or nat_meta in ("Facility Maintenance", "General Maintenance"):
+                            nat_meta = "General"
                         local_candidates.append({
-                            "com_no": meta.get("complaint_id") or meta.get("com_no") or row.get("ref_no"),
-                            "complaint_id": meta.get("complaint_id") or meta.get("com_no") or row.get("ref_no"),
-                            "complaint_category": {"name": meta.get("nature") or meta.get("category") or "Facility Maintenance"},
-                            "nature": meta.get("nature") or meta.get("category") or "Facility Maintenance",
-                            "description": meta.get("description") or meta.get("details") or "Maintenance request",
-                            "details": meta.get("description") or meta.get("details") or "Maintenance request",
+                            "com_no": cid_meta,
+                            "complaint_id": cid_meta,
+                            "complaint_category": {"name": nat_meta},
+                            "nature": nat_meta,
+                            "description": meta.get("description") or meta.get("details") or meta.get("updated_description") or "Maintenance request",
+                            "details": meta.get("description") or meta.get("details") or meta.get("updated_description") or "Maintenance request",
                             "status": meta.get("status") or "In Progress",
-                            "created_at": meta.get("created_at") or row.get("timestamp"),
-                            "updated_at": meta.get("updated_at") or row.get("timestamp"),
+                            "created_at": format_to_ist(meta.get("created_at") or row.get("timestamp")),
+                            "updated_at": format_to_ist(meta.get("updated_at") or row.get("timestamp")),
                             "unitNo": meta.get("unit") or meta.get("unitNo") or "",
                             "reference_unit_no": meta.get("unit") or meta.get("unitNo") or "",
                             "mobile": meta.get("mobile") or meta.get("mobile_number") or "",
@@ -732,8 +881,36 @@ def get_complaints(
     except Exception as audit_err:
         logger.debug(f"Could not load fallback audit tickets: {audit_err}")
 
-    # Combine API and local complaints
-    combined_raw = list(raw_list) + local_candidates
+    # Build dictionary of live Factech statuses from raw_list
+    factech_live_map = {}
+    for item in raw_list:
+        if isinstance(item, dict):
+            item_cid = str(item.get("com_no") or item.get("complaintId") or item.get("id") or "").strip().lstrip("#")
+            if item_cid:
+                factech_live_map[item_cid] = item
+
+    # If local candidates exist, reconcile their status against live Factech map
+    reconciled_local = []
+    for loc in local_candidates:
+        if not isinstance(loc, dict):
+            continue
+        loc_cid = str(loc.get("com_no") or loc.get("complaint_id") or loc.get("id") or "").strip().lstrip("#")
+        if loc_cid in factech_live_map:
+            live_item = factech_live_map[loc_cid]
+            # Live Factech status always takes precedence over local candidate
+            live_status = live_item.get("status")
+            if live_status:
+                loc["status"] = live_status
+            live_cat = live_item.get("complaint_category") or {}
+            live_nat = (live_cat.get("name") if isinstance(live_cat, dict) else None) or live_item.get("nature")
+            if live_nat:
+                loc["nature"] = live_nat
+                loc["category"] = live_nat
+                loc["complaint_category"] = {"name": live_nat}
+        reconciled_local.append(loc)
+
+    # Combine API and reconciled local complaints
+    combined_raw = list(raw_list) + reconciled_local
 
     # Deduplicate and filter by tenant identity
     seen_ids = set()
@@ -747,7 +924,6 @@ def get_complaints(
         if not cid or cid in seen_ids:
             continue
 
-        # Extract unit accurately
         # Extract unit candidates accurately across all possible Factech structures
         c_units = []
         for u_raw in (c.get("unit"), c.get("user"), c.get("unitNo"), c.get("reference_unit_no"), c.get("flatNo")):
@@ -808,6 +984,16 @@ def get_complaints(
 
             if active_only and is_closed:
                 continue
+
+            # Ensure timestamps are in IST
+            if c.get("updated_at"):
+                c["updated_at"] = format_to_ist(c["updated_at"])
+            if c.get("created_at"):
+                c["created_at"] = format_to_ist(c["created_at"])
+            if c.get("updatedAt"):
+                c["updatedAt"] = format_to_ist(c["updatedAt"])
+            if c.get("createdAt"):
+                c["createdAt"] = format_to_ist(c["createdAt"])
 
             seen_ids.add(cid)
             filtered.append(c)

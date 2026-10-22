@@ -82,14 +82,16 @@ def test_handle_client_hi_single_account(mocker):
     assert btn_text == "Open Menu"
     assert len(sections) == 1
     rows = sections[0]["rows"]
-    assert len(rows) == 4
+    assert len(rows) == 5
     row_ids = [r["id"] for r in rows]
     assert "log_new_complaint" in row_ids
+    assert "select_complaints" in row_ids
     assert "check_complaint_status" in row_ids
     assert "complaint_history" in row_ids
     assert "feedback_closed_complaints" in row_ids
 
     # Check labels
+    assert any(r["title"] == "Select Complaints" for r in rows)
     assert any(r["title"] == "Check Status" for r in rows)
     assert any("Feedback" in r["title"] for r in rows)
 

@@ -28,6 +28,7 @@ from google.oauth2.service_account import Credentials
 from feedback.config import (
     BUILDING_SHEETS,
     ESCALATIONS_SHEET_NAME,
+    FEEDBACK_DUPLICATES_SHEET_NAME,
     FEEDBACK_SHEET_ID,
     GOOGLE_PRIVATE_KEY,
     GOOGLE_SERVICE_ACCOUNT_EMAIL,
@@ -43,6 +44,11 @@ _gc = None  # Cached gspread client
 _ss = None  # Cached Spreadsheet
 _worksheets = {}  # Cached Worksheets
 _sheets_lock = threading.Lock()  # Serialise all Sheets API calls to avoid concurrent 429s
+
+# ── Cached get_all_values() results (Fix 2a — quota optimization) ────────────
+_all_values_cache = {}       # {sheet_name: (timestamp, data)}
+_all_values_cache_ttl = 30   # seconds
+_all_values_cache_lock = threading.Lock()
 
 
 def _retry_on_429(func, *args, **kwargs):
@@ -147,6 +153,125 @@ def _get_worksheet(sheet_name: str, auto_create: bool = False):
     ws = _retry_on_429(fetch_ws)
     _worksheets[sheet_name] = ws
     return ws
+
+
+def _cached_get_all_values(sheet_name: str, force_refresh: bool = False) -> list:
+    """Cached wrapper around ws.get_all_values() to prevent Google Sheets 429 quota errors (Fix 2a).
+    
+    Returns a list of lists (rows). Cache TTL = _all_values_cache_ttl seconds.
+    """
+    now_t = time.time()
+    if not force_refresh:
+        with _all_values_cache_lock:
+            cached = _all_values_cache.get(sheet_name)
+            if cached and (now_t - cached[0]) < _all_values_cache_ttl:
+                return cached[1]
+
+    ws = _get_worksheet(sheet_name)
+    assert ws is not None
+    data = _retry_on_429(ws.get_all_values)
+    with _all_values_cache_lock:
+        _all_values_cache[sheet_name] = (now_t, data)
+    return data
+
+
+def invalidate_cache(sheet_name: str | None = None):
+    """Invalidate the get_all_values cache for a specific sheet or all sheets."""
+    with _all_values_cache_lock:
+        if sheet_name:
+            _all_values_cache.pop(sheet_name, None)
+        else:
+            _all_values_cache.clear()
+
+
+# ── Duplicate Feedback Detection & Redirect ──────────────────────────────────
+
+# Headers for the Feedback_Duplicates sheet (mirrors the user's screenshot)
+DUPLICATE_HEADERS = [
+    "Timestamp", "Complaint ID", "Building", "Client Name / User",
+    "Unit No", "Complaint Nature", "Resolution Score",
+    "Professionalism Score", "Overall Feedback Score", "Average Score",
+    "Remarks", "Sentiment", "Feedback Source", "Reason",
+]
+
+
+def check_feedback_already_received(complaint_id: str) -> bool:
+    """Check if feedback has already been received for a complaint ID.
+    
+    Looks at the MASTER sheet's 'Feedback Status' column.
+    Returns True if feedback was already 'Received', False otherwise.
+    """
+    try:
+        ws, row, headers = find_complaint_row(complaint_id)
+        if ws is None:
+            return False
+
+        fb_status_col = _get_col_index(headers, "Feedback Status")
+        if not fb_status_col:
+            return False
+
+        cell_value = _retry_on_429(ws.cell, row, fb_status_col)
+        status = str(cell_value.value or "").strip().lower()
+        return status == "received"
+    except Exception:
+        logger.exception(f"Error checking feedback status for {complaint_id}")
+        return False
+
+
+def append_feedback_duplicate(complaint_id: str, feedback_data: dict, reason: str = "Duplicate submission") -> bool:
+    """Append a duplicate feedback entry to the Feedback_Duplicates sheet.
+    
+    Called when feedback is submitted for a complaint that already has feedback recorded.
+    """
+    try:
+        ws = _get_worksheet(FEEDBACK_DUPLICATES_SHEET_NAME, auto_create=True)
+        assert ws is not None
+        headers = _retry_on_429(ws.row_values, 1)
+
+        if not headers:
+            headers = DUPLICATE_HEADERS
+            _retry_on_429(ws.append_row, headers)
+
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        row_data = {
+            "Timestamp": now,
+            "Complaint ID": complaint_id,
+            "Building": feedback_data.get("building", ""),
+            "Client Name / User": feedback_data.get("clientName", ""),
+            "Unit No": feedback_data.get("unitNo", ""),
+            "Complaint Nature": feedback_data.get("complaintNature", ""),
+            "Resolution Score": feedback_data.get("Resolution Score", ""),
+            "Professionalism Score": feedback_data.get("Professionalism Score", ""),
+            "Overall Feedback Score": feedback_data.get("Overall Feedback Score", ""),
+            "Average Score": feedback_data.get("Average Score", ""),
+            "Remarks": feedback_data.get("Remarks", ""),
+            "Sentiment": feedback_data.get("Sentiment", ""),
+            "Feedback Source": feedback_data.get("Feedback Source", "GEI_BOT"),
+            "Reason": reason,
+        }
+
+        row = []
+        for h in headers:
+            h_lower = h.strip().lower()
+            matched = False
+            for key, value in row_data.items():
+                if key.strip().lower() == h_lower:
+                    cell_val = value if isinstance(value, (int, float)) else (str(value) if value is not None else "")
+                    row.append(cell_val)
+                    matched = True
+                    break
+            if not matched:
+                row.append("")
+
+        _retry_on_429(ws.append_row, row, value_input_option="USER_ENTERED")
+        logger.info(f"Duplicate feedback logged to Feedback_Duplicates for complaint {complaint_id}: {reason}")
+        return True
+
+    except Exception:
+        logger.exception(f"Error appending duplicate feedback for {complaint_id}")
+        return False
 
 
 # ── MASTER Sheet Operations ─────────────────────────────────────────────────

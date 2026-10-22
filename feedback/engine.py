@@ -161,6 +161,7 @@ def initiate_feedback(complaint_data: dict) -> dict:
 def handle_flow_response(phone: str, response_data: dict) -> bool:
     """
     Process a WhatsApp Flow form submission (nfm_reply).
+    Includes Fix 2b (flow_token validation) and Fix 2c (score validation).
     """
     phone = normalize_phone(phone)
     print(f"[ENGINE] handle_flow_response called for phone={phone}", flush=True)
@@ -176,15 +177,69 @@ def handle_flow_response(phone: str, response_data: dict) -> bool:
     complaint_id = session.get("complaintId", "")
     print(f"[ENGINE] Session found for {phone}: complaint={complaint_id}, stage={session.get('stage')}", flush=True)
 
+    # ── Fix 2b: Flow Token Validation ──────────────────────────────────────────
+    # The flow_token sent with the WhatsApp Flow template is the complaint_id.
+    # Validate that the token in the response matches the active session.
+    flow_token = str(response_data.get("flow_token", "")).strip()
+    if flow_token and flow_token != complaint_id:
+        logger.warning(
+            f"Flow token mismatch for {phone}: expected='{complaint_id}', "
+            f"received='{flow_token}'. Rejecting to prevent wrong-complaint recording."
+        )
+        print(
+            f"[ENGINE] ⚠️ FLOW TOKEN MISMATCH for {phone}: "
+            f"session={complaint_id}, token={flow_token}",
+            flush=True,
+        )
+        _send_wa(
+            phone,
+            f"⚠️ This feedback form is for a different complaint (#{flow_token}).\n"
+            f"Your active feedback session is for complaint *#{complaint_id}*.\n"
+            f"Please use the correct feedback form.",
+        )
+        return False
+    # ───────────────────────────────────────────────────────────────────────────
+
     # Extract scores from Flow response
+    # ── Fix 2c: Score Validation ───────────────────────────────────────────────
+    # Reject invalid or missing scores instead of defaulting to 0.
+    # Valid scores: 1–5. Score of 0 means the field was not filled.
     try:
-        score_q1 = int(response_data.get("resolution_rating", 0))
-        score_q2 = int(response_data.get("facility_team_rating", 0))
-        score_q3 = int(response_data.get("overall_rating", 0))
+        raw_q1 = response_data.get("resolution_rating")
+        raw_q2 = response_data.get("facility_team_rating")
+        raw_q3 = response_data.get("overall_rating")
+        score_q1 = int(raw_q1) if raw_q1 is not None else 0
+        score_q2 = int(raw_q2) if raw_q2 is not None else 0
+        score_q3 = int(raw_q3) if raw_q3 is not None else 0
     except (ValueError, TypeError) as e:
         logger.error(f"Invalid score data in Flow response for {complaint_id}: {e}")
         print(f"[ENGINE] Invalid scores: {e}. Keys in response: {list(response_data.keys())}", flush=True)
-        score_q1 = score_q2 = score_q3 = 0
+        _send_wa(
+            phone,
+            "⚠️ We received invalid rating values in your feedback form. "
+            "Please try submitting the feedback form again with valid ratings (1–5).",
+        )
+        return False
+
+    # Validate score ranges: must be 1–5, not 0
+    invalid_scores = []
+    for label, val in [("Resolution Rating", score_q1), ("Team Rating", score_q2), ("Overall Rating", score_q3)]:
+        if val < 1 or val > 5:
+            invalid_scores.append(f"{label}={val}")
+
+    if invalid_scores:
+        logger.warning(
+            f"Score validation failed for {complaint_id}: {', '.join(invalid_scores)}. "
+            f"Rejecting to prevent false escalations."
+        )
+        print(f"[ENGINE] ⚠️ INVALID SCORES for {complaint_id}: {invalid_scores}", flush=True)
+        _send_wa(
+            phone,
+            f"⚠️ Some ratings in your feedback are missing or invalid ({', '.join(invalid_scores)}).\n"
+            f"Please fill in all ratings (1–5 stars) and submit again.",
+        )
+        return False
+    # ───────────────────────────────────────────────────────────────────────────
 
     tenant_comment = str(response_data.get("comments", "") or "").strip()
     if not tenant_comment:
@@ -278,6 +333,20 @@ def _complete_feedback(phone: str, session: dict,
     now = _ist_now()
     print(f"[COMPLETE] Starting _complete_feedback for {complaint_id}", flush=True)
 
+    # ── Fix 1: Duplicate Detection ────────────────────────────────────────────
+    # Check if feedback was already received for this complaint.
+    # If so, redirect to Feedback_Duplicates sheet and skip MASTER update.
+    is_duplicate = False
+    try:
+        from feedback.sheets import check_feedback_already_received
+        is_duplicate = check_feedback_already_received(complaint_id)
+        if is_duplicate:
+            print(f"[COMPLETE] ⚠️ DUPLICATE detected for {complaint_id} — redirecting to Feedback_Duplicates", flush=True)
+            logger.warning(f"Duplicate feedback submission for {complaint_id} — redirecting to Feedback_Duplicates")
+    except Exception as dup_err:
+        logger.error(f"Duplicate check failed for {complaint_id}: {dup_err}")
+    # ───────────────────────────────────────────────────────────────────────
+
     # 1. Calculate overall score (hardcoded as per spec)
     overall_score = round(((score_q1 + score_q2 + score_q3) / 3) * 10) / 10
 
@@ -343,48 +412,75 @@ def _complete_feedback(phone: str, session: dict,
         "Feedback Source": "GEI_BOT",
     }
 
-    try:
-        from feedback.sheets import (
-            update_building_sheet_feedback,
-            update_master_feedback,
-            append_escalation,
-        )
+    # ── Fix 1 (cont.): Redirect duplicate to Feedback_Duplicates sheet ────────
+    if is_duplicate:
+        try:
+            from feedback.sheets import append_feedback_duplicate
+            dup_data = {
+                **feedback_data,
+                "building": session.get("building", ""),
+                "clientName": session.get("clientName", ""),
+                "unitNo": session.get("unitNo", ""),
+                "complaintNature": session.get("complaintNature", ""),
+            }
+            append_feedback_duplicate(
+                complaint_id, dup_data,
+                reason="Duplicate submission — feedback already received for this complaint",
+            )
+            print(f"[COMPLETE] Duplicate feedback redirected to Feedback_Duplicates for {complaint_id}", flush=True)
+        except Exception as dup_write_err:
+            logger.error(f"Failed to write duplicate feedback for {complaint_id}: {dup_write_err}")
 
-        # 5a. Write to building sheet (GEBB1 / GEBB2 / GETT)
-        update_building_sheet_feedback(
-            complaint_id, session.get("building", ""), feedback_data
-        )
-        print(f"[COMPLETE] Building sheet updated for {complaint_id}", flush=True)
+        # Skip MASTER/building/escalation writes for duplicates
+        logger.info(f"Skipping MASTER/building writes for duplicate feedback on {complaint_id}")
+    else:
+        # ── Normal (non-duplicate) flow: write to MASTER, building, and escalations ──
+        try:
+            from feedback.sheets import (
+                update_building_sheet_feedback,
+                update_master_feedback,
+                append_escalation,
+                invalidate_cache,
+            )
 
-        # 5b. Write to MASTER sheet
-        update_master_feedback(complaint_id, feedback_data)
-        print(f"[COMPLETE] MASTER sheet updated for {complaint_id}", flush=True)
+            # 5a. Write to building sheet (GEBB1 / GEBB2 / GETT)
+            update_building_sheet_feedback(
+                complaint_id, session.get("building", ""), feedback_data
+            )
+            print(f"[COMPLETE] Building sheet updated for {complaint_id}", flush=True)
 
-        # 5c. Write escalation if needed
-        if should_escalate:
-            append_escalation({
-                "Timestamp": now,
-                "Complaint ID": complaint_id,
-                "Building": session.get("building", ""),
-                "Client Name / User": session.get("clientName", ""),
-                "Unit No": session.get("unitNo", ""),
-                "Complaint Nature": session.get("complaintNature", ""),
-                "Complaint Details": session.get("complaintDetails", ""),
-                "Overall Score": overall_score,
-                "Sentiment": sentiment,
-                "Customer Remarks": tenant_comment,
-                "Escalation Reason": escalation_reason,
-                "Escalation Status": "Open",
-                "Action Taken": "",
-            })
-            print(f"[COMPLETE] Escalation created for {complaint_id}", flush=True)
-            logger.info(f"Escalation created for {complaint_id}: {escalation_reason}")
+            # 5b. Write to MASTER sheet (Fix 2d: update_master_feedback preserved)
+            update_master_feedback(complaint_id, feedback_data)
+            print(f"[COMPLETE] MASTER sheet updated for {complaint_id}", flush=True)
 
-        logger.info(f"Sheet write-back completed for {complaint_id}")
+            # Invalidate caches after writes so next reads see fresh data
+            invalidate_cache()
 
-    except Exception as e:
-        logger.error(f"Sheet write-back failed for {complaint_id}: {e}", exc_info=True)
-        print(f"[COMPLETE] ⚠️ Sheet write-back failed (client already notified): {e}", flush=True)
+            # 5c. Write escalation if needed
+            if should_escalate:
+                append_escalation({
+                    "Timestamp": now,
+                    "Complaint ID": complaint_id,
+                    "Building": session.get("building", ""),
+                    "Client Name / User": session.get("clientName", ""),
+                    "Unit No": session.get("unitNo", ""),
+                    "Complaint Nature": session.get("complaintNature", ""),
+                    "Complaint Details": session.get("complaintDetails", ""),
+                    "Overall Score": overall_score,
+                    "Sentiment": sentiment,
+                    "Customer Remarks": tenant_comment,
+                    "Escalation Reason": escalation_reason,
+                    "Escalation Status": "Open",
+                    "Action Taken": "",
+                })
+                print(f"[COMPLETE] Escalation created for {complaint_id}", flush=True)
+                logger.info(f"Escalation created for {complaint_id}: {escalation_reason}")
+
+            logger.info(f"Sheet write-back completed for {complaint_id}")
+
+        except Exception as e:
+            logger.error(f"Sheet write-back failed for {complaint_id}: {e}", exc_info=True)
+            print(f"[COMPLETE] ⚠️ Sheet write-back failed (client already notified): {e}", flush=True)
 
     logger.info(
         f"Feedback completed for {complaint_id}: "

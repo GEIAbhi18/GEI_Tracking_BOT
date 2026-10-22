@@ -38,6 +38,7 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
     if (
         button_id in (
             "log_new_complaint",
+            "select_complaints",
             "check_complaint_status",
             "complaint_history",
             "update_complaint",
@@ -49,6 +50,7 @@ def handle_interactive_reply(sender_phone: str, button_id: str, user: dict):
         or button_id.startswith("client_")
         or button_id.startswith("upd_cid_")
         or button_id.startswith("fb_cid_")
+        or button_id.startswith("sel_cid_")
         or button_id.startswith("c_nat_")
         or button_id.startswith("c_sub_")
     ):

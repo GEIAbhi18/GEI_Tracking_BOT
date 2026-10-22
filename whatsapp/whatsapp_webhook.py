@@ -734,14 +734,17 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             if clean_cmd in ("1", "log new complaint", "log complaint", "new complaint", "create complaint", "raise complaint"):
                 handle_client_button_reply(sender, "log_new_complaint")
                 return
-            elif clean_cmd in ("2", "check complaint status", "check status", "complaint status", "status", "active complaints"):
+            elif clean_cmd in ("2", "select complaints", "select complaint", "complaints list", "view complaints", "my complaints", "complaints", "select"):
+                handle_client_button_reply(sender, "select_complaints")
+                return
+            elif clean_cmd in ("3", "check complaint status", "check status", "complaint status", "status", "active complaints"):
                 handle_client_button_reply(sender, "check_complaint_status")
                 return
-            elif clean_cmd in ("3", "complaint history", "history", "previous complaints", "all complaints"):
+            elif clean_cmd in ("4", "complaint history", "history", "previous complaints", "all complaints"):
                 handle_client_button_reply(sender, "complaint_history")
                 return
             elif clean_cmd in (
-                "4",
+                "5",
                 "feedback",
                 "give feedback",
                 "feedback on closed",
@@ -756,7 +759,7 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             elif clean_cmd in ("update complaint", "update", "edit complaint", "modify complaint", "update ticket"):
                 handle_client_button_reply(sender, "update_complaint")
                 return
-            elif any(clean_cmd == g or clean_cmd.startswith(f"{g} ") for g in ("5", "menu", "main menu", "hi", "hello", "hey", "help", "factech", "support")):
+            elif any(clean_cmd == g or clean_cmd.startswith(f"{g} ") for g in ("6", "menu", "main menu", "hi", "hello", "hey", "help", "factech", "support")):
                 handle_client_hi(sender)
                 return
             else:

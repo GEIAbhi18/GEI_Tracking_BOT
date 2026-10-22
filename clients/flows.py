@@ -1,4 +1,5 @@
 from __future__ import annotations
+import os
 import logging
 from datetime import datetime
 from db import supabase
@@ -9,7 +10,13 @@ from clients.service import (
     set_active_client_context,
     clear_client_context,
 )
-from clients.factech_client import create_complaint, get_complaints, update_complaint
+from clients.factech_client import (
+    create_complaint,
+    get_complaints,
+    update_complaint,
+    format_to_ist,
+    get_now_ist_str,
+)
 from clients.config import COMPLAINT_NATURES, SUB_NATURES_ALL, NATURE_TO_SUB_NATURES
 
 logger = logging.getLogger(__name__)
@@ -104,6 +111,11 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
                     "description": "Register a new service issue",
                 },
                 {
+                    "id": "select_complaints",
+                    "title": "Select Complaints",
+                    "description": "View & select your complaints",
+                },
+                {
                     "id": "check_complaint_status",
                     "title": "Check Status",
                     "description": "View active complaints",
@@ -127,10 +139,11 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
         text_menu = (
             f"{body}\n\n"
             f"1️⃣ *Log New Complaint*\n"
-            f"2️⃣ *Check Status*\n"
-            f"3️⃣ *Complaint History*\n"
-            f"4️⃣ *Give Feedback on Closed Complaints*\n\n"
-            f"_Reply with 1, 2, 3, or 4 (or 'feedback'), or type your complaint description directly._"
+            f"2️⃣ *Select Complaints*\n"
+            f"3️⃣ *Check Status*\n"
+            f"4️⃣ *Complaint History*\n"
+            f"5️⃣ *Give Feedback on Closed Complaints*\n\n"
+            f"_Reply with 1, 2, 3, 4, or 5 (or 'feedback'), or type your complaint description directly._"
         )
         send_text(sender_phone, text_menu)
 
@@ -181,7 +194,7 @@ def handle_update_complaint_initiation(sender_phone: str, client: dict, target_c
     """
     company = client.get("company_name", "")
     unit = client.get("unit_number", "")
-    complaints = get_complaints(client, days_back=60, active_only=True)
+    complaints = get_complaints(client, days_back=180, active_only=True)
 
     if not complaints:
         msg = f"ℹ️ You currently have no active complaints to update for *{company}* (Unit {unit}).\n\nWould you like to log a new complaint?"
@@ -280,7 +293,159 @@ def handle_update_complaint_initiation(sender_phone: str, client: dict, target_c
     send_text(sender_phone, prompt_msg)
 
 
+def handle_select_complaints_initiation(sender_phone: str, client: dict):
+    """
+    Handles 'Select Complaints' from the client main menu:
+    - Fetches recent complaints (both active & past) for this client/tenant.
+    - If none, informs the client and offers to log a new complaint.
+    - If complaints exist, displays a numbered list of complaints with their status & details.
+    - Offers interactive selection (buttons if <= 3, list message if > 3) to view details / take action.
+    """
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+    send_text(sender_phone, f"📋 Fetching complaints for *{company}* (Unit {unit})...")
 
+    complaints = get_complaints(client, days_back=180, active_only=False)
+
+    if not complaints:
+        msg = f"ℹ️ You currently have no complaints on record for *{company}* (Unit {unit}).\n\nWould you like to log a new complaint?"
+        buttons = [
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "client_main_menu", "title": "Main Menu"},
+        ]
+        if not send_interactive_buttons(sender_phone, msg, buttons):
+            send_text(sender_phone, f"{msg}\n\n1️⃣ Log New Complaint\n2️⃣ Main Menu")
+        return
+
+    # Format numbered list of complaints
+    lines = []
+    for idx, c in enumerate(complaints[:10], start=1):
+        cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or f"FT-{idx}").lstrip("#")
+        cat = c.get("complaint_category") or {}
+        nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
+        status = c.get("status") or "Open"
+        date_raw = c.get("created_at") or c.get("updated_at") or c.get("closed_at") or "Recent"
+        date = format_to_ist(date_raw) if date_raw != "Recent" else "Recent"
+        lines.append(f"{idx}️⃣ *#{cid}* — {nature}\n   Status: *{status}* | Date: {date}")
+
+    complaints_text = "\n\n".join(lines)
+    prompt_text = (
+        f"📋 *Your Complaints ({company} - Unit {unit}):*\n\n"
+        f"{complaints_text}\n\n"
+        f"Please select a complaint to view details or update:\n"
+        f"_(Reply with the number e.g. 1, or reply 'cancel' to exit)_"
+    )
+
+    # Save state for text number replies
+    payload = {
+        "whatsapp_number": sender_phone,
+        "action": "AWAITING_CLIENT_SELECT_COMPLAINT",
+        "metadata": {
+            "client_context": client,
+            "complaints": complaints[:10],
+        },
+    }
+    try:
+        supabase.table("wa_task_states").upsert(payload, on_conflict="whatsapp_number").execute()
+    except Exception as e:
+        logger.error(f"Error setting WA state for complaint selection: {e}")
+
+    # Interactive selection: buttons if <= 3, list message if > 3
+    if len(complaints) <= 3:
+        buttons = []
+        for c in complaints[:3]:
+            cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#")
+            cat = c.get("complaint_category") or {}
+            nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Issue"
+            btn_title = f"#{cid} ({nature})"[:20]
+            buttons.append({"id": f"sel_cid_{cid}", "title": btn_title})
+        if not send_interactive_buttons(sender_phone, prompt_text, buttons):
+            send_text(sender_phone, prompt_text)
+    else:
+        rows = []
+        for c in complaints[:10]:
+            cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#")
+            cat = c.get("complaint_category") or {}
+            nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
+            status = c.get("status") or "Open"
+            rows.append({
+                "id": f"sel_cid_{cid}",
+                "title": f"#{cid} {nature}"[:24],
+                "description": f"Status: {status}"[:72],
+            })
+        sections = [{"title": "Select Complaint", "rows": rows}]
+        if not send_list_message(sender_phone, prompt_text, "Select Complaint", sections):
+            send_text(sender_phone, prompt_text)
+
+
+def handle_selected_complaint_details(sender_phone: str, client: dict, target_cid: str):
+    """
+    Displays full details of the chosen complaint and provides action buttons
+    (e.g., Update Complaint, Give Feedback, Main Menu).
+    """
+    # pyrefly: ignore[unnecessary-type-conversion]
+    clean_cid = str(target_cid).lstrip("#").strip()
+    company = client.get("company_name", "")
+    unit = client.get("unit_number", "")
+    building = client.get("building", "")
+
+    complaints = get_complaints(client, days_back=365, active_only=False)
+    selected = None
+    for c in complaints:
+        cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#").strip().lower()
+        if clean_cid.lower() == cid:
+            selected = c
+            break
+
+    if not selected:
+        send_text(sender_phone, f"⚠️ Complaint #{clean_cid} could not be found.")
+        send_post_complaint_options(sender_phone, client)
+        return
+
+    cat = selected.get("complaint_category") or {}
+    nature = (cat.get("name") if isinstance(cat, dict) else None) or selected.get("sub_category") or selected.get("nature") or "Maintenance"
+    sub_nature = selected.get("sub_category") or selected.get("sub_nature") or ""
+    desc = selected.get("description") or selected.get("details") or "No additional description"
+    status = selected.get("status") or "Open"
+    date_raw = selected.get("created_at") or selected.get("updated_at") or selected.get("closed_at") or "Recent"
+    date = format_to_ist(date_raw) if date_raw != "Recent" else "Recent"
+
+    details_msg = (
+        f"📋 *Complaint Details: #{clean_cid}*\n\n"
+        f"🏢 *Company:* {company}\n"
+        f"📍 *Building:* {building} | *Unit:* {unit}\n"
+        f"🏷️ *Nature:* {nature}\n"
+    )
+    if sub_nature and sub_nature != nature:
+        details_msg += f"🔖 *Sub Nature:* {sub_nature}\n"
+    details_msg += (
+        f"📊 *Status:* *{status}*\n"
+        f"📅 *Date:* {date}\n"
+        f"📝 *Description:* _{desc[:300]}_\n"
+    )
+    send_text(sender_phone, details_msg)
+
+    # Next action buttons based on status
+    if status.lower() in ("closed", "resolved", "completed"):
+        buttons = [
+            {"id": f"fb_cid_{clean_cid}", "title": "Give Feedback"},
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "client_main_menu", "title": "Main Menu"},
+        ]
+    else:
+        buttons = [
+            {"id": f"upd_cid_{clean_cid}", "title": "Update Complaint"},
+            {"id": "log_new_complaint", "title": "Log New Complaint"},
+            {"id": "client_main_menu", "title": "Main Menu"},
+        ]
+    if not send_interactive_buttons(sender_phone, "What would you like to do next?", buttons):
+        fallback = (
+            "What would you like to do next?\n\n"
+            f"1️⃣ *Update Complaint* (Reply 'update #{clean_cid}')\n"
+            f"2️⃣ *Log New Complaint* (Reply 'log')\n"
+            f"3️⃣ *Main Menu* (Reply 'menu')"
+        )
+        send_text(sender_phone, fallback)
 
 
 def prompt_complaint_nature_selection(sender_phone: str, client: dict):
@@ -511,13 +676,23 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
         except Exception as e:
             logger.error(f"Error handling sub-nature button reply: {e}")
 
+    # 3b. Select Complaints (List complaints for that client/tenant)
+    elif button_id == "select_complaints":
+        handle_select_complaints_initiation(sender_phone, client)
+        return
+
+    elif button_id.startswith("sel_cid_"):
+        target_cid = button_id.replace("sel_cid_", "").strip()
+        handle_selected_complaint_details(sender_phone, client, target_cid=target_cid)
+        return
+
     # 4. Check Complaint Status
     elif button_id == "check_complaint_status":
         company = client.get("company_name", "")
         unit = client.get("unit_number", "")
         send_text(sender_phone, f"🔍 Checking active complaints for *{company}* (Unit {unit})...")
 
-        complaints = get_complaints(client, days_back=60, active_only=True)
+        complaints = get_complaints(client, days_back=180, active_only=True)
 
         if not complaints:
             send_text(
@@ -547,7 +722,8 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             desc = c.get("description") or c.get("details") or ""
             status = c.get("status") or "In Progress"
-            updated = c.get("updated_at") or c.get("created_at") or c.get("updatedAt") or datetime.now().strftime("%d %b %Y")
+            updated_raw = c.get("updated_at") or c.get("created_at") or c.get("updatedAt") or get_now_ist_str()
+            updated = format_to_ist(updated_raw)
 
             msg += f"• *Complaint #{c_id}*\n"
             msg += f"  Issue: {nature}\n"
@@ -672,6 +848,7 @@ def has_active_client_flow(sender_phone: str) -> bool:
                 "AWAITING_CLIENT_COMPLAINT_DESC",
                 "AWAITING_CLIENT_COMPLAINT_UPDATE",
                 "AWAITING_CLIENT_COMPLAINT_SELECT",
+                "AWAITING_CLIENT_SELECT_COMPLAINT",
                 "AWAITING_CLIENT_FEEDBACK_COMPLAINT_SELECT",
             )
     except Exception:
@@ -701,6 +878,7 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
             "AWAITING_CLIENT_COMPLAINT_DESC",
             "AWAITING_CLIENT_COMPLAINT_UPDATE",
             "AWAITING_CLIENT_COMPLAINT_SELECT",
+            "AWAITING_CLIENT_SELECT_COMPLAINT",
             "AWAITING_CLIENT_FEEDBACK_COMPLAINT_SELECT",
         ):
             return False
@@ -784,9 +962,11 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
 
             if not selected_sub_nature:
                 if "other" in clean_text.lower():
-                    selected_sub_nature = "Others" if "others" in clean_text.lower() else "Other"
+                    selected_sub_nature = "Other"
+                elif any(m in clean_text.lower() for m in ("misc", "miscellaneous", "others")):
+                    selected_sub_nature = "Miscellaneous"
                 else:
-                    selected_sub_nature = "Others"
+                    selected_sub_nature = "Miscellaneous"
 
             prompt_complaint_description(sender_phone, client, nature, selected_sub_nature)
             return True
@@ -890,9 +1070,44 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                 )
                 return True
 
+        # Flow 2b: Multiple Complaints Selection from 'Select Complaints'
+        if action == "AWAITING_CLIENT_SELECT_COMPLAINT":
+            complaints_list = meta.get("complaints") or []
+            selected_cid = None
+
+            if clean_text.isdigit():
+                sel_idx = int(clean_text) - 1
+                if 0 <= sel_idx < len(complaints_list):
+                    selected_cid = complaints_list[sel_idx].get("com_no") or complaints_list[sel_idx].get("complaintId") or complaints_list[sel_idx].get("id")
+
+            if not selected_cid:
+                target_str = clean_text.lstrip("#").strip().lower()
+                for c in complaints_list:
+                    cid_str = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#").strip().lower()
+                    if target_str == cid_str or target_str in cid_str:
+                        selected_cid = c.get("com_no") or c.get("complaintId") or c.get("id")
+                        break
+
+            if selected_cid:
+                try:
+                    supabase.table("wa_task_states").delete().eq(
+                        "whatsapp_number", sender_phone
+                    ).execute()
+                except Exception:
+                    pass
+                handle_selected_complaint_details(sender_phone, client, target_cid=str(selected_cid))
+                return True
+            else:
+                send_text(
+                    sender_phone,
+                    f"⚠️ Please enter a valid complaint number (1 to {len(complaints_list)}) or Complaint ID (or reply 'cancel'):",
+                )
+                return True
+
         # Flow 3: Update Complaint Details Input
         if action == "AWAITING_CLIENT_COMPLAINT_UPDATE":
             target_cid = meta.get("target_complaint_id", "")
+            complaint_obj = meta.get("complaint")
             try:
                 supabase.table("wa_task_states").delete().eq(
                     "whatsapp_number", sender_phone
@@ -901,7 +1116,15 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                 pass
 
             send_text(sender_phone, f"⏳ Updating complaint #{target_cid}...")
-            result = update_complaint(client, target_cid, {"description": clean_text})
+            if complaint_obj:
+                result = update_complaint(
+                    client,
+                    target_cid,
+                    {"description": clean_text},
+                    existing_complaint=complaint_obj,
+                )
+            else:
+                result = update_complaint(client, target_cid, {"description": clean_text})
 
             company = client.get("company_name", "")
             unit = client.get("unit_number", "")
@@ -1026,11 +1249,34 @@ def handle_feedback_closed_complaints_initiation(
         except Exception as e:
             logger.debug(f"Factech closed complaints fallback error: {e}")
 
+    # ── Part B: Filter out complaints that already have feedback ──────────────
+    # Prevent feedback menu from appearing for complaints that the user has
+    # already rated. This checks the feedbackStatus field from the MASTER sheet.
+    if closed_complaints:
+        filtered = []
+        for c in closed_complaints:
+            fb_status = str(c.get("feedbackStatus") or "").strip().lower()
+            if fb_status == "received":
+                logger.debug(
+                    f"Skipping complaint {c.get('complaintId')} — feedback already received"
+                )
+                continue
+            filtered.append(c)
+        
+        skipped_count = len(closed_complaints) - len(filtered)
+        if skipped_count > 0:
+            logger.info(
+                f"Filtered out {skipped_count} complaints with existing feedback for {sender_phone}"
+            )
+        closed_complaints = filtered
+    # ─────────────────────────────────────────────────────────────────────────
+
     # Case: No closed complaints
     if not closed_complaints:
         msg = (
-            f"ℹ️ You currently have no closed complaints on record for *{company}* (Unit {unit}).\n\n"
-            f"Feedback can only be provided for complaints that have been resolved and closed by our facilities team."
+            f"ℹ️ You currently have no closed complaints pending feedback for *{company}* (Unit {unit}).\n\n"
+            f"Feedback can only be provided for complaints that have been resolved and closed by our facilities team, "
+            f"and have not been rated yet."
         )
         buttons = [
             {"id": "log_new_complaint", "title": "Log New Complaint"},
@@ -1142,6 +1388,34 @@ def _trigger_existing_feedback_flow(sender_phone: str, client: dict, complaint: 
         "building": building,
         "rowIndex": complaint.get("rowIndex") or "",
     }
+
+    # ── Part B: Block feedback for already-rated complaints ──
+    fb_status = str(complaint.get("feedbackStatus") or complaint.get("feedback_status") or "").strip().lower()
+    if fb_status == "received":
+        send_text(
+            sender_phone,
+            f"ℹ️ You have already provided feedback for Complaint *#{cid.lstrip('#')}*.\n\n"
+            f"Thank you for your earlier response! If you'd like to provide feedback for a different complaint, "
+            f"please select from the menu.",
+        )
+        send_post_complaint_options(sender_phone, client)
+        return
+
+    if not fb_status and not os.getenv("PYTEST_CURRENT_TEST"):
+        try:
+            from feedback.sheets import check_feedback_already_received
+            if check_feedback_already_received(cid):
+                send_text(
+                    sender_phone,
+                    f"ℹ️ You have already provided feedback for Complaint *#{cid.lstrip('#')}*.\n\n"
+                    f"Thank you for your earlier response! If you'd like to provide feedback for a different complaint, "
+                    f"please select from the menu.",
+                )
+                send_post_complaint_options(sender_phone, client)
+                return
+        except Exception as chk_err:
+            logger.debug(f"Pre-check for existing feedback failed for {cid}: {chk_err}")
+    # ─────────────────────────────────────────────────────────
 
     try:
         from feedback.engine import initiate_feedback
