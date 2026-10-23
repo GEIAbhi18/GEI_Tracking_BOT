@@ -22,10 +22,6 @@ def lookup_clients_by_phone(phone: str) -> list:
     Normalizes the phone number first to ensure consistent matching.
     Tries Supabase first; falls back to in-memory sync cache if table is absent.
     """
-    # 0. Chaitanya Tenant Override (strictly treated as Tenant only)
-    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(phone):
-        return [dict(CHAITANYA_TENANT_RECORD)]
-
     clean_num = normalize_mobile_number(phone)
     if not clean_num:
         return []
@@ -52,7 +48,7 @@ def lookup_clients_by_phone(phone: str) -> list:
     except Exception as e:
         logger.debug(f"Supabase client lookup error (using fallback): {e}")
 
-    # 2. Fallback to in-memory cache
+    # 2. Fallback to in-memory cache synced from authoritative client sheet
     cached = get_cached_clients()
     if not cached:
         try:
@@ -62,12 +58,32 @@ def lookup_clients_by_phone(phone: str) -> list:
         except Exception as sync_err:
             logger.debug(f"Auto-sync on empty client cache failed: {sync_err}")
 
-    matches = [
-        c
-        for c in cached
-        if c.get("mobile_number") == clean_num and c.get("is_active", True)
-    ]
-    return matches
+    # pyrefly: ignore[unnecessary-type-conversion]
+    target_digits = "".join(ch for ch in str(clean_num) if ch.isdigit())
+    target_last10 = target_digits[-10:] if len(target_digits) >= 10 else ""
+
+    matches = []
+    for c in cached:
+        if not c.get("is_active", True):
+            continue
+        c_mobile = "".join(ch for ch in str(c.get("mobile_number", "")) if ch.isdigit())
+        if c_mobile == target_digits or (target_last10 and len(c_mobile) >= 10 and c_mobile[-10:] == target_last10):
+            rec = dict(c)
+            # Map building code to standard display name
+            if rec.get("building") in ("GEBB2", "GEBB II", "GEBB-2"):
+                rec["building"] = "Business Bay-II"
+            elif rec.get("building") in ("GEBB1", "GEBB I", "GEBB-1"):
+                rec["building"] = "Business Bay-I"
+            matches.append(rec)
+
+    if matches:
+        return matches
+
+    # 3. Fallback safety net for Chaitanya if cache uninitialized
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and (is_chaitanya(phone) or is_chaitanya(clean_num)):
+        return [dict(CHAITANYA_TENANT_RECORD)]
+
+    return []
 
 
 
@@ -106,10 +122,6 @@ def get_active_client_context(phone: str) -> dict | None:
     If only one unit exists, returns that.
     If multiple exist and none selected, returns None (triggering selection prompt).
     """
-    # 0. Chaitanya Tenant Override (strictly treated as Tenant only)
-    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(phone):
-        return dict(CHAITANYA_TENANT_RECORD)
-
     clean_num = normalize_mobile_number(phone)
     if not clean_num:
         return None
@@ -120,9 +132,6 @@ def get_active_client_context(phone: str) -> dict | None:
         if get_active_team(phone) == "factech" or get_active_team(clean_num) == "factech":
             return dict(DEVELOPER_TENANT_RECORD)
         return None
-
-    if TREAT_CHAITANYA_AS_TENANT_ONLY and is_chaitanya(clean_num):
-        return dict(CHAITANYA_TENANT_RECORD)
 
     # 1. Check in-memory selected context
     if clean_num in _SELECTED_CLIENT_CONTEXT:
@@ -145,11 +154,15 @@ def get_active_client_context(phone: str) -> dict | None:
     except Exception:
         pass
 
-    # 3. Lookup all records for this phone
+    # 3. Lookup all records for this phone from authoritative client records
     clients = lookup_clients_by_phone(clean_num)
     if len(clients) == 1:
         _SELECTED_CLIENT_CONTEXT[clean_num] = clients[0]
         return clients[0]
+
+    # 4. Fallback safety net for Chaitanya if cache uninitialized
+    if TREAT_CHAITANYA_AS_TENANT_ONLY and (is_chaitanya(phone) or is_chaitanya(clean_num)):
+        return dict(CHAITANYA_TENANT_RECORD)
 
     return None
 

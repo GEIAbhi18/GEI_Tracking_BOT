@@ -172,6 +172,7 @@ def _cached_get_all_values(sheet_name: str, force_refresh: bool = False) -> list
     data = _retry_on_429(ws.get_all_values)
     with _all_values_cache_lock:
         _all_values_cache[sheet_name] = (now_t, data)
+    assert data is not None
     return data
 
 
@@ -211,6 +212,7 @@ def check_feedback_already_received(complaint_id: str) -> bool:
             return False
 
         cell_value = _retry_on_429(ws.cell, row, fb_status_col)
+        assert cell_value is not None
         status = str(cell_value.value or "").strip().lower()
         return status == "received"
     except Exception:
@@ -276,39 +278,48 @@ def append_feedback_duplicate(complaint_id: str, feedback_data: dict, reason: st
 
 # ── MASTER Sheet Operations ─────────────────────────────────────────────────
 
+_complaint_col_cache = {}
+_complaint_col_cache_time = 0.0
+
+
 def find_complaint_row(complaint_id: str, sheet_name: str | None = None) -> tuple:
     """
     Find the row number for a given complaint ID in the MASTER sheet.
     Returns (worksheet, row_number, header_row) or (None, None, None) if not found.
     """
+    global _complaint_col_cache, _complaint_col_cache_time
     target_sheet = sheet_name or MASTER_SHEET_NAME
     try:
         ws = _get_worksheet(target_sheet)
         assert ws is not None
-        headers = _retry_on_429(ws.row_values, 1)
-        
-        # Find the Complaint ID column
-        complaint_col = None
-        # pyrefly: ignore [not-iterable]
-        for i, h in enumerate(headers, 1):
-            if h.strip().lower() in ("complaint id", "complaintid", "complaint_id"):
-                complaint_col = i
-                break
-        
-        if complaint_col is None:
-            logger.error(f"'Complaint ID' column not found in {target_sheet} sheet")
-            return None, None, None
-        
-        # Find the row with this complaint ID
-        col_values = _retry_on_429(ws.col_values, complaint_col)
-        # pyrefly: ignore [not-iterable]
+
+        now_t = time.time()
+        cached = _complaint_col_cache.get(target_sheet)
+        if cached and (now_t - _complaint_col_cache_time) < 30.0:
+            headers, complaint_col, col_values = cached
+        else:
+            headers = _retry_on_429(ws.row_values, 1)
+            complaint_col = None
+            for i, h in enumerate(headers, 1):
+                if h.strip().lower() in ("complaint id", "complaintid", "complaint_id"):
+                    complaint_col = i
+                    break
+
+            if complaint_col is None:
+                logger.error(f"'Complaint ID' column not found in {target_sheet} sheet")
+                return None, None, None
+
+            col_values = _retry_on_429(ws.col_values, complaint_col)
+            _complaint_col_cache[target_sheet] = (headers, complaint_col, col_values)
+            _complaint_col_cache_time = now_t
+
         for row_idx, val in enumerate(col_values, 1):
-            if val.strip().lower() == complaint_id.strip().lower():
+            if str(val).strip().lower() == str(complaint_id).strip().lower():
                 return ws, row_idx, headers
-        
+
         logger.warning(f"Complaint ID '{complaint_id}' not found in {target_sheet}")
         return None, None, None
-        
+
     except Exception:
         logger.exception("Error finding complaint row")
         return None, None, None
@@ -415,22 +426,39 @@ def get_closed_complaints_for_client(
             bldg_match = bool(target_bldg in row_bldg or row_bldg in target_bldg)
 
         # Ownership validation:
-        # Must match phone, or unit alongside company/building
+        # A complaint belongs to this client if:
+        # 1. Phone matches directly (phone_match), OR
+        # 2. Unit matches AND company matches (or row phone is blank)
+        # CRITICAL FIX: If row specifies a different client's phone number (e.g. 8952899000),
+        # it MUST NEVER be attributed to this phone (e.g. 9713957666) simply due to building match.
+        if row_digits and len(row_digits) >= 10 and target_last10:
+            if row_digits[-10:] != target_last10:
+                continue
+
         # pyrefly: ignore [unnecessary-type-conversion]
         is_owner = bool(phone_match or (unit_match and (comp_match or bldg_match)))
 
         if not is_owner:
             continue
 
+        raw_closed = str(row.get("Closed At") or "").strip()
+        closed_at = raw_closed if raw_closed else "N/A"
+
+        row_client_user = str(row.get("Client Name / User") or "").strip()
+        # If client sheet name is generic or third-party logger name, prioritize company
+        resolved_name = row_client_user
+        if not resolved_name or resolved_name.lower() in ("testrajan", "nishant lata", "user"):
+            resolved_name = company_name or "Valued Client"
+
         seen_cids.add(cid)
         matched.append({
             "complaintId": cid,
             "clientPhone": row_phone_raw or phone,
-            "clientName": str(row.get("Client Name / User") or "").strip(),
+            "clientName": resolved_name,
             "unitNo": row_unit_raw or unit_no,
             "complaintNature": str(row.get("Complaint Nature") or "General").strip(),
             "complaintDetails": str(row.get("Complaint Details") or row.get("Sub Nature") or "").strip(),
-            "closedAt": str(row.get("Closed At") or row.get("Updated At") or "").strip(),
+            "closedAt": closed_at,
             "building": row_bldg or building,
             "feedbackStatus": str(row.get("Feedback Status") or "").strip(),
             "rowIndex": idx,

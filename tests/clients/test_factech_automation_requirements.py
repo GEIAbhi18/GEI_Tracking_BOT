@@ -186,10 +186,11 @@ class TestDeveloperComplaintFlow:
         args = mock_send_list.call_args[0]
         assert "select the *complaint nature*" in args[1].lower()
         nature_rows = args[3][0]["rows"]
-        assert len(nature_rows) == 8
+        assert len(nature_rows) == len(COMPLAINT_NATURES)
         nature_titles = [r["title"] for r in nature_rows]
         assert "Electrical" in nature_titles
         assert "Civil" in nature_titles
+        assert "General" not in nature_titles
 
         # Step 2: Developer selects 'Electrical' (c_nat_1)
         handle_client_button_reply(DEVELOPER_PHONE, "c_nat_1")

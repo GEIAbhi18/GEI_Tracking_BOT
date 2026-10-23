@@ -54,7 +54,6 @@ COMPLAINT_NATURES = [
     "Civil",
     "Electrical",
     "Fire and Life Safety",
-    "General",
     "Housekeeping",
     "HVAC",
     "Miscellaneous",
@@ -85,7 +84,6 @@ SUB_NATURES_ALL = [
     "Low Cooling",
     "MCB Tripping",
     "MCP Glass Broken",
-    "Miscellaneous",
     "Noise from AC",
     "Other",
     "Pest Control",
@@ -117,7 +115,6 @@ NATURE_TO_SUB_NATURES = {
         "Wall Crack / Require Paint",
         "Water Seepage / Dampness Spot",
         "Other",
-        "Miscellaneous",
     ],
     "Electrical": [
         "Power Failure",
@@ -128,7 +125,6 @@ NATURE_TO_SUB_NATURES = {
         "Loose Wiring / Burning Smell",
         "Emergency Lighting",
         "Other",
-        "Miscellaneous",
     ],
     "Fire and Life Safety": [
         "Fire Alarm Issue",
@@ -138,7 +134,6 @@ NATURE_TO_SUB_NATURES = {
         "Sprinkler Leakage",
         "Emergency Exit Light",
         "Other",
-        "Miscellaneous",
     ],
     "Fire & Life Safety": [
         "Fire Alarm Issue",
@@ -148,7 +143,6 @@ NATURE_TO_SUB_NATURES = {
         "Sprinkler Leakage",
         "Emergency Exit Light",
         "Other",
-        "Miscellaneous",
     ],
     "General": [
         "Cleaning Request",
@@ -158,7 +152,6 @@ NATURE_TO_SUB_NATURES = {
         "Water Leakage",
         "Tap Not Working",
         "Other",
-        "Miscellaneous",
     ],
     "Housekeeping": [
         "Cleaning Request",
@@ -168,7 +161,6 @@ NATURE_TO_SUB_NATURES = {
         "Pest Control",
         "Carpet Cleaning (Internal)",
         "Other",
-        "Miscellaneous",
     ],
     "HouseKeeping": [
         "Cleaning Request",
@@ -178,7 +170,6 @@ NATURE_TO_SUB_NATURES = {
         "Pest Control",
         "Carpet Cleaning (Internal)",
         "Other",
-        "Miscellaneous",
     ],
     "HVAC": [
         "AC Not Working",
@@ -188,7 +179,6 @@ NATURE_TO_SUB_NATURES = {
         "Thermostat Issue",
         "Noise from AC",
         "Other",
-        "Miscellaneous",
     ],
     "Plumbing": [
         "Water Leakage",
@@ -199,15 +189,12 @@ NATURE_TO_SUB_NATURES = {
         "Tap Not Working",
         "Bad Odour",
         "Other",
-        "Miscellaneous",
     ],
     "Miscellaneous": [
         "Other",
-        "Miscellaneous",
     ],
     "Other": [
         "Other",
-        "Miscellaneous",
     ],
 }
 

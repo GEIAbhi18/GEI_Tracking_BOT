@@ -761,6 +761,251 @@ def update_complaint(
         }
 
 
+def derive_complaint_progress(complaint: dict) -> str:
+    """
+    Derives accurate progress information strictly from authoritative Factech fields:
+    - status, staff, remarks, tat, closed_at.
+    Never fabricates percentages, stages, or unsupported technician activities.
+    """
+    if not complaint or not isinstance(complaint, dict):
+        return "Progress details unavailable"
+
+    status = str(complaint.get("status") or "").strip()
+    staff = complaint.get("staff") or []
+    staff_names = []
+    if isinstance(staff, list):
+        for s in staff:
+            if isinstance(s, dict) and s.get("name"):
+                staff_names.append(str(s.get("name")).strip())
+            elif isinstance(s, str) and s.strip():
+                staff_names.append(s.strip())
+    elif isinstance(staff, str) and staff.strip():
+        staff_names.append(staff.strip())
+
+    remarks = complaint.get("remarks")
+    tat = complaint.get("tat")
+    closed_at = complaint.get("closed_at")
+
+    parts = []
+    st_lower = status.lower()
+    if st_lower in ("closed", "resolved", "completed"):
+        if closed_at:
+            parts.append(f"Resolved and closed ({format_to_ist(closed_at)})")
+        else:
+            parts.append("Resolved and closed")
+        if tat and str(tat).strip() and str(tat).strip() != "00:00:00":
+            parts.append(f"TAT: {str(tat).strip()}")
+    elif st_lower == "wip":
+        if staff_names:
+            parts.append(f"Work in progress (Assigned to {', '.join(staff_names)})")
+        else:
+            parts.append("Work in progress by facilities team")
+        if tat and str(tat).strip() and str(tat).strip() != "00:00:00":
+            parts.append(f"TAT: {str(tat).strip()}")
+    elif st_lower == "hold":
+        parts.append("On hold pending parts/review")
+    elif st_lower == "open":
+        if staff_names:
+            parts.append(f"Assigned to {', '.join(staff_names)}")
+        else:
+            parts.append("Logged and awaiting technician assignment")
+    elif st_lower in ("cancel", "cancelled"):
+        parts.append("Complaint cancelled")
+    elif st_lower == "reopen":
+        parts.append("Complaint reopened for further review")
+    elif status:
+        parts.append(f"Status: {status}")
+
+    if remarks and str(remarks).strip() and str(remarks).strip().lower() not in ("none", "null"):
+        clean_rem = str(remarks).strip()
+        parts.append(f"Remarks: {clean_rem}")
+
+    if not parts:
+        return "Progress details unavailable"
+    return " | ".join(parts)
+
+
+def format_complaint_status_and_progress(complaint: dict) -> str:
+    """
+    Formats the complaint status and progress block strictly per production requirements:
+      Complaint ID: B2-00090
+      Status: <Actual Factech status>
+      Progress: <Factech supported progress>
+      Available status options: WIP, Open, Closed, Hold
+    """
+    cid = str(complaint.get("com_no") or complaint.get("complaint_id") or complaint.get("id") or "").lstrip("#").strip()
+    status = str(complaint.get("status") or "Open").strip()
+    progress = derive_complaint_progress(complaint)
+
+    return (
+        f"Complaint ID: {cid}\n"
+        f"Status: {status}\n"
+        f"Progress: {progress}\n"
+        f"Available status options: WIP, Open, Closed, Hold"
+    )
+
+
+def _finalize_factech_complaint(item: dict) -> dict:
+    """Ensures timestamps and status from Factech are normalized and cached."""
+    if not isinstance(item, dict):
+        return item
+
+    # Ensure timestamps are in IST
+    if item.get("updated_at"):
+        item["updated_at"] = format_to_ist(item["updated_at"])
+    if item.get("created_at"):
+        item["created_at"] = format_to_ist(item["created_at"])
+    if item.get("closed_at"):
+        item["closed_at"] = format_to_ist(item["closed_at"])
+
+    # Update in-memory cache
+    item_cid = str(item.get("com_no") or item.get("complaintId") or item.get("id") or "").lstrip("#").strip()
+    for existing in _LOGGED_COMPLAINTS_CACHE:
+        e_cid = str(existing.get("com_no") or existing.get("complaint_id") or "").lstrip("#").strip()
+        if e_cid.lower() == item_cid.lower():
+            existing.update(item)
+            break
+
+    return item
+
+
+def get_complaint_by_id(
+    site_id: str,
+    complaint_id: str,
+    client_context: dict | None = None,
+    dt_hint: str | None = None,
+) -> dict | None:
+    """
+    Retrieves a single complaint record directly from Factech API as the source of truth.
+
+    1. If dt_hint is available (from sheets, audit log, or local store), queries a 3-day
+       Factech window around that date.
+    2. If not found or no dt_hint, checks recent Factech complaints across latest pages.
+    3. If still not found, attempts to locate dt_hint via MASTER feedback sheet or audit log.
+    4. Normalizes timestamps to IST and updates local memory/cache with the live status.
+    5. Returns dict if found, None if not found in Factech.
+    """
+    if not complaint_id:
+        return None
+
+    # pyrefly: ignore[unnecessary-type-conversion]
+    clean_cid = str(complaint_id).lstrip("#").strip()
+
+    if not site_id:
+        if client_context:
+            phone = str(client_context.get("mobile_number") or client_context.get("mobile") or "").strip()
+            admin_name = str(client_context.get("admin_name") or "").strip()
+            if is_chaitanya(phone) or is_chaitanya(admin_name) or is_developer_phone(phone) or is_developer_phone(admin_name):
+                site_id = "593"
+            else:
+                site_id = get_site_id_for_building(client_context.get("building", ""))
+        else:
+            if clean_cid.upper().startswith("B1-"):
+                site_id = "467"
+            elif clean_cid.upper().startswith("B2-"):
+                site_id = "593"
+            elif clean_cid.upper().startswith("TT"):
+                site_id = "926"
+            else:
+                from clients.config import DEFAULT_SITE_ID
+                site_id = DEFAULT_SITE_ID
+
+    auth = (FACTECH_USERNAME, FACTECH_PASSWORD) if FACTECH_USERNAME and FACTECH_PASSWORD else None
+
+    # Helper function to query a Factech date range
+    def _query_date_range(start_datetime: datetime, end_datetime: datetime) -> dict | None:
+        from_str = quote(start_datetime.strftime("%Y-%m-%d 00:00:00"))
+        to_str = quote(end_datetime.strftime("%Y-%m-%d 23:59:59"))
+        url = f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaints?from={from_str}&to={to_str}&pageNo=1&perPage=50"
+        try:
+            res = requests.get(url, headers=_get_headers(), auth=auth, timeout=12)
+            if res.status_code == 200:
+                body = res.json()
+                objs = body.get("objects") if isinstance(body, dict) else (body if isinstance(body, list) else [])
+                for o in (objs or []):
+                    o_cid = str(o.get("com_no") or o.get("complaintId") or o.get("id") or "").lstrip("#").strip()
+                    if o_cid.lower() == clean_cid.lower():
+                        return o
+                # If there are multiple pages in this range, check remaining pages
+                if isinstance(body, dict):
+                    cnt = body.get("count", 0)
+                    per_p = body.get("perPage") or 20
+                    t_pages = (cnt + per_p - 1) // per_p
+                    if t_pages > 1:
+                        for p in range(2, min(t_pages + 1, 10)):
+                            p_url = f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaints?from={from_str}&to={to_str}&pageNo={p}&perPage={per_p}"
+                            p_res = requests.get(p_url, headers=_get_headers(), auth=auth, timeout=10)
+                            if p_res.status_code == 200:
+                                p_body = p_res.json()
+                                for o in (p_body.get("objects") or []):
+                                    o_cid = str(o.get("com_no") or o.get("complaintId") or o.get("id") or "").lstrip("#").strip()
+                                    if o_cid.lower() == clean_cid.lower():
+                                        return o
+        except Exception as e:
+            logger.debug(f"Factech query error for {clean_cid} in [{start_datetime}, {end_datetime}]: {e}")
+        return None
+
+    # Step 1: Use dt_hint if provided
+    parsed_hint_dt = None
+    if dt_hint:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y %H:%M:%S", "%d/%m/%Y"):
+            try:
+                # pyrefly: ignore[unnecessary-type-conversion]
+                parsed_hint_dt = datetime.strptime(str(dt_hint).strip()[:19], fmt)
+                break
+            except Exception:
+                continue
+
+    if parsed_hint_dt:
+        matched = _query_date_range(parsed_hint_dt - timedelta(days=3), parsed_hint_dt + timedelta(days=3))
+        if matched:
+            return _finalize_factech_complaint(matched)
+        return None
+
+    # Step 2: Try to find dt_hint from sheet if no dt_hint was passed
+    try:
+        from feedback.sheets import find_complaint_row, _get_worksheet
+        _, row_idx, headers = find_complaint_row(clean_cid, sheet_name="MASTER")
+        if row_idx and headers:
+            ws = _get_worksheet("MASTER")
+            if ws:
+                row_vals = ws.row_values(row_idx)
+                for h_name, r_val in zip(headers, row_vals):
+                    if h_name in ("Logged At", "Created At", "Closed At") and r_val:
+                        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d", "%d-%m-%Y %H:%M:%S", "%d/%m/%Y"):
+                            try:
+                                parsed_hint_dt = datetime.strptime(str(r_val).strip()[:19], fmt)
+                                break
+                            except Exception:
+                                continue
+                        if parsed_hint_dt:
+                            break
+    except Exception as sheet_err:
+        logger.debug(f"Could not retrieve sheet hint for {clean_cid}: {sheet_err}")
+
+    if parsed_hint_dt:
+        matched = _query_date_range(parsed_hint_dt - timedelta(days=3), parsed_hint_dt + timedelta(days=3))
+        if matched:
+            return _finalize_factech_complaint(matched)
+        return None
+
+    # Step 3: Query recent complaints in Factech (last 30 days) when no date hint exists
+    now = datetime.now()
+    matched = _query_date_range(now - timedelta(days=30), now)
+    if matched:
+        return _finalize_factech_complaint(matched)
+
+    # Step 4: If not found in last 30 days and no date hint exists, check previous monthly chunks
+    for months_back in range(1, 4):
+        chunk_end = now - timedelta(days=(months_back - 1) * 30)
+        chunk_start = now - timedelta(days=months_back * 30)
+        matched = _query_date_range(chunk_start, chunk_end)
+        if matched:
+            return _finalize_factech_complaint(matched)
+
+    return None
+
+
 def get_complaints(
     client_context: dict,
     days_back: int = 180,
@@ -808,20 +1053,45 @@ def get_complaints(
     logger.info(f"Fetching complaints from Factech: site={site_id}, days_back={days_back}, page={page_no}")
 
     raw_list = []
-    try:
-        auth = None
-        if FACTECH_USERNAME and FACTECH_PASSWORD:
-            auth = (FACTECH_USERNAME, FACTECH_PASSWORD)
+    auth = None
+    if FACTECH_USERNAME and FACTECH_PASSWORD:
+        auth = (FACTECH_USERNAME, FACTECH_PASSWORD)
 
+    try:
         res = requests.get(url, headers=_get_headers(), auth=auth, timeout=15)
         logger.info(f"Factech GET response code: {res.status_code}")
 
         if res.status_code == 200:
             body = res.json()
             if isinstance(body, list):
-                raw_list = body
+                raw_list = list(body)
             elif isinstance(body, dict):
-                raw_list = body.get("objects") or body.get("data") or body.get("complaints") or []
+                raw_list = list(body.get("objects") or body.get("data") or body.get("complaints") or [])
+                total_count = body.get("count") or len(raw_list)
+                # Factech API returns records in ASCENDING order of created_at.
+                # If page_no == 1 was requested and total_pages > 1, fetch the latest pages
+                # so the client receives the most recent complaints rather than the oldest ones.
+                if page_no == 1 and total_count > len(raw_list):
+                    per_p = body.get("perPage") or 20
+                    total_pages = (total_count + per_p - 1) // per_p
+                    if total_pages > 1:
+                        # Fetch the most recent pages (up to 3 latest pages)
+                        recent_pages = [p for p in range(total_pages, max(1, total_pages - 3), -1)]
+                        for rp in recent_pages:
+                            if rp == 1:
+                                continue
+                            try:
+                                p_url = (
+                                    f"{FACTECH_BASE_URL}/v1/thirdparty/site/{site_id}/complaints"
+                                    f"?from={quote(from_str)}&to={quote(to_str)}&pageNo={rp}&perPage={per_p}"
+                                )
+                                p_res = requests.get(p_url, headers=_get_headers(), auth=auth, timeout=10)
+                                if p_res.status_code == 200:
+                                    p_body = p_res.json()
+                                    p_objs = p_body.get("objects") or []
+                                    raw_list.extend(p_objs)
+                            except Exception as rp_err:
+                                logger.debug(f"Error fetching page {rp}: {rp_err}")
     except Exception as e:
         logger.error(f"Error fetching complaints from Factech: {e}", exc_info=True)
 
@@ -895,18 +1165,51 @@ def get_complaints(
         if not isinstance(loc, dict):
             continue
         loc_cid = str(loc.get("com_no") or loc.get("complaint_id") or loc.get("id") or "").strip().lstrip("#")
-        if loc_cid in factech_live_map:
+        if loc_cid in factech_live_map and isinstance(factech_live_map[loc_cid], dict):
             live_item = factech_live_map[loc_cid]
-            # Live Factech status always takes precedence over local candidate
             live_status = live_item.get("status")
             if live_status:
                 loc["status"] = live_status
+            if live_item.get("closed_at"):
+                loc["closed_at"] = format_to_ist(live_item.get("closed_at"))
+            if live_item.get("tat"):
+                loc["tat"] = live_item.get("tat")
+            if live_item.get("remarks"):
+                loc["remarks"] = live_item.get("remarks")
+            if live_item.get("staff"):
+                loc["staff"] = live_item.get("staff")
             live_cat = live_item.get("complaint_category") or {}
             live_nat = (live_cat.get("name") if isinstance(live_cat, dict) else None) or live_item.get("nature")
             if live_nat:
                 loc["nature"] = live_nat
                 loc["category"] = live_nat
                 loc["complaint_category"] = {"name": live_nat}
+        elif loc_cid and loc_cid not in factech_live_map:
+            # If local candidate is NOT in recent Factech map, verify directly from Factech
+            try:
+                live_item = get_complaint_by_id(site_id, loc_cid, client_context=client_context, dt_hint=loc.get("created_at"))
+                factech_live_map[loc_cid] = live_item
+            except Exception as verify_err:
+                logger.debug(f"Direct Factech verification for {loc_cid} failed: {verify_err}")
+                factech_live_map[loc_cid] = None
+                live_item = None
+
+            if live_item and isinstance(live_item, dict):
+                loc["status"] = live_item.get("status") or loc.get("status")
+                if live_item.get("closed_at"):
+                    loc["closed_at"] = format_to_ist(live_item.get("closed_at"))
+                if live_item.get("tat"):
+                    loc["tat"] = live_item.get("tat")
+                if live_item.get("remarks"):
+                    loc["remarks"] = live_item.get("remarks")
+                if live_item.get("staff"):
+                    loc["staff"] = live_item.get("staff")
+                live_cat = live_item.get("complaint_category") or {}
+                live_nat = (live_cat.get("name") if isinstance(live_cat, dict) else None) or live_item.get("nature")
+                if live_nat:
+                    loc["nature"] = live_nat
+                    loc["category"] = live_nat
+                    loc["complaint_category"] = {"name": live_nat}
         reconciled_local.append(loc)
 
     # Combine API and reconciled local complaints

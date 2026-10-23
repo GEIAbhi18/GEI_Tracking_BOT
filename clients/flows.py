@@ -13,6 +13,9 @@ from clients.service import (
 from clients.factech_client import (
     create_complaint,
     get_complaints,
+    get_complaint_by_id,
+    derive_complaint_progress,
+    format_complaint_status_and_progress,
     update_complaint,
     format_to_ist,
     get_now_ist_str,
@@ -389,13 +392,19 @@ def handle_selected_complaint_details(sender_phone: str, client: dict, target_ci
     unit = client.get("unit_number", "")
     building = client.get("building", "")
 
-    complaints = get_complaints(client, days_back=365, active_only=False)
-    selected = None
-    for c in complaints:
-        cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#").strip().lower()
-        if clean_cid.lower() == cid:
-            selected = c
-            break
+    # Always fetch authoritative complaint record directly from Factech API as source of truth
+    from clients.config import get_site_id_for_building
+    site_id = get_site_id_for_building(building)
+    selected = get_complaint_by_id(site_id, clean_cid, client_context=client)
+
+    if not selected:
+        # Fallback check across recent client complaints
+        complaints = get_complaints(client, days_back=365, active_only=False)
+        for c in complaints:
+            cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "").lstrip("#").strip().lower()
+            if clean_cid.lower() == cid:
+                selected = c
+                break
 
     if not selected:
         send_text(sender_phone, f"⚠️ Complaint #{clean_cid} could not be found.")
@@ -407,11 +416,18 @@ def handle_selected_complaint_details(sender_phone: str, client: dict, target_ci
     sub_nature = selected.get("sub_category") or selected.get("sub_nature") or ""
     desc = selected.get("description") or selected.get("details") or "No additional description"
     status = selected.get("status") or "Open"
-    date_raw = selected.get("created_at") or selected.get("updated_at") or selected.get("closed_at") or "Recent"
-    date = format_to_ist(date_raw) if date_raw != "Recent" else "Recent"
+    progress = derive_complaint_progress(selected)
+
+    created_raw = selected.get("created_at") or selected.get("createdAt")
+    created_str = format_to_ist(created_raw) if created_raw else "Recent"
+    closed_raw = selected.get("closed_at")
+    closed_str = format_to_ist(closed_raw) if closed_raw else "N/A"
 
     details_msg = (
-        f"📋 *Complaint Details: #{clean_cid}*\n\n"
+        f"Complaint ID: {clean_cid}\n"
+        f"Status: {status}\n"
+        f"Progress: {progress}\n"
+        f"Available status options: WIP, Open, Closed, Hold\n\n"
         f"🏢 *Company:* {company}\n"
         f"📍 *Building:* {building} | *Unit:* {unit}\n"
         f"🏷️ *Nature:* {nature}\n"
@@ -419,10 +435,11 @@ def handle_selected_complaint_details(sender_phone: str, client: dict, target_ci
     if sub_nature and sub_nature != nature:
         details_msg += f"🔖 *Sub Nature:* {sub_nature}\n"
     details_msg += (
-        f"📊 *Status:* *{status}*\n"
-        f"📅 *Date:* {date}\n"
-        f"📝 *Description:* _{desc[:300]}_\n"
+        f"📅 *Logged:* {created_str}\n"
     )
+    if status.lower() in ("closed", "resolved", "completed"):
+        details_msg += f"🏁 *Closed:* {closed_str}\n"
+    details_msg += f"📝 *Description:* _{desc[:300]}_\n"
     send_text(sender_phone, details_msg)
 
     # Next action buttons based on status
@@ -531,7 +548,6 @@ def prompt_complaint_sub_nature_selection(sender_phone: str, client: dict, natur
 
     options = NATURE_TO_SUB_NATURES.get(nature) or [
         "Other",
-        "Others",
     ]
 
     rows = []
@@ -722,6 +738,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             desc = c.get("description") or c.get("details") or ""
             status = c.get("status") or "In Progress"
+            progress = derive_complaint_progress(c)
             updated_raw = c.get("updated_at") or c.get("created_at") or c.get("updatedAt") or get_now_ist_str()
             updated = format_to_ist(updated_raw)
 
@@ -730,6 +747,8 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             if desc and desc != nature:
                 msg += f"  Details: {desc[:60]}\n"
             msg += f"  Status: *{status}*\n"
+            msg += f"  Progress: {progress}\n"
+            msg += f"  Available status options: WIP, Open, Closed, Hold\n"
             msg += f"  Updated: {updated}\n\n"
 
         send_text(sender_phone, msg.strip())
@@ -785,12 +804,18 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             cat = c.get("complaint_category") or {}
             nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             status = c.get("status") or "Closed"
-            date = c.get("created_at") or c.get("closed_at") or c.get("createdAt") or "Recent"
+            progress = derive_complaint_progress(c)
+            created_raw = c.get("created_at") or c.get("createdAt")
+            created_str = format_to_ist(created_raw) if created_raw else "Recent"
+            closed_raw = c.get("closed_at")
+            closed_str = format_to_ist(closed_raw) if closed_raw else "N/A"
 
             msg += f"{idx}. *#{c_id}*\n"
             msg += f"   Issue: {nature}\n"
             msg += f"   Status: {status}\n"
-            msg += f"   Date: {date}\n\n"
+            msg += f"   Progress: {progress}\n"
+            msg += f"   Available status options: WIP, Open, Closed, Hold\n"
+            msg += f"   Logged: {created_str} | Closed: {closed_str}\n\n"
 
         send_text(sender_phone, msg.strip())
 
@@ -961,12 +986,10 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                         break
 
             if not selected_sub_nature:
-                if "other" in clean_text.lower():
+                if any(m in clean_text.lower() for m in ("other", "others", "misc", "miscellaneous")):
                     selected_sub_nature = "Other"
-                elif any(m in clean_text.lower() for m in ("misc", "miscellaneous", "others")):
-                    selected_sub_nature = "Miscellaneous"
                 else:
-                    selected_sub_nature = "Miscellaneous"
+                    selected_sub_nature = "Other"
 
             prompt_complaint_description(sender_phone, client, nature, selected_sub_nature)
             return True
@@ -1237,11 +1260,11 @@ def handle_feedback_closed_complaints_initiation(
                     closed_complaints.append({
                         "complaintId": cid,
                         "clientPhone": sender_phone,
-                        "clientName": c.get("company") or client.get("admin_name") or company or "Valued Client",
+                        "clientName": client.get("admin_name") or client.get("company_name") or company or "Valued Client",
                         "unitNo": c.get("unitNo") or unit,
                         "complaintNature": nature,
                         "complaintDetails": desc,
-                        "closedAt": c.get("closed_at") or c.get("created_at") or "",
+                        "closedAt": c.get("closed_at") or "",
                         "building": c.get("building") or building,
                         "feedbackStatus": "",
                         "rowIndex": "",

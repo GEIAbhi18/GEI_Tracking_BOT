@@ -80,6 +80,7 @@ def send_flow_template(
     complaint_nature: str,
     unit_no: str,
     complaint_details: str = "",
+    closed_at: str = "",
 ) -> bool:
     """
     Send the gei_feedback_request WhatsApp template message with Flow button.
@@ -96,6 +97,8 @@ def send_flow_template(
         complaint_id:     {{2}} — Complaint ID
         complaint_nature: {{3}} — Complaint Nature
         unit_no:          {{4}} — Unit No
+        complaint_details: Sub Nature / details
+        closed_at:        Authoritative closed date string
 
     Returns:
         True if sent successfully, False otherwise.
@@ -108,22 +111,52 @@ def send_flow_template(
         logger.error("WHATSAPP_FLOW_TEMPLATE_NAME not configured")
         return False
 
-    from datetime import datetime
-    import pytz
-    
-    ist = pytz.timezone('Asia/Kolkata')
-    closed_at = datetime.now(ist).strftime("%d-%m-%Y %I:%M %p")
+    # Format authoritative closed date in IST if provided
+    closed_display = "N/A"
+    # pyrefly: ignore[unnecessary-type-conversion]
+    if closed_at and str(closed_at).strip():
+        from clients.factech_client import format_to_ist
+        closed_ist = format_to_ist(closed_at)
+        try:
+            from datetime import datetime
+            dt = datetime.strptime(closed_ist, "%Y-%m-%d %H:%M:%S")
+            closed_display = dt.strftime("%d-%m-%Y %I:%M %p")
+        except Exception:
+            closed_display = closed_ist
 
-    # Bundle the context into the single {{1}} variable allowed by the Meta template (no newlines allowed)
-    bundled_text = (
-        f"{client_name}, a complaint has been resolved in FacTech. "
-        f"ID: {complaint_id} | "
-        f"Unit: {unit_no} | "
-        f"Nature: {complaint_nature} | "
-        f"Sub Nature: {complaint_details} | "
-        f"Closed: {closed_at}"
-    )
+    display_name = (client_name or "").strip() or "Valued Client"
 
+    # Send well-spaced details message before the Flow button message (leaving a line between every part)
+    details_lines = [
+        f"Hello {display_name},",
+        "",
+        "A complaint has been resolved in FacTech.",
+        "",
+        f"ID: {complaint_id}",
+        "",
+        f"Unit: {unit_no}",
+        "",
+        f"Nature: {complaint_nature}",
+    ]
+    if complaint_details:
+        details_lines.extend(["", f"Sub Nature: {complaint_details}"])
+    details_lines.extend([
+        "",
+        f"Closed: {closed_display}",
+        "",
+        "Your feedback helps us improve and serve you better. We invite you to share your experience with GEI by completing a short feedback form.",
+        "",
+        "Kindly click the button below to proceed.",
+    ])
+    details_message = "\n".join(details_lines)
+
+    try:
+        from whatsapp.ux import send_text
+        send_text(phone, details_message)
+    except Exception as txt_err:
+        logger.warning(f"Failed to send pre-flow details message to {phone}: {txt_err}")
+
+    # Meta template variable cannot contain newlines (error 132018), so keep {{1}} clean with display_name
     payload = {
         "messaging_product": "whatsapp",
         "to": phone,
@@ -135,7 +168,7 @@ def send_flow_template(
                 {
                     "type": "body",
                     "parameters": [
-                        {"type": "text", "text": bundled_text},
+                        {"type": "text", "text": display_name},
                     ],
                 },
                 {

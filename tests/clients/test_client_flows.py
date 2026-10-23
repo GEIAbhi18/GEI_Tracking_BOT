@@ -8,6 +8,7 @@ from clients.flows import (
     send_unregistered_client_message,
 )
 from clients.service import set_active_client_context, clear_client_context
+from clients.config import COMPLAINT_NATURES
 
 
 @pytest.fixture(autouse=True)
@@ -161,7 +162,8 @@ def test_handle_client_button_log_new_complaint(mocker):
     sections = args[3]
     assert "complaint nature" in body.lower()
     assert "HDFC Bank" in body
-    assert len(sections[0]["rows"]) == 8
+    assert len(sections[0]["rows"]) == len(COMPLAINT_NATURES)
+    assert "General" not in [r["title"] for r in sections[0]["rows"]]
 
 
 def test_complaint_logging_does_not_send_welcome_greeting(mocker):

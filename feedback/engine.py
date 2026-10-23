@@ -95,6 +95,7 @@ def initiate_feedback(complaint_data: dict) -> dict:
                     complaint_nature=existing_session.get("complaintNature", ""),
                     unit_no=existing_session.get("unitNo", ""),
                     complaint_details=existing_session.get("complaintDetails", ""),
+                    closed_at=existing_session.get("closedAt", ""),
                 )
             except Exception as re_err:
                 logger.error(f"Error re-sending flow template for {complaint_id}: {re_err}")
@@ -125,6 +126,7 @@ def initiate_feedback(complaint_data: dict) -> dict:
             complaint_nature=session["complaintNature"],
             unit_no=session["unitNo"],
             complaint_details=session.get("complaintDetails", ""),
+            closed_at=session.get("closedAt", "") or complaint_data.get("closedAt", ""),
         )
         if not sent:
             print(f"[FEEDBACK] ⚠️ Flow template send FAILED for {complaint_id} → {phone}", flush=True)

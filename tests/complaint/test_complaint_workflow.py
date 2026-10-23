@@ -141,3 +141,38 @@ def test_handle_feedback_reply_cancel(mocker):
     
     assert handled is True
     mock_send_wa.assert_called_once()
+
+
+def test_send_flow_template_spacing_and_clean_template(mocker):
+    from feedback.flow_sender import send_flow_template
+    mock_post_wa = mocker.patch("feedback.flow_sender._post_wa", return_value=True)
+    mock_send_text = mocker.patch("whatsapp.ux.send_text", return_value=True)
+
+    success = send_flow_template(
+        phone="917717754421",
+        client_name="Chaitanya Test",
+        complaint_id="B2-00090",
+        complaint_nature="Civil",
+        unit_no="GEEBTWOTest",
+        complaint_details="Others : test",
+    )
+    assert success is True
+
+    # Verify formatted text message sent with line breaks between each part
+    mock_send_text.assert_called_once()
+    sent_text = mock_send_text.call_args[0][1]
+    assert "Hello Chaitanya Test," in sent_text
+    assert "A complaint has been resolved in FacTech." in sent_text
+    assert "ID: B2-00090" in sent_text
+    assert "Unit: GEEBTWOTest" in sent_text
+    assert "Nature: Civil" in sent_text
+    assert "Sub Nature: Others : test" in sent_text
+    assert "Closed: " in sent_text
+    assert "\n\n" in sent_text
+
+    # Verify template payload has clean display_name without newlines
+    mock_post_wa.assert_called_once()
+    payload = mock_post_wa.call_args[0][0]
+    param_text = payload["template"]["components"][0]["parameters"][0]["text"]
+    assert param_text == "Chaitanya Test"
+    assert "\n" not in param_text

@@ -75,11 +75,16 @@ def test_housekeeping_spelling():
 
 
 def test_rename_others_to_miscellaneous():
-    """Requirement 1: Rename Others to Miscellaneous."""
+    """Requirement: General removed from categories; Miscellaneous and Others removed from sub-categories, Other kept."""
     assert "Miscellaneous" in COMPLAINT_NATURES
-    assert "Miscellaneous" in SUB_NATURES_ALL
+    assert "General" not in COMPLAINT_NATURES
+    assert "Other" in SUB_NATURES_ALL
+    assert "Miscellaneous" not in SUB_NATURES_ALL
+    assert "Others" not in SUB_NATURES_ALL
     for nature, sub_list in NATURE_TO_SUB_NATURES.items():
-        assert "Miscellaneous" in sub_list, f"{nature} sub_list missing Miscellaneous"
+        assert "Other" in sub_list, f"{nature} sub_list missing Other"
+        assert "Miscellaneous" not in sub_list, f"{nature} sub_list should not have Miscellaneous"
+        assert "Others" not in sub_list, f"{nature} sub_list should not have Others"
         # Each list must stay within WhatsApp 10-row limit
         assert len(sub_list) <= 10, f"{nature} sub_list exceeds 10 items ({len(sub_list)})"
 
@@ -99,8 +104,8 @@ def test_civil_subnatures_match_image_3():
     for sub in expected_7_civil:
         assert sub in civil_subs, f"Missing Civil subnature: {sub}"
 
-    # Including Other & Miscellaneous, civil list has 9 items (<= 10 limit)
-    assert len(civil_subs) == 9
+    # Including Other (without Miscellaneous), civil list has 8 items (<= 10 limit)
+    assert len(civil_subs) == 8
     assert len(civil_subs) <= 10
 
 
@@ -264,6 +269,7 @@ def test_select_specific_complaint_shows_details(mocker):
             "created_at": "2026-10-21 10:00:00",
         }
     ]
+    mocker.patch("clients.flows.get_complaint_by_id", return_value=mock_complaints[0])
     mocker.patch("clients.flows.get_complaints", return_value=mock_complaints)
     mock_send_text = mocker.patch("clients.flows.send_text", return_value=True)
     mock_send_btn = mocker.patch("clients.flows.send_interactive_buttons", return_value=True)
@@ -279,9 +285,10 @@ def test_select_specific_complaint_shows_details(mocker):
 
     # Details message verification
     details_call = mock_send_text.call_args_list[0][0][1]
-    assert "Complaint Details: #B2-00455" in details_call
+    assert "Complaint ID: B2-00455" in details_call
+    assert "Status: In Progress" in details_call
+    assert "Available status options: WIP, Open, Closed, Hold" in details_call
     assert "Electrical" in details_call
-    assert "In Progress" in details_call
     assert "Total power outage" in details_call
 
     # Next action buttons for active complaint
