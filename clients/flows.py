@@ -416,7 +416,6 @@ def handle_selected_complaint_details(sender_phone: str, client: dict, target_ci
     sub_nature = selected.get("sub_category") or selected.get("sub_nature") or ""
     desc = selected.get("description") or selected.get("details") or "No additional description"
     status = selected.get("status") or "Open"
-    progress = derive_complaint_progress(selected)
 
     created_raw = selected.get("created_at") or selected.get("createdAt")
     created_str = format_to_ist(created_raw) if created_raw else "Recent"
@@ -425,9 +424,7 @@ def handle_selected_complaint_details(sender_phone: str, client: dict, target_ci
 
     details_msg = (
         f"Complaint ID: {clean_cid}\n"
-        f"Status: {status}\n"
-        f"Progress: {progress}\n"
-        f"Available status options: WIP, Open, Closed, Hold\n\n"
+        f"Status: {status}\n\n"
         f"🏢 *Company:* {company}\n"
         f"📍 *Building:* {building} | *Unit:* {unit}\n"
         f"🏷️ *Nature:* {nature}\n"
@@ -738,7 +735,6 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             desc = c.get("description") or c.get("details") or ""
             status = c.get("status") or "In Progress"
-            progress = derive_complaint_progress(c)
             updated_raw = c.get("updated_at") or c.get("created_at") or c.get("updatedAt") or get_now_ist_str()
             updated = format_to_ist(updated_raw)
 
@@ -747,8 +743,6 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             if desc and desc != nature:
                 msg += f"  Details: {desc[:60]}\n"
             msg += f"  Status: *{status}*\n"
-            msg += f"  Progress: {progress}\n"
-            msg += f"  Available status options: WIP, Open, Closed, Hold\n"
             msg += f"  Updated: {updated}\n\n"
 
         send_text(sender_phone, msg.strip())
@@ -804,7 +798,6 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             cat = c.get("complaint_category") or {}
             nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
             status = c.get("status") or "Closed"
-            progress = derive_complaint_progress(c)
             created_raw = c.get("created_at") or c.get("createdAt")
             created_str = format_to_ist(created_raw) if created_raw else "Recent"
             closed_raw = c.get("closed_at")
@@ -813,8 +806,6 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             msg += f"{idx}. *#{c_id}*\n"
             msg += f"   Issue: {nature}\n"
             msg += f"   Status: {status}\n"
-            msg += f"   Progress: {progress}\n"
-            msg += f"   Available status options: WIP, Open, Closed, Hold\n"
             msg += f"   Logged: {created_str} | Closed: {closed_str}\n\n"
 
         send_text(sender_phone, msg.strip())

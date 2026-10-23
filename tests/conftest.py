@@ -1,6 +1,14 @@
+import os
 import pytest
 from unittest.mock import MagicMock
 import asyncio
+
+# Set test environment fallbacks early before module imports
+os.environ.setdefault("TESTING", "1")
+os.environ.setdefault("WHATSAPP_FLOW_ID", "mock_flow_id")
+os.environ.setdefault("WHATSAPP_FLOW_TEMPLATE_NAME", "gei_feedback_request")
+os.environ.setdefault("META_ACCESS_TOKEN", "mock_token")
+os.environ.setdefault("PHONE_NUMBER_ID", "mock_phone_id")
 
 
 

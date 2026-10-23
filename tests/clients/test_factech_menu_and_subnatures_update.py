@@ -287,7 +287,8 @@ def test_select_specific_complaint_shows_details(mocker):
     details_call = mock_send_text.call_args_list[0][0][1]
     assert "Complaint ID: B2-00455" in details_call
     assert "Status: In Progress" in details_call
-    assert "Available status options: WIP, Open, Closed, Hold" in details_call
+    assert "Available status options" not in details_call
+    assert "Progress:" not in details_call
     assert "Electrical" in details_call
     assert "Total power outage" in details_call
 

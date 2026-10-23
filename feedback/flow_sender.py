@@ -31,6 +31,7 @@ def _post_wa(payload: dict) -> bool:
         os.getenv("TESTING") in ("1", "true", "True")
         or "pytest" in sys.modules
         or os.getenv("PYTEST_CURRENT_TEST") is not None
+        or os.getenv("CI") is not None
     )
 
     meta_token = META_ACCESS_TOKEN or os.getenv("META_ACCESS_TOKEN") or ("mock_token" if is_testing else "")

@@ -87,7 +87,8 @@ class TestComplaintStatus:
         }
         formatted = format_complaint_status_and_progress(complaint)
         assert "Status: Cancel" in formatted
-        assert "Available status options: WIP, Open, Closed, Hold" in formatted
+        assert "Available status options" not in formatted
+        assert "Progress:" not in formatted
 
     def test_api_failure_handled_explicitly_no_silent_fallback_as_fresh(self, mocker):
         """When Factech API is unavailable, get_complaint_by_id returns None without crashing."""
@@ -236,11 +237,11 @@ class TestComplaintProgressAndStatusOptions:
         expected_lines = [
             "Complaint ID: B2-00090",
             "Status: WIP",
-            "Progress: Work in progress (Assigned to Sunil Kumar) | TAT: 02:15:00 | Remarks: Technician on site",
-            "Available status options: WIP, Open, Closed, Hold",
         ]
         for line in expected_lines:
             assert line in res
+        assert "Available status options" not in res
+        assert "Progress:" not in res
 
     def test_progress_derivation_from_factech_fields_only(self):
         """derive_complaint_progress derives progress from staff, remarks, tat, and status without guesswork."""
@@ -296,7 +297,8 @@ class TestComplaintProgressAndStatusOptions:
         sent_msg = mock_send_text.call_args[0][1]
         assert "Complaint ID: B2-00090" in sent_msg
         assert "Status: Closed" in sent_msg
-        assert "Available status options: WIP, Open, Closed, Hold" in sent_msg
+        assert "Available status options" not in sent_msg
+        assert "Progress:" not in sent_msg
         assert "🏁 *Closed:* 2026-06-01 09:53:47" in sent_msg
 
 

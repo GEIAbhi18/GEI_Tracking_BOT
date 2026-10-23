@@ -827,21 +827,16 @@ def derive_complaint_progress(complaint: dict) -> str:
 
 def format_complaint_status_and_progress(complaint: dict) -> str:
     """
-    Formats the complaint status and progress block strictly per production requirements:
+    Formats the complaint status block:
       Complaint ID: B2-00090
       Status: <Actual Factech status>
-      Progress: <Factech supported progress>
-      Available status options: WIP, Open, Closed, Hold
     """
     cid = str(complaint.get("com_no") or complaint.get("complaint_id") or complaint.get("id") or "").lstrip("#").strip()
     status = str(complaint.get("status") or "Open").strip()
-    progress = derive_complaint_progress(complaint)
 
     return (
         f"Complaint ID: {cid}\n"
-        f"Status: {status}\n"
-        f"Progress: {progress}\n"
-        f"Available status options: WIP, Open, Closed, Hold"
+        f"Status: {status}"
     )
 
 
