@@ -24,6 +24,24 @@ from clients.config import COMPLAINT_NATURES, SUB_NATURES_ALL, NATURE_TO_SUB_NAT
 
 logger = logging.getLogger(__name__)
 
+NUM_TO_EMOJI = {
+    1: "1️⃣",
+    2: "2️⃣",
+    3: "3️⃣",
+    4: "4️⃣",
+    5: "5️⃣",
+    6: "6️⃣",
+    7: "7️⃣",
+    8: "8️⃣",
+    9: "9️⃣",
+    10: "🔟",
+}
+
+
+def _num_to_emoji(n: int) -> str:
+    """Returns clean keycap emoji for numbers 1-10 (e.g. 🔟 for 10, not 1 0️⃣)."""
+    return NUM_TO_EMOJI.get(n, f"{n}.")
+
 
 def is_registered_client(sender_phone: str) -> bool:
     """Checks if a given phone number belongs to any registered client."""
@@ -239,7 +257,7 @@ def handle_update_complaint_initiation(sender_phone: str, client: dict, target_c
                 cid = str(c.get("com_no") or c.get("complaintId") or c.get("id") or "")
                 cat = c.get("complaint_category") or {}
                 nature = (cat.get("name") if isinstance(cat, dict) else None) or c.get("sub_category") or c.get("nature") or "Maintenance"
-                options_text += f"{idx}️⃣ *#{cid}* — {nature}\n"
+                options_text += f"{_num_to_emoji(idx)} *#{cid}* — {nature}\n"
 
             payload = {
                 "whatsapp_number": sender_phone,
@@ -329,7 +347,7 @@ def handle_select_complaints_initiation(sender_phone: str, client: dict):
         status = c.get("status") or "Open"
         date_raw = c.get("created_at") or c.get("updated_at") or c.get("closed_at") or "Recent"
         date = format_to_ist(date_raw) if date_raw != "Recent" else "Recent"
-        lines.append(f"{idx}️⃣ *#{cid}* — {nature}\n   Status: *{status}* | Date: {date}")
+        lines.append(f"{_num_to_emoji(idx)} *#{cid}* — {nature}\n   Status: *{status}* | Date: {date}")
 
     complaints_text = "\n\n".join(lines)
     prompt_text = (
@@ -502,7 +520,7 @@ def prompt_complaint_nature_selection(sender_phone: str, client: dict):
     sent = send_list_message(sender_phone, body, "Select Nature", sections)
     if not sent:
         options_text = "\n".join(
-            f"{i+1}️⃣ *{nat}*" for i, nat in enumerate(COMPLAINT_NATURES)
+            f"{_num_to_emoji(i+1)} *{nat}*" for i, nat in enumerate(COMPLAINT_NATURES)
         )
         fallback = (
             f"{body}\n\n"
@@ -560,7 +578,7 @@ def prompt_complaint_sub_nature_selection(sender_phone: str, client: dict, natur
     sent = send_list_message(sender_phone, body, "Select Issue", sections)
     if not sent:
         options_text = "\n".join(
-            f"{i+1}️⃣ *{opt}*" for i, opt in enumerate(options)
+            f"{_num_to_emoji(i+1)} *{opt}*" for i, opt in enumerate(options)
         )
         fallback = (
             f"{body}\n\n"
@@ -935,7 +953,7 @@ def handle_client_text(sender_phone: str, text: str) -> bool:
                         break
 
             if not selected_nature:
-                options_text = "\n".join(f"{i+1}️⃣ {nat}" for i, nat in enumerate(COMPLAINT_NATURES))
+                options_text = "\n".join(f"{_num_to_emoji(i+1)} {nat}" for i, nat in enumerate(COMPLAINT_NATURES))
                 send_text(
                     sender_phone,
                     f"⚠️ Please choose a valid Complaint Nature:\n\n{options_text}\n\n_Reply with the number (1-{len(COMPLAINT_NATURES)}) or option name (or 'cancel')._",

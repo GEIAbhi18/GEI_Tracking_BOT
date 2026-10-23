@@ -330,3 +330,37 @@ def test_select_complaints_text_selection(mocker):
     assert handled is True
     mock_details.assert_called_once()
     assert mock_details.call_args[1]["target_cid"] == "B2-00455"
+
+
+def test_select_complaints_tenth_complaint_emoji_formatting(mocker):
+    """Verify 10th complaint uses proper keycap 🔟 emoji and not split '1 0️⃣'."""
+    from clients.flows import handle_select_complaints_initiation
+    mock_complaints = [
+        {
+            "com_no": f"B2-00{i:03d}",
+            "complaintId": f"B2-00{i:03d}",
+            "nature": "Plumbing",
+            "status": "Closed",
+            "created_at": "2026-05-04 06:26:19",
+        }
+        for i in range(1, 11)
+    ]
+    mocker.patch("clients.flows.get_complaints", return_value=mock_complaints)
+    mock_send_list = mocker.patch("clients.flows.send_list_message", return_value=True)
+
+    client = {
+        "admin_name": "Developer",
+        "company_name": "Good Earth Infra",
+        "building": "Business Bay-II",
+        "unit_number": "GEEBTWOTest",
+    }
+
+    handle_select_complaints_initiation(DEVELOPER_PHONE, client)
+
+    mock_send_list.assert_called_once()
+    body_text = mock_send_list.call_args[0][1]
+    # Check 10th complaint formatting
+    assert "🔟 *#B2-00010* — Plumbing" in body_text
+    assert "1 0️⃣" not in body_text
+    assert "10️⃣" not in body_text
+
