@@ -870,8 +870,8 @@ def _finalize_factech_complaint(item: dict) -> dict:
 
 
 def get_complaint_by_id(
-    site_id: str,
-    complaint_id: str,
+    site_id: str | int = "",
+    complaint_id: str = "",
     client_context: dict | None = None,
     dt_hint: str | None = None,
 ) -> dict | None:
@@ -890,7 +890,7 @@ def get_complaint_by_id(
 
     # pyrefly: ignore[unnecessary-type-conversion]
     clean_cid = str(complaint_id).lstrip("#").strip()
-
+    site_id = str(site_id).strip() if site_id is not None else ""
     if not site_id:
         if client_context:
             phone = str(client_context.get("mobile_number") or client_context.get("mobile") or "").strip()

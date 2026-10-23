@@ -300,6 +300,7 @@ def find_complaint_row(complaint_id: str, sheet_name: str | None = None) -> tupl
         else:
             headers = _retry_on_429(ws.row_values, 1)
             complaint_col = None
+            # pyrefly: ignore[not-iterable]
             for i, h in enumerate(headers, 1):
                 if h.strip().lower() in ("complaint id", "complaintid", "complaint_id"):
                     complaint_col = i
@@ -313,7 +314,9 @@ def find_complaint_row(complaint_id: str, sheet_name: str | None = None) -> tupl
             _complaint_col_cache[target_sheet] = (headers, complaint_col, col_values)
             _complaint_col_cache_time = now_t
 
+        # pyrefly: ignore[not-iterable]
         for row_idx, val in enumerate(col_values, 1):
+            # pyrefly: ignore[unnecessary-type-conversion]
             if str(val).strip().lower() == str(complaint_id).strip().lower():
                 return ws, row_idx, headers
 
