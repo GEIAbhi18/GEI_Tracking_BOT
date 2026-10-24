@@ -137,11 +137,6 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
                     "description": "View & select your complaints",
                 },
                 {
-                    "id": "check_complaint_status",
-                    "title": "Check Status",
-                    "description": "View active complaints",
-                },
-                {
                     "id": "complaint_history",
                     "title": "Complaint History",
                     "description": "View past resolved tickets",
@@ -161,10 +156,9 @@ def send_client_welcome_menu(sender_phone: str, client: dict):
             f"{body}\n\n"
             f"1️⃣ *Log New Complaint*\n"
             f"2️⃣ *Select Complaints*\n"
-            f"3️⃣ *Check Status*\n"
-            f"4️⃣ *Complaint History*\n"
-            f"5️⃣ *Give Feedback on Closed Complaints*\n\n"
-            f"_Reply with 1, 2, 3, 4, or 5 (or 'feedback'), or type your complaint description directly._"
+            f"3️⃣ *Complaint History*\n"
+            f"4️⃣ *Give Feedback on Closed Complaints*\n\n"
+            f"_Reply with 1, 2, 3, or 4 (or 'feedback'), or type your complaint description directly._"
         )
         send_text(sender_phone, text_menu)
 
@@ -176,7 +170,7 @@ def send_post_complaint_options(sender_phone: str, client: dict, complaint_id: s
     """
     body = "What would you like to do next?"
     buttons = [
-        {"id": "check_complaint_status", "title": "Check Status"},
+        {"id": "select_complaints", "title": "Select Complaints"},
         {"id": "update_complaint", "title": "Update Complaint"},
         {"id": "feedback_closed_complaints", "title": "Feedback on Closed"},
     ]
@@ -186,7 +180,7 @@ def send_post_complaint_options(sender_phone: str, client: dict, complaint_id: s
         fallback = (
             f"{body}\n\n"
             f"1️⃣ *Log New Complaint* (Reply 'log' or '1')\n"
-            f"2️⃣ *Check Status* (Reply 'status' or '2')\n"
+            f"2️⃣ *Select Complaints* (Reply 'select' or '2')\n"
             f"3️⃣ *Complaint History* (Reply 'history' or '3')\n"
             f"4️⃣ *Give Feedback on Closed Complaints* (Reply 'feedback' or '4')\n"
             f"5️⃣ *Main Menu* (Reply 'menu' or '5')\n\n"
@@ -796,7 +790,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             send_text(sender_phone, "No previous complaints were found for your account.")
             buttons = [
                 {"id": "log_new_complaint", "title": "Log New Complaint"},
-                {"id": "check_complaint_status", "title": "Check Status"},
+                {"id": "select_complaints", "title": "Select Complaints"},
                 {"id": "client_main_menu", "title": "Main Menu"},
             ]
             ok = send_interactive_buttons(sender_phone, "What would you like to do next?", buttons)
@@ -805,7 +799,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
                     sender_phone,
                     "What would you like to do next?\n\n"
                     "1️⃣ *Log New Complaint*\n"
-                    "2️⃣ *Check Status*\n"
+                    "2️⃣ *Select Complaints*\n"
                     "3️⃣ *Main Menu*",
                 )
             return
@@ -829,7 +823,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
         send_text(sender_phone, msg.strip())
 
         buttons = [
-            {"id": "check_complaint_status", "title": "Check Status"},
+            {"id": "select_complaints", "title": "Select Complaints"},
             {"id": "feedback_closed_complaints", "title": "Feedback on Closed"},
             {"id": "client_main_menu", "title": "Main Menu"},
         ]
@@ -838,7 +832,7 @@ def handle_client_button_reply(sender_phone: str, button_id: str, user: dict | N
             send_text(
                 sender_phone,
                 "What would you like to do next?\n\n"
-                "1️⃣ *Check Status*\n"
+                "1️⃣ *Select Complaints*\n"
                 "2️⃣ *Feedback on Closed Complaints*\n"
                 "3️⃣ *Main Menu*",
             )
@@ -1312,11 +1306,11 @@ def handle_feedback_closed_complaints_initiation(
         )
         buttons = [
             {"id": "log_new_complaint", "title": "Log New Complaint"},
-            {"id": "check_complaint_status", "title": "Check Status"},
+            {"id": "select_complaints", "title": "Select Complaints"},
             {"id": "client_main_menu", "title": "Main Menu"},
         ]
         if not send_interactive_buttons(sender_phone, msg, buttons):
-            send_text(sender_phone, f"{msg}\n\n1️⃣ Log New Complaint\n2️⃣ Check Status\n3️⃣ Main Menu")
+            send_text(sender_phone, f"{msg}\n\n1️⃣ Log New Complaint\n2️⃣ Select Complaints\n3️⃣ Main Menu")
         return
 
     # If target_cid is already specified, select it directly

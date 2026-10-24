@@ -734,16 +734,28 @@ def _handle_text(sender: str, text: str, voice_note: bool = False):
             if clean_cmd in ("1", "log new complaint", "log complaint", "new complaint", "create complaint", "raise complaint"):
                 handle_client_button_reply(sender, "log_new_complaint")
                 return
-            elif clean_cmd in ("2", "select complaints", "select complaint", "complaints list", "view complaints", "my complaints", "complaints", "select"):
+            elif clean_cmd in (
+                "2",
+                "select complaints",
+                "select complaint",
+                "complaints list",
+                "view complaints",
+                "my complaints",
+                "complaints",
+                "select",
+                "check complaint status",
+                "check status",
+                "complaint status",
+                "status",
+                "active complaints",
+            ):
                 handle_client_button_reply(sender, "select_complaints")
                 return
-            elif clean_cmd in ("3", "check complaint status", "check status", "complaint status", "status", "active complaints"):
-                handle_client_button_reply(sender, "check_complaint_status")
-                return
-            elif clean_cmd in ("4", "complaint history", "history", "previous complaints", "all complaints"):
+            elif clean_cmd in ("3", "complaint history", "history", "previous complaints", "all complaints"):
                 handle_client_button_reply(sender, "complaint_history")
                 return
             elif clean_cmd in (
+                "4",
                 "5",
                 "feedback",
                 "give feedback",

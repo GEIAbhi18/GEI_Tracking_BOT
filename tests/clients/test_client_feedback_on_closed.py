@@ -407,7 +407,6 @@ def test_welcome_menu_sends_list_message_with_feedback(mocker):
     assert row_ids == [
         "log_new_complaint",
         "select_complaints",
-        "check_complaint_status",
         "complaint_history",
         "feedback_closed_complaints",
     ]
@@ -417,7 +416,7 @@ def test_welcome_menu_sends_list_message_with_feedback(mocker):
 
 
 def test_welcome_menu_fallback_includes_feedback(mocker):
-    """Verifies that send_client_welcome_menu text fallback includes option 5 for feedback."""
+    """Verifies that send_client_welcome_menu text fallback includes feedback option."""
     from clients.flows import send_client_welcome_menu
 
     mocker.patch("clients.flows.send_list_message", return_value=False)
@@ -436,7 +435,6 @@ def test_welcome_menu_fallback_includes_feedback(mocker):
     text = mock_text.call_args[0][1]
     assert "1️⃣ *Log New Complaint*" in text
     assert "2️⃣ *Select Complaints*" in text
-    assert "3️⃣ *Check Status*" in text
-    assert "4️⃣ *Complaint History*" in text
-    assert "5️⃣ *Give Feedback on Closed Complaints*" in text
+    assert "3️⃣ *Complaint History*" in text
+    assert "4️⃣ *Give Feedback on Closed Complaints*" in text
 

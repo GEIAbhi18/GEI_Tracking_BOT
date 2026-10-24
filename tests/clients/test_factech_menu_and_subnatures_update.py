@@ -196,6 +196,7 @@ def test_main_menu_includes_select_complaints(mocker):
     rows = mock_list.call_args[0][3][0]["rows"]
     row_ids = [r["id"] for r in rows]
     assert "select_complaints" in row_ids
+    assert "check_complaint_status" not in row_ids
     select_row = next(r for r in rows if r["id"] == "select_complaints")
     assert select_row["title"] == "Select Complaints"
 

@@ -96,13 +96,13 @@ def test_send_main_menu_routes_chaitanya_to_factech_menu(mocker):
     assert btn_text == "Open Menu"
     assert len(sections) == 1
     rows = sections[0]["rows"]
-    assert len(rows) == 5
+    assert len(rows) == 4
     row_ids = [r["id"] for r in rows]
     assert "log_new_complaint" in row_ids
     assert "select_complaints" in row_ids
-    assert "check_complaint_status" in row_ids
     assert "complaint_history" in row_ids
     assert "feedback_closed_complaints" in row_ids
+    assert "check_complaint_status" not in row_ids
 
 
 def test_team_task_assignment_excludes_chaitanya(mocker):
@@ -161,9 +161,8 @@ def test_send_client_welcome_menu_fallback_on_button_failure(mocker):
     sent_content = mock_text.call_args[0][1]
     assert "1️⃣ *Log New Complaint*" in sent_content
     assert "2️⃣ *Select Complaints*" in sent_content
-    assert "3️⃣ *Check Status*" in sent_content
-    assert "4️⃣ *Complaint History*" in sent_content
-    assert "5️⃣ *Give Feedback on Closed Complaints*" in sent_content
+    assert "3️⃣ *Complaint History*" in sent_content
+    assert "4️⃣ *Give Feedback on Closed Complaints*" in sent_content
 
 
 def test_factech_create_complaint_uses_geebtwotest_for_chaitanya(mocker):
@@ -277,17 +276,21 @@ def test_webhook_client_text_routing(mocker):
     _handle_text(CHAITANYA_PHONE, "2")
     mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "select_complaints")
 
-    # 3 -> check_complaint_status
+    # 3 -> complaint_history
     _handle_text(CHAITANYA_PHONE, "3")
-    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "check_complaint_status")
-
-    # 4 -> complaint_history
-    _handle_text(CHAITANYA_PHONE, "4")
     mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "complaint_history")
 
-    # 5 -> feedback_closed_complaints
+    # 4 -> feedback_closed_complaints
+    _handle_text(CHAITANYA_PHONE, "4")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "feedback_closed_complaints")
+
+    # 5 -> feedback_closed_complaints (backward compatibility)
     _handle_text(CHAITANYA_PHONE, "5")
     mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "feedback_closed_complaints")
+
+    # check status keywords route to select_complaints
+    _handle_text(CHAITANYA_PHONE, "check status")
+    mock_btn_reply.assert_called_with(CHAITANYA_PHONE, "select_complaints")
 
     # update -> update_complaint
     _handle_text(CHAITANYA_PHONE, "update")
